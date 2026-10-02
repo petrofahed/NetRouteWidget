@@ -36,6 +36,7 @@ sealed class FakeSingBoxHost : ISingBoxHost
 sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
 {
     public bool ConnectionsUnreachable { get; set; }
+    public bool SelectResult { get; set; } = true;
     public int Disposals { get; private set; }
     public void Dispose() => Disposals++;
 
@@ -45,7 +46,7 @@ sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
     public Task<bool> SelectAsync(string group, string outbound, CancellationToken ct = default)
     {
         Selects.Add((group, outbound));
-        return Task.FromResult(true);
+        return Task.FromResult(SelectResult);
     }
 
     public Task<IReadOnlyList<SingBoxConnection>?> GetConnectionsAsync(CancellationToken ct = default) =>

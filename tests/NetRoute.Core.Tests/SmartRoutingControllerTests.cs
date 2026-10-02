@@ -14,10 +14,11 @@ public class SmartRoutingControllerTests
     readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero));
     readonly List<IReadOnlyList<string>> _popups = new();
     readonly List<string> _notes = new();
+    readonly List<string> _logs = new();
 
     SmartRoutingController Create(Func<int>? freePort = null)
     {
-        var c = new SmartRoutingController(Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), null, _ => { }, _time);
+        var c = new SmartRoutingController(Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), null, _logs.Add, _time);
         c.WaitingDetected += _popups.Add;
         c.Notify += _notes.Add;
         return c;
@@ -26,10 +27,10 @@ public class SmartRoutingControllerTests
     static AppSettings On(bool enabled = true) => new() { SmartRouting = new SmartRoutingSettings { Enabled = enabled } };
 
     static NetworkStatus Net(RoutingMode mode = RoutingMode.Phone, int phoneIndex = 31, bool lan = true, int? lanMs = 12,
-                             bool healing = false, bool canModify = true, bool phone = true, string lanName = "Ethernet") =>
+                             bool healing = false, bool canModify = true, bool phone = true, string lanName = "Ethernet", string? lanDns = "192.168.86.1") =>
         new(mode,
             new DetectionResult(phone ? TestAdapters.Phone(phoneIndex) : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
-                lan ? TestAdapters.Lan() with { Name = lanName, DnsServer = "192.168.86.1" } : null, lan ? DetectionIssue.None : DetectionIssue.NotFound),
+                lan ? TestAdapters.Lan() with { Name = lanName, DnsServer = lanDns } : null, lan ? DetectionIssue.None : DetectionIssue.NotFound),
             InternetPath.Phone, InternetPath.None, 30, lan ? lanMs : null, canModify, null, IsHealing: healing);
 
     [Fact]
@@ -495,7 +496,7 @@ public class SmartRoutingControllerTests
         Assert.Equal(SmartState.Unavailable, c.Status.State);
 
         _host.StopThrows = null;
-        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(phoneIndex: 36), On()); // the old process is still there: a changed key restarts it
 
         Assert.Equal(SmartState.Running, c.Status.State);
         Assert.Equal(2, _host.Starts.Count);
@@ -523,10 +524,11 @@ public class SmartRoutingControllerTests
     // ---- R7: API health, disposal, toast ----
 
     [Fact]
-    public async Task Three_failed_polls_restart_sing_box()
+    public async Task Three_failed_polls_after_grace_restart_sing_box()
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
+        _time.Advance(SmartRoutingController.ApiStartGrace);
         _api.ConnectionsUnreachable = true;
 
         await c.PollStatsAsync();
@@ -544,6 +546,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
+        _time.Advance(SmartRoutingController.ApiStartGrace);
 
         _api.ConnectionsUnreachable = true;
         await c.PollStatsAsync();
@@ -564,7 +567,11 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
         _api.ConnectionsUnreachable = true;
 
-        for (var i = 0; i < 9; i++) await c.PollStatsAsync();
+        for (var i = 0; i < 9; i++)
+        {
+            _time.Advance(SmartRoutingController.ApiStartGrace); // each restart starts a new grace period
+            await c.PollStatsAsync();
+        }
 
         Assert.Equal(3, _host.Starts.Count);
         Assert.Equal(SmartState.Faulted, c.Status.State);
@@ -611,5 +618,147 @@ public class SmartRoutingControllerTests
         for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(canModify: false), On());
 
         Assert.Empty(_notes);
+    }
+
+    // ---- Round 2 ----
+
+    // N1: startup grace for the API-failure counter
+
+    [Fact]
+    public async Task Api_failures_during_startup_grace_do_not_count()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.ConnectionsUnreachable = true;
+
+        for (var i = 0; i < 5; i++)
+        {
+            await c.PollStatsAsync();
+            _time.Advance(TimeSpan.FromSeconds(5)); // 25 s in total: still inside the 30 s grace
+        }
+
+        Assert.Single(_host.Starts);
+        Assert.Equal(0, _host.Stops);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(1, _logs.Count(l => l.Contains("Clash API not up yet")));
+        Assert.DoesNotContain(_logs, l => l.Contains("exited") || l.Contains("unresponsive"));
+    }
+
+    [Fact]
+    public async Task A_restart_gets_a_new_grace_period()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.ConnectionsUnreachable = true;
+        _time.Advance(SmartRoutingController.ApiStartGrace);
+        for (var i = 0; i < 3; i++) await c.PollStatsAsync(); // restarts
+        Assert.Equal(2, _host.Starts.Count);
+
+        for (var i = 0; i < 5; i++) await c.PollStatsAsync(); // inside the new grace
+
+        Assert.Equal(2, _host.Starts.Count);
+    }
+
+    // N2: a failed stop must not leave two sing-boxes
+
+    [Fact]
+    public async Task Failed_stop_does_not_start_a_second_instance()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _host.StopThrows = new IOException("access denied"); // StopAsync throws and the process stays up
+
+        await c.ApplyAsync(Net(phoneIndex: 36), On()); // changed key: wants a restart
+
+        Assert.Single(_host.Starts);
+        Assert.Contains(_logs, l => l.Contains("could not stop the previous sing-box"));
+
+        await c.ApplyAsync(Net(phoneIndex: 36), On());
+        await c.ApplyAsync(Net(phoneIndex: 36), On()); // third crash faults it
+        Assert.Single(_host.Starts);
+        Assert.Equal(SmartState.Faulted, c.Status.State);
+    }
+
+    [Fact]
+    public async Task Failed_stop_status_message_is_honest()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _host.StopThrows = new IOException("access denied");
+
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+
+        Assert.Equal(SmartState.Unavailable, c.Status.State);
+        Assert.Equal("sing-box could not be stopped (see log)", c.Status.Message);
+    }
+
+    [Fact]
+    public async Task Shutdown_with_a_throwing_stop_does_not_escape_and_stays_latched()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _host.StopThrows = new IOException("access denied");
+
+        await c.ShutdownAsync();
+        _host.StopThrows = null;
+        await c.ApplyAsync(Net(phoneIndex: 36), On());
+
+        Assert.Single(_host.Starts);
+        Assert.Contains(_logs, l => l.Contains("stopping sing-box failed"));
+    }
+
+    // N3: the toast only follows a selector move that really happened
+
+    [Fact]
+    public async Task Lan_back_toast_waits_for_the_selector_and_the_next_apply_retries()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(lanMs: null), On());
+        await c.UseLanRulesOnPhoneAsync();
+        _api.SelectResult = false; // sing-box refuses the select
+
+        for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(), On());
+        Assert.Empty(_notes);
+
+        _api.SelectResult = true;
+        await c.ApplyAsync(Net(), On());
+
+        Assert.Single(_notes);
+        Assert.Equal(("lan-only", "lan"), _api.Selects.Last());
+    }
+
+    // N4: a LAN without DNS yet must not forget a known one
+
+    [Fact]
+    public async Task Lan_present_without_dns_does_not_restart()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+
+        await c.ApplyAsync(Net(lanDns: null), On());
+
+        Assert.Single(_host.Starts);
+        Assert.Equal(0, _host.Stops);
+    }
+
+    // N5: nothing is processed after shutdown
+
+    [Fact]
+    public async Task Lines_after_shutdown_are_ignored()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(lanMs: null), On());
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+        await c.ShutdownAsync();
+        var statusEvents = 0;
+        c.StatusChanged += _ => statusEvents++;
+
+        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync(FailLanOnly);
+
+        Assert.Equal(0, statusEvents);
+        Assert.Empty(_popups);
     }
 }
