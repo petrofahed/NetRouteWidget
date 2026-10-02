@@ -430,3 +430,6 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# sing-box download cache
+.cache/

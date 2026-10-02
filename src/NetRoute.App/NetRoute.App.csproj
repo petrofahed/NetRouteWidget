@@ -27,4 +27,6 @@
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <Import Project="..\..\build\SingBox.targets" />
+
 </Project>
