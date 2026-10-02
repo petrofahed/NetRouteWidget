@@ -75,6 +75,7 @@
                     <Button.ContextMenu>
                         <ContextMenu x:Name="OptionsMenu">
                             <MenuItem x:Name="StartWithWindowsItem" Header="Start with Windows" IsCheckable="True" Click="OnStartWithWindows" />
+                            <MenuItem Header="Choose adapters…" Click="OnChooseAdapters" />
                             <MenuItem Header="Open network settings" Click="OnOpenNetworkSettings" />
                             <Separator />
                             <MenuItem Header="Quit" Click="OnQuit" />

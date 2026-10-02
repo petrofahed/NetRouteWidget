@@ -25,6 +25,7 @@ public partial class CardWindow : Window
     public event Action? HideRequested;
     public event Action<double, double>? Moved;
     public event Action? StartWithWindowsToggled;
+    public event Action? ChooseAdaptersRequested;
     public event Action? OpenNetworkSettingsRequested;
     public event Action? RestartAsAdminRequested;
     public event Action? QuitRequested;
@@ -126,6 +127,8 @@ public partial class CardWindow : Window
     void OnHide(object sender, RoutedEventArgs e) => HideRequested?.Invoke();
 
     void OnStartWithWindows(object sender, RoutedEventArgs e) => StartWithWindowsToggled?.Invoke();
+
+    void OnChooseAdapters(object sender, RoutedEventArgs e) => ChooseAdaptersRequested?.Invoke();
 
     void OnOpenNetworkSettings(object sender, RoutedEventArgs e) => OpenNetworkSettingsRequested?.Invoke();
 

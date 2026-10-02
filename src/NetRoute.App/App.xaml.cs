@@ -65,6 +65,7 @@ public partial class App : Application
         _card.Moved += (left, top) => controller.UpdateSettings(s => s with { CardLeft = left, CardTop = top });
         _card.StartWithWindowsToggled += ToggleStartWithWindows;
         _card.OpenNetworkSettingsRequested += OpenNetworkSettings;
+        _card.ChooseAdaptersRequested += ChooseAdapters;
         _card.RestartAsAdminRequested += RestartAsAdmin;
         _card.QuitRequested += Quit;
 
@@ -149,6 +150,13 @@ public partial class App : Application
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         Render(_controller!.Status);
+    }
+
+    async void ChooseAdapters()
+    {
+        var candidates = AdapterDetector.Candidates(new WindowsAdapterSource().GetAdapters()).ToList();
+        var picker = new AdapterPickerWindow(candidates, _controller!.Settings.Overrides);
+        if (picker.ShowDialog() == true) await _controller.SetOverridesAsync(picker.Result);
     }
 
     static void OpenNetworkSettings() =>
