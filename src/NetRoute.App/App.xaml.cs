@@ -297,11 +297,18 @@ public partial class App : Application
     {
         _card?.RenderSmart(SmartRoutingPresenter.Row(status));
         RenderSmartWindow();
-        if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone || !status.IsActive)) _waitingPopup.Close();
+        if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone
+            || status.State is SmartState.Off or SmartState.Unavailable or SmartState.Faulted)) // Starting is a transient restart: keep the popup
+            _waitingPopup.Close();
     }
 
     void ShowWaitingPopup(IReadOnlyList<string> names)
     {
+        // The event was queued on the dispatcher: the outage may be over by now.
+        if (_smart is not { } smart) return;
+        var current = smart.Status;
+        if (current.LanOnline || current.LanRulesOnPhone
+            || current.State is not (SmartState.Running or SmartState.Starting)) return;
         var text = SmartRoutingPresenter.WaitingText(names);
         if (_waitingPopup is not null)
         {
@@ -331,6 +338,7 @@ public partial class App : Application
         }
         if (_smartWindow is not null)
         {
+            if (_smartWindow.WindowState == WindowState.Minimized) _smartWindow.WindowState = WindowState.Normal;
             _smartWindow.Activate();
             return;
         }

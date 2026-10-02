@@ -14,6 +14,10 @@ public partial class AddRuleWindow : Window
     {
         InitializeComponent();
         _type = type;
+        Loaded += (_, _) => Input.Focus();
+        // An editable ComboBox's inner TextBox raises TextChanged, which bubbles up to the ComboBox.
+        Input.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new System.Windows.Controls.TextChangedEventHandler((_, _) => Error.Visibility = Visibility.Collapsed));
         if (type == UserRuleType.App)
         {
             Title = "Add app";
