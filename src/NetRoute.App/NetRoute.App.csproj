@@ -22,4 +22,9 @@
     <ProjectReference Include="..\NetRoute.Core\NetRoute.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\tools\Restore-Network.cmd" Link="Restore-Network.cmd"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
