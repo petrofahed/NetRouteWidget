@@ -18,6 +18,7 @@ public class RestoreScriptTests
         Assert.Equal(0, exitCode);
         Assert.Contains("Dry run", output);
         Assert.Contains("settings file:", output);
+        Assert.Matches("would restore|nothing to restore", output);
         Assert.Contains("startup task:", output);
         Assert.Equal(before, MetricSnapshot());
     }
