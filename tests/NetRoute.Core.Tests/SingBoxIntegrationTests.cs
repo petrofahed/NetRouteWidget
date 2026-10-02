@@ -71,7 +71,7 @@ public partial class SingBoxIntegrationTests
               "route": { "rules": [ { "action": "sniff" }, { "domain_suffix": ["example.com"], "outbound": "lan-only" } ], "final": "default" },
               "experimental": { "clash_api": { "external_controller": "127.0.0.1:{{apiPort}}", "secret": "itest" } } }
             """;
-        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe, Path.Combine(Path.GetTempPath(), $"netroute-itest-{Guid.NewGuid():N}.json"));
+        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
         var events = new System.Collections.Concurrent.ConcurrentQueue<SingBoxLogEvent>();
         var exits = 0;
         host.LineReceived += l => { if (SingBoxLogParser.Parse(l) is { } e) events.Enqueue(e); };
@@ -88,7 +88,8 @@ public partial class SingBoxIntegrationTests
 
             await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("https://example.com/")); // lan-only -> missing adapter
             Assert.True(SpinWait.SpinUntil(() => events.OfType<DialFailed>().Any(), TimeSpan.FromSeconds(10)));
-            var matched = events.OfType<RuleMatched>().First(m => m.Outbound == "lan-only");
+            var matched = events.OfType<RuleMatched>().FirstOrDefault(m => m.Outbound == "lan-only");
+            Assert.True(matched is not null, "no RuleMatched for lan-only; parsed events: " + string.Join(" | ", events));
             Assert.Equal(1, matched.RuleIndex);
             Assert.Contains(events.OfType<DialFailed>(), f => f.ConnectionId == matched.ConnectionId && f.Outbound == "lan-only");
 
@@ -103,5 +104,84 @@ public partial class SingBoxIntegrationTests
 
         Assert.False(host.IsRunning);
         Assert.Equal(1, exits); // raised before StopAsync returned
+    }
+
+    static string LoopbackOnlyConfig() => $$"""
+        { "log": { "level": "info" },
+          "inbounds": [ { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": {{NetRoute.Core.Windows.FreePort.Next()}} } ],
+          "outbounds": [ { "type": "direct", "tag": "direct" } ] }
+        """;
+
+    [Fact]
+    public async Task Started_sing_box_is_in_the_kill_on_close_job()
+    {
+        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
+        await host.StartAsync(LoopbackOnlyConfig());
+        try
+        {
+            var process = host.CurrentProcess;
+            Assert.NotNull(process);
+            Assert.True(host.KillOnParentExit);
+            var job = NetRoute.Core.Windows.JobObjectNative.SharedKillOnCloseJob;
+            Assert.NotEqual(IntPtr.Zero, job);
+            // Query our own job (not "any job"): a test runner may itself live in one.
+            Assert.True(NetRoute.Core.Windows.JobObjectNative.IsProcessInJob(process!.Handle, job, out var inJob));
+            Assert.True(inJob);
+        }
+        finally { await host.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task Config_is_fed_on_stdin_and_a_throwing_subscriber_breaks_nothing()
+    {
+        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var exits = 0;
+        host.LineReceived += _ => throw new InvalidOperationException("bad subscriber");
+        host.LineReceived += lines.Enqueue; // still called after the throwing one
+        host.Exited += _ => throw new InvalidOperationException("bad subscriber");
+        host.Exited += _ => Interlocked.Increment(ref exits);
+
+        await host.StartAsync(LoopbackOnlyConfig());
+        Assert.True(SpinWait.SpinUntil(() => !lines.IsEmpty, TimeSpan.FromSeconds(10)), "sing-box printed nothing, so it did not start from stdin");
+        Assert.True(host.IsRunning);
+        await host.StopAsync();
+
+        Assert.False(host.IsRunning);
+        Assert.Equal(1, exits);
+    }
+
+    [Fact]
+    public async Task Natural_exit_raises_Exited_once_with_the_exit_code_and_stop_is_idempotent()
+    {
+        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
+        var codes = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        host.Exited += codes.Enqueue;
+
+        await host.StartAsync("{ this is not json"); // sing-box rejects it and exits by itself; nothing is started
+
+        Assert.True(SpinWait.SpinUntil(() => !codes.IsEmpty, TimeSpan.FromSeconds(10)), "Exited never fired");
+        Assert.False(host.IsRunning);
+        await host.StopAsync();
+        await host.StopAsync(); // twice is safe
+        Assert.Single(codes);
+        Assert.NotEqual(0, codes.Single());
+
+        await host.StartAsync(LoopbackOnlyConfig()); // restartable after a natural exit
+        Assert.True(host.IsRunning);
+        await host.StopAsync();
+        await host.StopAsync();
+        Assert.Equal(2, codes.Count);
+    }
+
+    [Fact]
+    public void KillOrphans_ignores_processes_that_do_not_match_the_path()
+    {
+        var before = System.Diagnostics.Process.GetProcessesByName("sing-box").Select(p => p.Id).ToHashSet();
+
+        Assert.Equal(0, NetRoute.Core.Windows.SingBoxHost.KillOrphans(Path.Combine(Path.GetTempPath(), "no-such-dir", "sing-box.exe")));
+
+        var after = System.Diagnostics.Process.GetProcessesByName("sing-box").Select(p => p.Id).ToHashSet();
+        Assert.True(before.SetEquals(after), "KillOrphans must not touch sing-box processes from another path");
     }
 }

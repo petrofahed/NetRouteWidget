@@ -23,7 +23,7 @@ public sealed class SingBoxApi : ISingBoxApi, IDisposable
     {
         try
         {
-            using var response = await _http.PutAsJsonAsync($"proxies/{Uri.EscapeDataString(group)}", new { name = outbound }, ct);
+            using var response = await _http.PutAsJsonAsync($"proxies/{Uri.EscapeDataString(group)}", new { name = outbound }, ct).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !ct.IsCancellationRequested))
@@ -36,7 +36,7 @@ public sealed class SingBoxApi : ISingBoxApi, IDisposable
     {
         try
         {
-            return ParseConnections(await _http.GetStringAsync("connections", ct));
+            return ParseConnections(await _http.GetStringAsync("connections", ct).ConfigureAwait(false));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException
                                    || (ex is TaskCanceledException && !ct.IsCancellationRequested))
@@ -45,23 +45,41 @@ public sealed class SingBoxApi : ISingBoxApi, IDisposable
         }
     }
 
+    /// Entries that are not shaped as expected are skipped rather than failing the whole poll.
     internal static IReadOnlyList<SingBoxConnection> ParseConnections(string json)
     {
         using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("connections", out var list) || list.ValueKind != JsonValueKind.Array) return [];
+        if (doc.RootElement.ValueKind != JsonValueKind.Object
+            || !doc.RootElement.TryGetProperty("connections", out var list) || list.ValueKind != JsonValueKind.Array) return [];
 
         var result = new List<SingBoxConnection>();
         foreach (var c in list.EnumerateArray())
         {
-            var meta = c.GetProperty("metadata");
-            var host = meta.TryGetProperty("host", out var h) && h.GetString() is { Length: > 0 } hs ? hs : null;
-            var path = meta.TryGetProperty("processPath", out var p) && p.GetString() is { Length: > 0 } ps ? ps : null;
-            result.Add(new SingBoxConnection(
-                c.GetProperty("id").GetString()!, host, path is null ? null : Path.GetFileName(path),
-                c.GetProperty("chains").EnumerateArray().Select(x => x.GetString()!).ToList(),
-                c.GetProperty("upload").GetInt64(), c.GetProperty("download").GetInt64()));
+            if (c.ValueKind != JsonValueKind.Object
+                || !c.TryGetProperty("metadata", out var meta) || meta.ValueKind != JsonValueKind.Object
+                || !c.TryGetProperty("id", out var idElement) || idElement.ValueKind != JsonValueKind.String
+                || !c.TryGetProperty("chains", out var chainsElement) || chainsElement.ValueKind != JsonValueKind.Array
+                || !TryGetLong(c, "upload", out var upload) || !TryGetLong(c, "download", out var download))
+                continue;
+
+            var chains = new List<string>();
+            foreach (var x in chainsElement.EnumerateArray())
+                if (x.ValueKind == JsonValueKind.String) chains.Add(x.GetString()!);
+
+            var host = GetString(meta, "host");
+            var path = GetString(meta, "processPath");
+            result.Add(new SingBoxConnection(idElement.GetString()!, host, path is null ? null : Path.GetFileName(path), chains, upload, download));
         }
         return result;
+    }
+
+    static string? GetString(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } s ? s : null;
+
+    static bool TryGetLong(JsonElement obj, string name, out long value)
+    {
+        value = 0;
+        return obj.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out value);
     }
 
     public void Dispose() => _http.Dispose();
