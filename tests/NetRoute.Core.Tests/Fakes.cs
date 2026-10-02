@@ -59,13 +59,12 @@ sealed class BlockingLatencyProbe : ILatencyProbe
     readonly TaskCompletionSource _gate = new();
     readonly Dictionary<string, int?> _bySource = new();
 
-    public Task Release() => _gate.Task;
-    public void SetResult() => _gate.TrySetResult();
     public void SetLatency(string source, int? ms) => _bySource[source] = ms;
+    public void Unblock() => _gate.TrySetResult();
 
     public async Task<int?> MeasureAsync(IPAddress source, CancellationToken ct)
     {
-        await _gate.Task.ConfigureAwait(false);
+        await _gate.Task.WaitAsync(ct).ConfigureAwait(false);
         return _bySource.TryGetValue(source.ToString(), out var ms) ? ms : null;
     }
 }
