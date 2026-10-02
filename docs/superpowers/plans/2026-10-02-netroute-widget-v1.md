@@ -20,7 +20,7 @@
 - **Dependencies:** no third-party runtime packages. Test-only packages: the `dotnet new xunit` template defaults, plus `Microsoft.Extensions.TimeProvider.Testing`.
 - **Metrics:** preferred = `5`, backup = `50`. Auto = Windows automatic metric. Applied to both IPv4 and IPv6 interfaces. **Routes are never deleted.**
 - **Paths:** settings in `%AppData%\NetRouteWidget\settings.json`; logs in `%AppData%\NetRouteWidget\logs\netroute-yyyyMMdd.log`, 7 days kept.
-- **Timing:** debounce 1.5 s; poll every 5 s with the card visible and 30 s with it hidden; latency probe TCP `1.1.1.1:443` with a 2 s timeout.
+- **Timing:** debounce 1.5 s; poll every 5 s with the card visible and 10 s with it hidden (changed from 30 s by Task 12, for auto-heal); latency probe TCP `1.1.1.1:443` with a 2 s timeout.
 - **Path-check targets:** IPv4 `1.1.1.1`, IPv6 `2606:4700:4700::1111`.
 - **Ignored adapter markers** (case-insensitive, in name or description): `VMware`, `Hyper-V`, `Virtual`, `vEthernet`, `VirtualBox`, `WireGuard`, `NordLynx`, `TAP-`, `Wintun`, `Tunnel`, `VPN`, `Loopback`, `Bluetooth`.
 - **Phone markers** (in description): `Remote NDIS`, `Apple Mobile Device Ethernet`.
@@ -3858,3 +3858,505 @@ git push
 ```
 
 Expected: `main -> main` pushed to `https://github.com/petrofahed/NetRouteWidget`.
+
+---
+
+## Added 2026-10-02: break-glass protections
+
+The user approved this addition during execution. It adds Tasks 12 and 13, which run **after Task 10 and before Task 11**. The spec section is "Break-glass protections". Unit-test counts from Task 6 onward are +2 against the original plan, because reviews added tests, so the baseline before Task 12 is **75 unit / 5 integration** tests.
+
+### Task 12: Auto-heal when the preferred adapter has no internet
+
+**Files:**
+- Modify: `src/NetRoute.Core/NetworkStatus.cs` (new last positional parameter)
+- Modify: `src/NetRoute.Core/StatusPresenter.cs` (fallback reason text)
+- Modify: `src/NetRoute.Core/RouteController.cs` (heal state, effective mode, resets)
+- Modify: `src/NetRoute.App/App.xaml.cs` (hidden poll 30 s → 10 s)
+- Modify: `tests/NetRoute.Core.Tests/RouteControllerTests.cs`, `tests/NetRoute.Core.Tests/StatusPresenterTests.cs`
+
+**Interfaces:**
+- Consumes: `RouteController` (Task 6 plus its fixes), `NetworkStatus` and `StatusPresenter` (Task 5), and the fakes in `Fakes.cs`.
+- Produces:
+  - `NetworkStatus.IsHealing` (bool, last positional parameter, default `false`)
+  - `RouteController.HealAfterFailedChecks = 3`
+  - `RouteController.RecoverAfterGoodChecks = 3`
+
+**Behaviour:**
+- **Healing applies only when** the controller can modify metrics, the mode is Phone or Lan, and both the preferred and the backup adapters are detected.
+- **Counting happens only on refreshes with `measureLatency: true`.**
+- **Entering a heal:** while not healing, a check counts as a failure when the preferred adapter's latency is `null` and the backup's is not. Any other result resets the count. On 3 consecutive failures the controller heals.
+- **Leaving a heal:** while healing, a check counts as good when the preferred adapter's latency is not `null`. Anything else resets the count. On 3 consecutive good checks the heal ends.
+- **What a heal changes:** the metrics applied are those of the *opposite* mode (Phone ↔ Lan). `Settings.Mode` and the persisted settings never change.
+- **Immediate reset:** any of the following ends a heal straight away: `SetModeAsync`, `SetOverridesAsync` (elevated branch), mode Auto, read-only, or the preferred or backup adapter not being detected.
+- **No new toast strings:** the existing `ToastFor` already yields "Phone lost internet — internet via LAN" and "Phone back — internet via Phone" as the route moves.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/NetRoute.Core.Tests/StatusPresenterTests.cs` (inside the class):
+
+```csharp
+    [Fact]
+    public void Healing_header_explains_the_phone_has_no_internet()
+    {
+        var view = StatusPresenter.Present(Status(path: InternetPath.Lan) with { IsHealing = true });
+
+        Assert.Equal("Internet via LAN (phone has no internet)", view.Header);
+        Assert.True(view.TrayBadge);
+    }
+```
+
+Append to `tests/NetRoute.Core.Tests/RouteControllerTests.cs` (inside the class):
+
+```csharp
+    async Task RefreshTimes(RouteController controller, int times)
+    {
+        for (var i = 0; i < times; i++) await controller.RefreshAsync(measureLatency: true);
+    }
+
+    [Fact]
+    public async Task Phone_without_internet_heals_to_lan_after_three_failed_checks()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+
+        await RefreshTimes(controller, 2);
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+
+        _routes.BestV4 = 10; // Windows follows the swapped metrics
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal(RoutingMode.Phone, controller.Status.Mode);
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Empty(_saved);
+        Assert.Equal("Phone lost internet — internet via LAN", _toasts.Last());
+    }
+
+    [Fact]
+    public async Task Healing_returns_to_phone_after_three_good_checks()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        _routes.BestV4 = 10;
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+
+        _probe.BySource["192.168.42.11"] = 38;
+        await RefreshTimes(controller, 2);
+        Assert.True(controller.Status.IsHealing);
+
+        _routes.BestV4 = 31;
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal("Phone back — internet via Phone", _toasts.Last());
+    }
+
+    [Fact]
+    public async Task No_heal_when_the_backup_has_no_internet_either()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        _probe.BySource["192.168.86.42"] = null;
+
+        await RefreshTimes(controller, 5);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task A_good_check_resets_the_failure_count()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+
+        foreach (var phoneMs in new int?[] { null, null, 38, null, null })
+        {
+            _probe.BySource["192.168.42.11"] = phoneMs;
+            await controller.RefreshAsync(measureLatency: true);
+        }
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Lan_mode_heals_to_phone()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+
+        await RefreshTimes(controller, 3);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal(RoutingMode.Lan, controller.Settings.Mode);
+    }
+
+    [Fact]
+    public async Task Auto_mode_and_read_only_never_heal()
+    {
+        var auto = Create(new AppSettings { Mode = RoutingMode.Auto });
+        await auto.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(auto, 5);
+        Assert.False(auto.Status.IsHealing);
+        Assert.All(_metrics.State.Values, s => Assert.True(s.UseAutomatic));
+
+        var readOnly = Create(canModify: false);
+        await RefreshTimes(readOnly, 5);
+        Assert.False(readOnly.Status.IsHealing);
+        Assert.DoesNotContain(_metrics.SetCalls, c => c.Metric is not null);
+    }
+
+    [Fact]
+    public async Task User_mode_change_cancels_healing()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+
+        await controller.SetModeAsync(RoutingMode.Phone);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Healing_ends_when_the_backup_disappears()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 10);
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `dotnet test --filter "Category!=Integration"`
+Expected: build FAILS with `CS0117: 'NetworkStatus' does not contain a definition for 'IsHealing'`. The exact error code may differ, but the cause is the missing `IsHealing`.
+
+- [ ] **Step 3: Implement**
+
+`src/NetRoute.Core/NetworkStatus.cs`: add a final positional parameter `bool IsHealing = false` to the record, after `string? Error`. Nothing else in that file changes. Existing `new NetworkStatus(...)` calls keep compiling, and `Initial` leaves it at `false`.
+
+`src/NetRoute.Core/StatusPresenter.cs`: in `HeaderText`, pass `s.IsHealing` to `Reason`, and change `Reason` to:
+
+```csharp
+    static string Reason(AdapterInfo? preferred, string name, bool healing) =>
+        preferred is null ? $"{name} offline" : healing ? $"{name} has no internet" : $"{name} not routing";
+```
+
+(Both fallback arms call `Reason(..., s.IsHealing)`.)
+
+`src/NetRoute.Core/RouteController.cs`:
+
+1. Add these members:
+
+```csharp
+    /// Consecutive failed checks of the preferred adapter (while the backup answers) before healing.
+    public const int HealAfterFailedChecks = 3;
+
+    /// Consecutive good checks of the preferred adapter before healing ends.
+    public const int RecoverAfterGoodChecks = 3;
+
+    bool _healing;
+    int _healCount;
+
+    /// While healing, the backup adapter gets the preferred metric; the saved mode never changes.
+    RoutingMode EffectiveMode(RoutingMode mode) => !_healing ? mode : mode switch
+    {
+        RoutingMode.Phone => RoutingMode.Lan,
+        RoutingMode.Lan => RoutingMode.Phone,
+        _ => mode,
+    };
+
+    void ResetHealing()
+    {
+        _healing = false;
+        _healCount = 0;
+    }
+
+    void UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
+    {
+        var (preferred, backup, preferredMs, backupMs) = mode switch
+        {
+            RoutingMode.Phone => (adapters.Phone, adapters.Lan, phoneMs, lanMs),
+            RoutingMode.Lan => (adapters.Lan, adapters.Phone, lanMs, phoneMs),
+            _ => (null, null, null, null),
+        };
+
+        if (!canModify || preferred is null || backup is null)
+        {
+            if (_healing) _log("Auto-heal ended: preferred or backup adapter unavailable");
+            ResetHealing();
+            return;
+        }
+        if (!measured) return;
+
+        if (!_healing)
+        {
+            _healCount = preferredMs is null && backupMs is not null ? _healCount + 1 : 0;
+            if (_healCount < HealAfterFailedChecks) return;
+            _healing = true;
+            _healCount = 0;
+            _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
+        }
+        else
+        {
+            _healCount = preferredMs is not null ? _healCount + 1 : 0;
+            if (_healCount < RecoverAfterGoodChecks) return;
+            ResetHealing();
+            _log($"Auto-heal ended: {preferred.Name} has internet again");
+        }
+    }
+```
+
+   The tuple switch needs explicit types for the `_` arm. If the compiler complains, write `((AdapterInfo?)null, (AdapterInfo?)null, (int?)null, (int?)null)`.
+
+2. In `RefreshAsync`, inside the `try`, reorder the body so that latency is measured **before** applying, and the **effective** mode is applied:
+
+```csharp
+            var before = Status;
+            var mode = Settings.Mode;
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
+
+            var (phoneMs, lanMs) = measureLatency
+                ? await MeasureAsync(detection, ct)
+                : (detection.Phone is null ? null : before.PhoneLatencyMs, detection.Lan is null ? null : before.LanLatencyMs);
+
+            UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
+            var effective = EffectiveMode(mode);
+
+            string? error = null;
+            if (before.CanModify && !_engine.IsInSync(effective, detection))
+            {
+                _log($"Metrics differ from {effective} metrics; applying");
+                var result = _engine.Apply(effective, detection);
+                if (!result.Success)
+                {
+                    error = result.Error;
+                    _log($"Apply {effective} failed: {result.Error}");
+                }
+            }
+```
+
+   Then add `IsHealing = _healing,` to the `before with { ... }` initializer. The rest (path resolution, settling, toast, publish) is unchanged.
+
+3. In `SetModeAsync`, call `ResetHealing();` immediately after the gate is acquired, inside the `try` before `Detect`. Add `IsHealing = _healing,` to its `Status with { ... }`.
+
+4. In `SetOverridesAsync`, elevated branch: call `ResetHealing();` inside the gate, before the adapter reset loop.
+
+`src/NetRoute.App/App.xaml.cs`: change `HiddenPoll` from `TimeSpan.FromSeconds(30)` to `TimeSpan.FromSeconds(10)`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `dotnet test --filter "Category!=Integration"`
+Expected: PASS, 84 tests (75 + 9). Then `dotnet build` must give 0 warnings.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add -A
+git commit -m "feat(core): auto-heal to the backup adapter when the preferred one has no internet" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01AypeDHU2CKcJxywGQXDkT3"
+```
+
+---
+
+### Task 13: Break-glass restore script
+
+**Files:**
+- Create: `tools/Restore-Network.cmd`, `.gitattributes`
+- Modify: `src/NetRoute.App/NetRoute.App.csproj` (ship the script next to the exe)
+- Create: `tests/NetRoute.Core.Tests/RestoreScriptTests.cs`
+
+**Interfaces:**
+- Consumes: the settings file format from Task 3 (`Mode` is stored as a string), the scheduled task name `NetRouteWidget` from Task 8, and the exe name `NetRouteWidget.exe` from Task 9.
+- Produces: `Restore-Network.cmd [/check]`.
+
+- [ ] **Step 1: Write the failing integration test**
+
+`tests/NetRoute.Core.Tests/RestoreScriptTests.cs`:
+
+```csharp
+using System.Diagnostics;
+
+namespace NetRoute.Core.Tests;
+
+/// Runs the break-glass script in dry-run mode only; it must not change anything.
+[Trait("Category", "Integration")]
+public class RestoreScriptTests
+{
+    [Fact]
+    public void Dry_run_reports_and_changes_nothing()
+    {
+        var script = Path.Combine(RepoRoot(), "tools", "Restore-Network.cmd");
+        Assert.True(File.Exists(script), $"missing {script}");
+        var before = MetricSnapshot();
+
+        var (exitCode, output) = Run("cmd.exe", "/c", script, "/check");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Dry run", output);
+        Assert.Contains("settings file:", output);
+        Assert.Contains("startup task:", output);
+        Assert.Equal(before, MetricSnapshot());
+    }
+
+    static string MetricSnapshot() =>
+        Run("powershell.exe", "-NoProfile", "-Command",
+            "Get-NetIPInterface | Sort-Object ifIndex, AddressFamily | ForEach-Object { '{0},{1},{2},{3}' -f $_.ifIndex, $_.AddressFamily, $_.InterfaceMetric, $_.AutomaticMetric }").Output;
+
+    static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "global.json"))) dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("repo root (global.json) not found");
+    }
+
+    static (int ExitCode, string Output) Run(string file, params string[] args)
+    {
+        var psi = new ProcessStartInfo(file)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+        using var process = Process.Start(psi)!;
+        var stderr = process.StandardError.ReadToEndAsync();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail($"{file} timed out");
+        }
+        return (process.ExitCode, stdout.Result + stderr.Result);
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `dotnet test --filter "FullyQualifiedName~RestoreScriptTests"`
+Expected: FAIL, `missing ...\tools\Restore-Network.cmd`.
+
+- [ ] **Step 3: Create the script and ship it**
+
+`.gitattributes`:
+
+```
+*.cmd text eol=crlf
+```
+
+`tools/Restore-Network.cmd` must be saved with CRLF line endings:
+
+```bat
+@echo off
+setlocal
+rem NetRoute Widget break-glass restore.
+rem Hands every network adapter back to Windows' automatic metric, stops the widget and sets its
+rem saved mode to Auto, so it does not re-apply a preference at the next logon. Works without the app.
+rem   Restore-Network.cmd          restore (asks for administrator rights)
+rem   Restore-Network.cmd /check   dry run: show what would change, change nothing
+
+if /i "%~1"=="/check" goto check
+
+net session >nul 2>&1
+if errorlevel 1 (
+    echo Requesting administrator rights...
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b 0
+)
+
+echo Stopping NetRoute Widget...
+taskkill /IM NetRouteWidget.exe /F >nul 2>&1
+
+echo Restoring automatic interface metrics...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$n = 0; Get-NetIPInterface | Where-Object AutomaticMetric -eq 'Disabled' | ForEach-Object { Set-NetIPInterface -InterfaceIndex $_.ifIndex -AddressFamily $_.AddressFamily -AutomaticMetric Enabled; Write-Host ('  restored ' + $_.InterfaceAlias + ' (' + $_.AddressFamily + ')'); $n++ }; if ($n -eq 0) { Write-Host '  nothing to restore' }"
+
+echo Setting the widget's saved mode to Auto...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Join-Path $env:APPDATA 'NetRouteWidget\settings.json'; if (-not (Test-Path $p)) { Write-Host '  no settings file'; exit 0 }; try { $s = Get-Content $p -Raw | ConvertFrom-Json; $s.Mode = 'Auto'; $s | ConvertTo-Json | Set-Content $p -Encoding UTF8; Write-Host '  saved mode is now Auto' } catch { Write-Host ('  could not update settings: ' + $_.Exception.Message) }"
+
+echo.
+choice /C YN /N /M "Also stop NetRoute Widget from starting with Windows? [Y/N] "
+if errorlevel 2 goto done
+schtasks /Delete /TN NetRouteWidget /F
+
+:done
+echo.
+echo Done. Internet should work again within a few seconds.
+pause
+exit /b 0
+
+:check
+echo Dry run - nothing will be changed.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = @(Get-NetIPInterface | Where-Object AutomaticMetric -eq 'Disabled'); if ($list.Count -eq 0) { Write-Host '  nothing to restore' } else { $list | ForEach-Object { Write-Host ('  would restore ' + $_.InterfaceAlias + ' (' + $_.AddressFamily + ', metric ' + $_.InterfaceMetric + ')') } }; Write-Host ('  settings file: ' + (Join-Path $env:APPDATA 'NetRouteWidget\settings.json'))"
+schtasks /Query /TN NetRouteWidget >nul 2>&1 && (echo   startup task: present) || (echo   startup task: not present)
+exit /b 0
+```
+
+In `src/NetRoute.App/NetRoute.App.csproj`, add:
+
+```xml
+  <ItemGroup>
+    <None Include="..\..\tools\Restore-Network.cmd" Link="Restore-Network.cmd"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+```
+
+- [ ] **Step 4: Verify**
+
+Run:
+- `dotnet test --filter "FullyQualifiedName~RestoreScriptTests"`. Expected: PASS.
+- `dotnet test --filter "Category=Integration"`. Expected: PASS, 6.
+- `dotnet test --filter "Category!=Integration"`. Expected: PASS, 84.
+- `cmd /c tools\Restore-Network.cmd /check`. Read the output: it should list "nothing to restore" or "would restore …", then the settings path, then the startup task state.
+- Build the app into a scratch folder: `dotnet build src/NetRoute.App -o <scratch>`. Confirm `Restore-Network.cmd` is in `<scratch>`.
+
+Never run the script without `/check` here, because the restore needs administrator rights and changes the machine. The user runs it in Task 11.
+
+- [ ] **Step 5: Commit**
+
+```powershell
+git add -A
+git commit -m "feat: break-glass Restore-Network.cmd shipped next to the exe" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01AypeDHU2CKcJxywGQXDkT3"
+```
+
+---
+
+### Task 11 amendments (break-glass)
+
+- **Step 1 expected counts:** 84 unit tests, 6 integration tests.
+- **Step 2:** after publishing, confirm that `F:\Apps\NetRouteWidget\Restore-Network.cmd` exists.
+- **Step 3 checklist, extra items:**
+  7. **Auto-heal.** With the widget in Phone mode, keep USB tethering on but turn **mobile data off** on the phone.
+     - Expected within about 15 s with the card visible, or about 30 s with it hidden: the toast "Phone lost internet — internet via LAN", the header "Internet via LAN (phone has no internet)", and browsing keeps working.
+     - Then turn mobile data back on. Expected within about 15 s: "Phone back — internet via Phone".
+  8. **Break-glass script.** In Phone mode, double-click `F:\Apps\NetRouteWidget\Restore-Network.cmd`, accept UAC, and answer **N** at the startup-task question.
+     - Expected: the widget closes; `Get-NetIPInterface -AddressFamily IPv4 | ft InterfaceAlias,InterfaceMetric,AutomaticMetric` shows `Enabled` everywhere; `settings.json` shows `"Mode": "Auto"`.
+     - Start the widget again and choose Phone.
+- **Step 4 README:** in "Undo everything", put this first, before the PowerShell commands: "**Easiest:** double-click `Restore-Network.cmd` next to the exe (also in `tools/`). It stops the widget, gives every adapter back to Windows' automatic priority and sets the widget to Auto. `Restore-Network.cmd /check` shows what it would do." Also add **auto-heal** to the "What it does" bullets: "If the preferred connection is up but has no internet (e.g. phone data off), the widget switches to the other one until it recovers."
