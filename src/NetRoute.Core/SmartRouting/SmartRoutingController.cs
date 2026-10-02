@@ -347,11 +347,16 @@ public sealed class SmartRoutingController
     /// it heals onto the phone, so unmatched traffic follows; LAN-only items never do (they use their own selector).
     static RouteExit WantedExit(NetworkStatus net) => net.Mode switch
     {
-        RoutingMode.Lan => net.IsHealing || net.Adapters.Lan is null ? RouteExit.Phone : RouteExit.Lan,
+        RoutingMode.Lan => net.IsHealing || net.Adapters.Lan is not { HasGateway: true, IPv4: not null } ? RouteExit.Phone : RouteExit.Lan, // a LAN with no gateway/IPv4 counts as absent
         _ => net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone,
     };
 
-    string LanName(NetworkStatus net) => net.Adapters.Lan?.Name ?? _lastLanName ?? LanPlaceholder;
+    /// A saved or last-known name equal to the phone's would bind the "lan" outbound to the phone: use the placeholder instead.
+    string LanName(NetworkStatus net)
+    {
+        if (net.Adapters.Lan?.Name is { } live) return live;
+        return _lastLanName is { } name && !string.Equals(name, net.Adapters.Phone?.Name, StringComparison.OrdinalIgnoreCase) ? name : LanPlaceholder;
+    }
     string? LanDns(NetworkStatus net) => net.Adapters.Lan?.DnsServer ?? _lastLanDns;
 
     string KeyFor(NetworkStatus net) =>

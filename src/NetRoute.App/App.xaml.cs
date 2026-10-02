@@ -279,7 +279,7 @@ public partial class App : Application
             };
             controller.StatusChanged += status =>
             {
-                RememberLan(controller, status);
+                RememberLan(controller, status, log);
                 _ = smart.ApplyAsync(status, controller.Settings);
             };
             _lastSavedStatsTotal = restored?.Total ?? -1;
@@ -295,11 +295,18 @@ public partial class App : Application
     /// Saves the LAN adapter's name so a later start with the LAN absent (cable out at boot, router rebooting) still
     /// binds Smart routing's "lan" outbound to it. Written only when the name changes. It is not part of the rule
     /// fingerprint or the sing-box key, so it never restarts anything.
-    static void RememberLan(RouteController controller, NetworkStatus status)
+    static void RememberLan(RouteController controller, NetworkStatus status, FileLog log)
     {
-        var name = status.Adapters.Lan?.Name;
-        if (name is null || !controller.Settings.SmartRouting.TryRememberLan(name, out _)) return;
-        controller.UpdateSettings(s => s.SmartRouting.TryRememberLan(name, out var updated) ? s with { SmartRouting = updated } : s);
+        try
+        {
+            var name = status.Adapters.Lan?.Name;
+            if (name is null || !controller.Settings.SmartRouting.TryRememberLan(name, out _)) return;
+            controller.UpdateSettings(s => s.SmartRouting.TryRememberLan(name, out var updated) ? s with { SmartRouting = updated } : s);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.Error("Remembering the LAN adapter name failed", ex); // a convenience: it must never break the v1 status handler or skip ApplyAsync
+        }
     }
 
     void UpdateSmart(Func<SmartRoutingSettings, SmartRoutingSettings> change)

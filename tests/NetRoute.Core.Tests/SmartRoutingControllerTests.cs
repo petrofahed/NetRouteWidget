@@ -854,6 +854,46 @@ public class SmartRoutingControllerTests
         Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
     }
 
+    // ---- Live-fix 1 (L3) ----
+
+    static NetworkStatus LanModeWithLan(AdapterInfo lan) =>
+        new(RoutingMode.Lan, new DetectionResult(TestAdapters.Phone(), DetectionIssue.None, lan, DetectionIssue.None),
+            InternetPath.Lan, InternetPath.None, 30, 12, true, null);
+
+    [Fact]
+    public async Task Lan_mode_with_a_normal_lan_keeps_the_default_on_the_lan()
+    {
+        var c = Create();
+
+        await c.ApplyAsync(LanModeWithLan(TestAdapters.Lan()), On());
+
+        Assert.Equal(RouteExit.Lan, c.Status.DefaultExit);
+    }
+
+    [Theory]
+    [InlineData(false, "192.168.86.42")] // detected but no gateway
+    [InlineData(true, null)]             // detected but no IPv4 yet
+    public async Task Lan_mode_with_a_lan_that_is_detected_but_unusable_defaults_to_the_phone(bool hasGateway, string? ipv4)
+    {
+        var c = Create();
+
+        await c.ApplyAsync(LanModeWithLan(TestAdapters.Lan() with { HasGateway = hasGateway, IPv4 = ipv4 }), On());
+
+        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+    }
+
+    [Fact]
+    public async Task A_saved_lan_name_equal_to_the_phone_name_uses_the_placeholder()
+    {
+        var c = Create();
+
+        await c.ApplyAsync(Net(lan: false), OnWithSavedLan("Ethernet 31")); // the phone adapter in Net() is "Ethernet 31"
+
+        var json = Assert.Single(_host.Starts);
+        Assert.Contains("\"bind_interface\": \"" + SmartRoutingController.LanPlaceholder + "\"", json);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(json, "\"bind_interface\": \"Ethernet 31\""), m => true); // only the phone outbound is bound to it
+    }
+
     [Fact]
     public async Task Lan_only_waiting_still_works_in_lan_mode()
     {
