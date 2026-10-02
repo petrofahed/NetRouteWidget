@@ -23,7 +23,9 @@ public static class SpeedTest
     public static string Describe(SpeedTestResult r) => $"⚡ Phone {Mbps(r.PhoneMbps)} · LAN {Mbps(r.LanMbps)}";
 
     static Task<double?> Measure(ISpeedProbe probe, AdapterInfo? adapter, CancellationToken ct) =>
-        adapter?.IPv4 is { } ip ? probe.MeasureMbpsAsync(IPAddress.Parse(ip), ct) : Task.FromResult<double?>(null);
+        adapter?.IPv4 is { } ip && IPAddress.TryParse(ip, out var address)
+            ? probe.MeasureMbpsAsync(address, ct)
+            : Task.FromResult<double?>(null);
 
     static string Mbps(double? value) =>
         value is { } v ? $"{v.ToString("0.0", CultureInfo.InvariantCulture)} Mbit/s" : "—";
