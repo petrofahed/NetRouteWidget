@@ -86,11 +86,14 @@ public static class SingBoxConfigBuilder
                 {
                     ["type"] = "selector", ["tag"] = LanOnlyTag, ["outbounds"] = Strings([LanTag, PhoneTag]),
                     ["default"] = input.LanRulesOnPhone ? PhoneTag : LanTag,
+                    // Without this a switch only affects new connections; open ones would stay on the old exit.
+                    ["interrupt_exist_connections"] = true,
                 },
                 new JsonObject
                 {
                     ["type"] = "selector", ["tag"] = DefaultTag, ["outbounds"] = Strings([PhoneTag, LanTag]),
                     ["default"] = input.DefaultExit == RouteExit.Lan ? LanTag : PhoneTag,
+                    ["interrupt_exist_connections"] = true,
                 },
             },
             ["route"] = new JsonObject

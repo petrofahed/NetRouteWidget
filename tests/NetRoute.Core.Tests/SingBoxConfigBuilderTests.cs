@@ -29,6 +29,9 @@ public class SingBoxConfigBuilderTests
         Assert.Equal("phone", (string)Outbound(root, "default")["default"]!);
         Assert.Equal("default", (string)root["route"]!["final"]!);
         Assert.Equal("remote", (string)root["route"]!["default_domain_resolver"]!); // sing-box check requires one
+        // A selector switch must move connections already open, or they would stay on the old exit.
+        Assert.True((bool)Outbound(root, "lan-only")["interrupt_exist_connections"]!);
+        Assert.True((bool)Outbound(root, "default")["interrupt_exist_connections"]!);
 
         var healed = Parse(SingBoxConfigBuilder.Build(Input(RouteExit.Lan, lanRulesOnPhone: true)));
         Assert.Equal("phone", (string)Outbound(healed, "lan-only")["default"]!);
