@@ -9,7 +9,8 @@ public sealed record NetworkStatus(
     int? LanLatencyMs,
     bool CanModify,
     string? Error,
-    bool IsHealing = false)
+    bool IsHealing = false,
+    bool IsHealSticky = false)
 {
     /// The preferred adapter is not the one carrying internet.
     public bool IsFallback =>

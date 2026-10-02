@@ -40,6 +40,7 @@ public sealed class RouteController
     int _recoverThreshold = RecoverAfterGoodChecks;
     int _checksSinceHealEnded;
     bool _hadHeal;
+    bool _healSticky;
 
     /// Good checks of the preferred adapter that end healing now; grows while healing keeps repeating.
     internal int RecoverThreshold => _recoverThreshold;
@@ -90,7 +91,7 @@ public sealed class RouteController
                 ? await MeasureAsync(detection, ct)
                 : (detection.Phone is null ? null : before.PhoneLatencyMs, detection.Lan is null ? null : before.LanLatencyMs);
 
-            UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
+            var stickyHealStarted = UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
             var effective = EffectiveMode(mode);
 
             string? error = null;
@@ -109,6 +110,7 @@ public sealed class RouteController
             {
                 Mode = mode,
                 IsHealing = _healing,
+                IsHealSticky = _healSticky,
                 Adapters = detection,
                 ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
@@ -121,7 +123,11 @@ public sealed class RouteController
             // that move to the preferred adapter is the user's doing, not worth a toast.
             var settlingAfterUserChange = _userChangePending && !after.IsFallback;
             _userChangePending = false;
-            Publish(after, _hasRefreshed && !settlingAfterUserChange ? StatusPresenter.ToastFor(before, after) : null);
+            // A heal turning sticky gets its own toast in place of the path-change one: one toast, not two.
+            var toast = stickyHealStarted ? StatusPresenter.StickyHealToast(mode)
+                : _hasRefreshed && !settlingAfterUserChange ? StatusPresenter.ToastFor(before, after)
+                : null;
+            Publish(after, toast);
             _hasRefreshed = true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -161,6 +167,7 @@ public sealed class RouteController
             {
                 Mode = Settings.Mode,
                 IsHealing = _healing,
+                IsHealSticky = _healSticky,
                 Adapters = detection,
                 ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
@@ -241,9 +248,11 @@ public sealed class RouteController
         _recoverThreshold = RecoverAfterGoodChecks;
         _checksSinceHealEnded = 0;
         _hadHeal = false;
+        _healSticky = false;
     }
 
-    void UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
+    /// Returns true when this check started a sticky heal.
+    bool UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
     {
         var (preferred, backup, preferredMs, backupMs) = mode switch
         {
@@ -256,10 +265,10 @@ public sealed class RouteController
         {
             if (_healing) _log("Auto-heal ended: preferred or backup adapter unavailable");
             ResetHealing();
-            return;
+            return false;
         }
         // No IPv4 yet (e.g. DHCP pending after a replug): nothing was measured, so it is no evidence either way.
-        if (!measured || preferred.IPv4 is null) return;
+        if (!measured || preferred.IPv4 is null) return false;
 
         if (!_healing)
         {
@@ -270,15 +279,25 @@ public sealed class RouteController
             }
 
             _healCount = preferredMs is null && backupMs is not null ? _healCount + 1 : 0;
-            if (_healCount < HealAfterFailedChecks) return;
+            if (_healCount < HealAfterFailedChecks) return false;
             _healing = true;
             _healCount = 0;
             if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
             {
-                _recoverThreshold = Math.Min(_recoverThreshold * 2, MaxRecoverAfterGoodChecks);
-                _log($"Auto-heal: repeated failure; waiting for {_recoverThreshold} good checks before switching back");
+                if (_recoverThreshold == MaxRecoverAfterGoodChecks)
+                {
+                    // Switching back keeps failing even after the longest wait: stop cycling until the user retries.
+                    _healSticky = true;
+                    _log($"Auto-heal: {preferred.Name} keeps losing internet; staying on {backup.Name} until the user retries");
+                }
+                else
+                {
+                    _recoverThreshold = Math.Min(_recoverThreshold * 2, MaxRecoverAfterGoodChecks);
+                    _log($"Auto-heal: repeated failure; waiting for {_recoverThreshold} good checks before switching back");
+                }
             }
             _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
+            return _healSticky;
         }
         else if (backupMs is null && preferredMs is not null)
         {
@@ -286,13 +305,14 @@ public sealed class RouteController
             EndHeal();
             _log($"Auto-heal ended: {backup.Name} has no internet but {preferred.Name} answers");
         }
-        else
+        else if (!_healSticky) // a sticky heal ends only through the rule above or ResetHealing
         {
             _healCount = preferredMs is not null ? _healCount + 1 : 0;
-            if (_healCount < _recoverThreshold) return;
+            if (_healCount < _recoverThreshold) return false;
             EndHeal();
             _log($"Auto-heal ended: {preferred.Name} has internet again");
         }
+        return false;
     }
 
     /// A heal that ends on its own keeps the backoff, so the next heal soon after waits longer.
@@ -302,6 +322,7 @@ public sealed class RouteController
         _healCount = 0;
         _hadHeal = true;
         _checksSinceHealEnded = 0;
+        _healSticky = false;
     }
 
     async Task<(int?, int?)> MeasureAsync(DetectionResult adapters, CancellationToken ct)

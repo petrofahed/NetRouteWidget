@@ -468,6 +468,85 @@ public class RouteControllerTests
         Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
     }
 
+    /// Heal and recover until the wait before switching back is at its cap; ends not healing.
+    async Task ReachMaxBackoff(RouteController controller)
+    {
+        do
+        {
+            await HealPhone(controller);
+            await RecoverPhone(controller, controller.RecoverThreshold);
+        } while (controller.RecoverThreshold < RouteController.MaxRecoverAfterGoodChecks);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Heal_at_the_backoff_cap_is_sticky()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await ReachMaxBackoff(controller);
+
+        await HealPhone(controller);
+        Assert.True(controller.Status.IsHealSticky);
+
+        await RecoverPhone(controller, 100);
+        Assert.True(controller.Status.IsHealing);
+        Assert.True(controller.Status.IsHealSticky);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(10, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task User_mode_change_clears_a_sticky_heal()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await ReachMaxBackoff(controller);
+        await HealPhone(controller);
+        Assert.True(controller.Status.IsHealSticky);
+
+        await controller.SetModeAsync(RoutingMode.Phone);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.False(controller.Status.IsHealSticky);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task A_dead_backup_ends_a_sticky_heal()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await ReachMaxBackoff(controller);
+        await HealPhone(controller);
+        Assert.True(controller.Status.IsHealSticky);
+
+        _probe.BySource["192.168.86.42"] = null;
+        _probe.BySource["192.168.42.11"] = 38;
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.False(controller.Status.IsHealSticky);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Entering_a_sticky_heal_raises_one_toast()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await ReachMaxBackoff(controller);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, RouteController.HealAfterFailedChecks - 1);
+
+        _routes.BestV4 = 10; // Windows follows the swapped metrics, so the path changes in this refresh
+        _toasts.Clear();
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.True(controller.Status.IsHealSticky);
+        Assert.Equal(InternetPath.Lan, controller.Status.ActivePath);
+        Assert.Equal(new[] { "Phone keeps losing internet — staying on LAN. Click Phone to retry." }, _toasts);
+    }
+
     [Fact]
     public async Task User_mode_change_resets_the_backoff()
     {

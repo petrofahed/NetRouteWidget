@@ -168,4 +168,23 @@ public class StatusPresenterTests
         Assert.Equal("Internet via LAN (phone has no internet)", view.Header);
         Assert.True(view.TrayBadge);
     }
+
+    [Theory]
+    [InlineData(RoutingMode.Phone, InternetPath.Lan, "Internet via LAN (phone keeps losing internet — click Phone to retry)")]
+    [InlineData(RoutingMode.Lan, InternetPath.Phone, "Internet via PHONE (LAN keeps losing internet — click LAN to retry)")]
+    public void Sticky_heal_header_tells_the_user_how_to_retry(RoutingMode mode, InternetPath path, string header)
+    {
+        var view = StatusPresenter.Present(Status(mode: mode, path: path) with { IsHealing = true, IsHealSticky = true });
+
+        Assert.Equal(header, view.Header);
+        Assert.True(view.TrayBadge);
+    }
+
+    [Theory]
+    [InlineData(RoutingMode.Phone, "Phone keeps losing internet — staying on LAN. Click Phone to retry.")]
+    [InlineData(RoutingMode.Lan, "LAN keeps losing internet — staying on Phone. Click LAN to retry.")]
+    public void Sticky_heal_toast_names_the_retry_button(RoutingMode mode, string toast)
+    {
+        Assert.Equal(toast, StatusPresenter.StickyHealToast(mode));
+    }
 }

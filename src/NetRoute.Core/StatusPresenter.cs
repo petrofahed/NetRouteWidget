@@ -45,6 +45,11 @@ public static class StatusPresenter
         };
     }
 
+    /// Message for the moment a heal becomes sticky: the app stops switching back on its own.
+    public static string StickyHealToast(RoutingMode mode) => mode == RoutingMode.Lan
+        ? "LAN keeps losing internet — staying on Phone. Click LAN to retry."
+        : "Phone keeps losing internet — staying on LAN. Click Phone to retry.";
+
     static string HeaderText(NetworkStatus s)
     {
         if (s.Error is { } error) return error;
@@ -52,15 +57,18 @@ public static class StatusPresenter
         {
             InternetPath.None => "No internet",
             InternetPath.Other => "Internet via other adapter",
-            InternetPath.Phone when s.IsFallback => $"Internet via PHONE ({Reason(s.Adapters.Lan, "LAN", s.IsHealing)})",
-            InternetPath.Lan when s.IsFallback => $"Internet via LAN ({Reason(s.Adapters.Phone, "phone", s.IsHealing)})",
+            InternetPath.Phone when s.IsFallback => $"Internet via PHONE ({Reason(s.Adapters.Lan, "LAN", "LAN", s)})",
+            InternetPath.Lan when s.IsFallback => $"Internet via LAN ({Reason(s.Adapters.Phone, "phone", "Phone", s)})",
             InternetPath.Phone => "Internet via PHONE",
             _ => "Internet via LAN",
         };
     }
 
-    static string Reason(AdapterInfo? preferred, string name, bool healing) =>
-        preferred is null ? $"{name} offline" : healing ? $"{name} has no internet" : $"{name} not routing";
+    static string Reason(AdapterInfo? preferred, string name, string button, NetworkStatus s) =>
+        preferred is null ? $"{name} offline"
+        : s.IsHealSticky ? $"{name} keeps losing internet — click {button} to retry"
+        : s.IsHealing ? $"{name} has no internet"
+        : $"{name} not routing";
 
     static string? NoteText(NetworkStatus s) =>
         s.Ipv6Path != InternetPath.None && s.ActivePath != InternetPath.None && s.Ipv6Path != s.ActivePath
