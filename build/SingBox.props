@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <SingBoxVersion>1.14.2</SingBoxVersion>
+    <SingBoxSha256>C2D8BFFF918755808781DFDEEB8581B6C91EB3A243D9A7B55483CFC0C0684D32</SingBoxSha256>
+    <SingBoxZip>sing-box-$(SingBoxVersion)-windows-amd64.zip</SingBoxZip>
+    <SingBoxCache>$(MSBuildThisFileDirectory)..\.cache\sing-box\$(SingBoxVersion)\</SingBoxCache>
+  </PropertyGroup>
+</Project>

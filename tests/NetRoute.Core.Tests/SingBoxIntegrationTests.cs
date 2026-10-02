@@ -27,6 +27,10 @@ public partial class SingBoxIntegrationTests
     {
         Assert.True(File.Exists(SingBoxExe), $"missing {SingBoxExe}");
         Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "sing-box", "LICENSE")));
+        var copying = Path.Combine(AppContext.BaseDirectory, "sing-box", "COPYING");
+        Assert.True(File.Exists(copying), $"missing {copying}");
+        Assert.StartsWith("GNU GENERAL PUBLIC LICENSE", File.ReadAllText(copying).TrimStart());
+        Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "THIRD-PARTY-NOTICES.md")));
 
         var (exit, output) = RunSingBox("version");
 

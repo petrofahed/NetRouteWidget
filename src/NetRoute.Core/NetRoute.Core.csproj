@@ -14,4 +14,7 @@
     <None Include="rules\builtin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The only project that downloads sing-box; the App and the tests reference Core, so it is fetched once. -->
+  <Import Project="..\..\build\SingBox.Fetch.targets" />
+
 </Project>

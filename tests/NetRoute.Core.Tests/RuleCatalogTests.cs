@@ -33,6 +33,16 @@ public class RuleCatalogTests
         Assert.Throws<InvalidDataException>(() => RuleCatalog.Parse(json));
     }
 
+    [Theory]
+    [InlineData("""{ "version": 1 }""")]
+    [InlineData("""{ "groups": [ { "id": "g", "name": "G", "items": [ { "name": "no id" } ] } ] }""")]
+    [InlineData("""{ "groups": "not an array" }""")]
+    [InlineData("not json")]
+    public void Malformed_catalogs_throw_InvalidDataException(string json)
+    {
+        Assert.Throws<InvalidDataException>(() => RuleCatalog.Parse(json));
+    }
+
     [Fact]
     public void Shipped_catalog_has_the_spec_items_all_on_by_default()
     {
