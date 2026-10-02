@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Sockets;
+
 namespace NetRoute.Core.Tests;
 
 sealed class FakeInterfaceMetrics : IInterfaceMetrics
@@ -24,4 +27,29 @@ sealed class FakeInterfaceMetrics : IInterfaceMetrics
         if (IgnoreSet.Contains((ifIndex, family))) return;
         State[(ifIndex, family)] = metric is { } m ? new(false, m) : new(true, 25);
     }
+}
+
+sealed class FakeAdapterSource : IAdapterSource
+{
+    public List<AdapterInfo> Adapters { get; } = new();
+    public Exception? Throw { get; set; }
+
+    public IReadOnlyList<AdapterInfo> GetAdapters() => Throw is { } ex ? throw ex : Adapters.ToList();
+}
+
+sealed class FakeRouteQuery : IRouteQuery
+{
+    public int? BestV4 { get; set; }
+    public int? BestV6 { get; set; }
+
+    public int? GetBestInterfaceIndex(IPAddress destination) =>
+        destination.AddressFamily == AddressFamily.InterNetworkV6 ? BestV6 : BestV4;
+}
+
+sealed class FakeLatencyProbe : ILatencyProbe
+{
+    public Dictionary<string, int?> BySource { get; } = new();
+
+    public Task<int?> MeasureAsync(IPAddress source, CancellationToken ct) =>
+        Task.FromResult(BySource.TryGetValue(source.ToString(), out var ms) ? ms : null);
 }
