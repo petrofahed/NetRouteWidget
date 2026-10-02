@@ -1,7 +1,7 @@
 # NetRoute Widget v3: Usage & routing page — Design
 
 **Date:** 2026-10-02
-**Status:** Draft for the user's review. Not built yet.
+**Status:** Design agreed in chat (two tabs: Usage and Config; usage + assignment on one page). Accuracy rules added after a live measurement. Build plan next.
 **Builds on:** `2026-10-02-netroute-v2-smart-routing-design.md` (Smart routing, sing-box, the management window). Implementation starts after v2's live verification and its fix rounds.
 
 ## Goal
@@ -51,7 +51,7 @@ Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Sma
   2. otherwise, if its host matches a domain rule (YouTube, Facebook, Windows Update…), the row is that rule's item;
   3. otherwise the row is the application (its file name, e.g. `chrome`).
   - So YouTube traffic from Chrome counts under **YouTube**; other Chrome traffic under **Chrome**.
-  - A connection with no known application and no matching host goes to a row named **"Other"**.
+  - A connection with no known application and no matching host goes to a row named **"Other"**. Traffic of connections that were missed between polls is shown in a separate row, **"Unattributed (short connections)"** (see Data).
 - **Application names:** the file name without `.exe`, except where a built-in item lists that file (OneDrive.exe → "OneDrive", steam.exe → "Steam").
 - **Goes via** is the assignment, a drop-down with **Phone** and **LAN**:
   - built-in item row: LAN = the item is switched on, Phone = switched off (the same switch as in the Config tab);
@@ -84,12 +84,24 @@ Both tabs update in place, without rebuilding on every refresh. Both follow the 
 ### What is counted
 
 - Every connection that passes through the sing-box TUN, with its application, host and exit (`chains[0]` is `phone` or `lan`) and its upload/download byte counters from the Clash API.
-- **Not counted:** traffic to the home network (excluded from the TUN), traffic while sing-box is not running, and the bytes of connections that opened and closed between two polls. The page labels the numbers **approximate**.
+- **Not counted:** traffic to the home network (excluded from the TUN) and traffic while sing-box is not running.
 
-### How
+### Why a plain connection poll is not enough (measured on the target machine)
 
-- The existing Smart routing poll runs every **3 s** (instead of 5/10 s) while sing-box is running. Byte **deltas** since the previous poll are added to the row's counter for the current local day and the connection's exit. The first time a connection is seen, its current totals count (it is live traffic that began before the poll).
-- **Now** is computed from the same deltas over the last poll interval. A row counts as active when it moved at least 1 KB/s.
+sing-box's Clash API lists only the connections that are **open right now**; it keeps no list of closed ones (verified on 1.14.2: `/connections` has no closed list, and `connections?closed=true` and similar endpoints do nothing). The v2 counter polled every 5-10 s and counted per-connection byte deltas. A controlled test downloaded **5.4 MB** from youtube.com in six short requests through the widget, and the counter recorded **0.5 MB (10 %)**. Connections that open and close between two polls are missed, and only the bytes seen by a poll are counted.
+
+### How (accurate counting)
+
+1. **Poll every 1 s** while sing-box is running (a dedicated timer, independent of the 5-10 s v1 refresh). Per-connection byte deltas are added to the row for the current local day and the connection's exit. Long transfers (video, downloads) are caught almost fully; the first sighting of a connection counts its current totals.
+2. **Reconcile against exact totals every poll.** The Clash API's `downloadTotal` and `uploadTotal` include closed connections. For each poll:
+   - `unseen = totalDelta - sum(per-connection deltas seen)` is the traffic of connections that were missed.
+   - The **phone** share is taken from Windows' own byte counters for the phone adapter (exact, per exit): `unseenPhone = max(0, phoneAdapterDelta - attributedPhoneDelta)`; the rest of `unseen` is `unseenLan`. Protocol framing makes the adapter counters a few percent larger than sing-box's payload counts, and that difference lands in the same row.
+   - Unseen bytes go to a visible row **"Unattributed (short connections)"** with its own Phone and LAN values, so the column totals are correct instead of silently low. They are never assigned to a guessed application.
+3. **Exact footer.** The page also shows **"Phone adapter total today (exact, from Windows)"**, so the user can compare it with the per-application sum.
+4. **Kept off 4G** (card row and page) uses the same data: LAN bytes of rows assigned to the LAN while the default exit was the phone, plus the LAN part of the unattributed bytes that arrived while the phone was the default exit. It is labelled "at least" only when sing-box was restarted or unreachable during the period.
+5. **Now** (the live rate) is computed from the 1 s deltas.
+
+The remaining limitation: an application's own short connections that were missed are counted under "Unattributed", not under the application. The page says so, and the totals stay right.
 
 ### Storage
 
@@ -106,6 +118,8 @@ Both tabs update in place, without rebuilding on every refresh. Both follow the 
 
 - **`UsageKeyResolver`**: `Resolve(SingBoxConnection, RuleSet) → (key, display name)`, with the three attribution rules above.
 - **`UsageCounter`**: per-day, per-key, per-exit up/down totals. `Update(connections, rules, now)` computes deltas per connection id, rolls the day over, and records the **live rate** per key and exit. Not thread-safe: called only under the controller's gate, like `DataSavedCounter`. `Snapshot()` returns an immutable copy.
+- **`UsageReconciler`**: given the Clash API totals, the per-connection deltas seen, and the phone adapter's byte-counter delta, returns the unseen Phone and LAN bytes for the poll (pure, with tests for clamping, framing overhead, counter resets and a restarted sing-box).
+- **`IAdapterCounters`** (Windows implementation reads `NetworkInterface` statistics for the phone adapter by index; a fake in tests).
 - **`UsageStore`**: load/save/prune of `usage.json` (atomic, invariant culture, corrupt/locked handling).
 - **`UsageReport`**: `Build(snapshot, today, rangeDays, rules, settings, sort) → rows + totals`. It merges the assignment state and display names, and sorts.
 - **`SmartRoutingController`**: gains the faster poll, owns the `UsageCounter`, and exposes `UsageSnapshot GetUsage()` (copy, taken under the gate). No new threads.
@@ -128,10 +142,12 @@ Both tabs update in place, without rebuilding on every refresh. Both follow the 
 - Unit tests:
   - `UsageKeyResolver`: all three attribution rules, process-wins-over-domain, the "Other" row.
   - `UsageCounter`: deltas, first sighting, negative deltas, a reappearing connection id, day rollover, exit attribution, live rate.
+  - `UsageReconciler`: no missed traffic, all traffic missed, adapter counter smaller than the attributed total, counter wrap or reset, sing-box restarted (totals drop), phone adapter absent.
   - `UsageStore`: round trip, culture safety (ar-SA), corrupt and locked files, retention, the 500-row cap.
   - `UsageReport`: ranges (today, 3, 7, 15, 30), sorting, totals, assignment state per row type.
   - `UsageAssignment`: every row type, both directions.
-- Manual checklist with the user: play YouTube through the LAN and watch the **LAN** column and **Now**; switch Chrome to LAN and watch it move; unplug the LAN; check ranges after two days; restart the widget and see the history survive.
+- Accuracy check on the real machine (scripted, read-only): download a known amount (for example 6 x youtube.com, about 5 MB) through the widget and require the page's YouTube + Unattributed rows to add up to within 10 % of the bytes downloaded; compare the phone column with Windows' phone adapter counter over an hour.
+  - Manual checklist with the user: play YouTube through the LAN and watch the **LAN** column and **Now**; switch Chrome to LAN and watch it move; unplug the LAN; check ranges after two days; restart the widget and see the history survive.
 
 ## Out of scope
 
