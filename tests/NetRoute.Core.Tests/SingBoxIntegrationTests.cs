@@ -54,4 +54,54 @@ public partial class SingBoxIntegrationTests
         }
         finally { File.Delete(path); }
     }
+
+    [Fact]
+    public async Task Host_api_and_parser_work_end_to_end_through_a_local_proxy()
+    {
+        var proxyPort = NetRoute.Core.Windows.FreePort.Next();
+        var apiPort = NetRoute.Core.Windows.FreePort.Next();
+        var config = $$"""
+            { "log": { "level": "debug", "timestamp": true },
+              "inbounds": [ { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": {{proxyPort}} } ],
+              "outbounds": [
+                { "type": "direct", "tag": "phone" },
+                { "type": "direct", "tag": "lan", "bind_interface": "NoSuchAdapter" },
+                { "type": "selector", "tag": "lan-only", "outbounds": ["lan", "phone"], "default": "lan" },
+                { "type": "selector", "tag": "default", "outbounds": ["phone", "lan"], "default": "phone" } ],
+              "route": { "rules": [ { "action": "sniff" }, { "domain_suffix": ["example.com"], "outbound": "lan-only" } ], "final": "default" },
+              "experimental": { "clash_api": { "external_controller": "127.0.0.1:{{apiPort}}", "secret": "itest" } } }
+            """;
+        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe, Path.Combine(Path.GetTempPath(), $"netroute-itest-{Guid.NewGuid():N}.json"));
+        var events = new System.Collections.Concurrent.ConcurrentQueue<SingBoxLogEvent>();
+        var exits = 0;
+        host.LineReceived += l => { if (SingBoxLogParser.Parse(l) is { } e) events.Enqueue(e); };
+        host.Exited += _ => Interlocked.Increment(ref exits);
+        using var api = new NetRoute.Core.Windows.SingBoxApi(apiPort, "itest");
+
+        await host.StartAsync(config);
+        try
+        {
+            Assert.True(host.IsRunning);
+            Assert.True(SpinWait.SpinUntil(() => api.GetConnectionsAsync().Result is not null, TimeSpan.FromSeconds(10)), "API never came up");
+            using var client = new HttpClient(new HttpClientHandler { Proxy = new System.Net.WebProxy($"http://127.0.0.1:{proxyPort}"), UseProxy = true })
+                { Timeout = TimeSpan.FromSeconds(15) };
+
+            await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("https://example.com/")); // lan-only -> missing adapter
+            Assert.True(SpinWait.SpinUntil(() => events.OfType<DialFailed>().Any(), TimeSpan.FromSeconds(10)));
+            var matched = events.OfType<RuleMatched>().First(m => m.Outbound == "lan-only");
+            Assert.Equal(1, matched.RuleIndex);
+            Assert.Contains(events.OfType<DialFailed>(), f => f.ConnectionId == matched.ConnectionId && f.Outbound == "lan-only");
+
+            Assert.True(await api.SelectAsync("lan-only", "phone"));
+            using var ok = await client.GetAsync("https://example.com/"); // now via the working direct outbound
+            Assert.True(ok.IsSuccessStatusCode);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+
+        Assert.False(host.IsRunning);
+        Assert.Equal(1, exits); // raised before StopAsync returned
+    }
 }
