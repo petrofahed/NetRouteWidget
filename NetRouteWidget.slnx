@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/NetRoute.App/NetRoute.App.csproj" />
     <Project Path="src/NetRoute.Core/NetRoute.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
