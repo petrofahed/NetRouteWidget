@@ -8,9 +8,18 @@ public sealed class WindowsInterfaceMetrics : IInterfaceMetrics
     public InterfaceMetricState? Get(int ifIndex, IpFamily family)
     {
         var row = Read(ifIndex, family, out var rc);
-        if (rc == IpHelperNative.ERROR_NOT_FOUND) return null;
+        // Windows reports a vanished interface (e.g. phone unplugged mid-refresh) as FILE_NOT_FOUND.
+        if (rc is IpHelperNative.ERROR_NOT_FOUND or IpHelperNative.ERROR_FILE_NOT_FOUND) return null;
         if (rc != IpHelperNative.NO_ERROR) throw new Win32Exception(rc);
         return new InterfaceMetricState(row.UseAutomaticMetric != 0, row.Metric);
+    }
+
+    /// Full native row, read-only. Lets tests compare every field against Get-NetIPInterface.
+    internal static IpHelperNative.MIB_IPINTERFACE_ROW ReadRow(int ifIndex, IpFamily family)
+    {
+        var row = Read(ifIndex, family, out var rc);
+        if (rc != IpHelperNative.NO_ERROR) throw new Win32Exception(rc);
+        return row;
     }
 
     public void Set(int ifIndex, IpFamily family, uint? metric)

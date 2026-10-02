@@ -10,6 +10,7 @@ internal static class IpHelperNative
     public const ushort AF_INET = 2;
     public const ushort AF_INET6 = 23;
     public const int NO_ERROR = 0;
+    public const int ERROR_FILE_NOT_FOUND = 2;
     public const int ERROR_NOT_FOUND = 1168;
 
     [StructLayout(LayoutKind.Sequential)]
