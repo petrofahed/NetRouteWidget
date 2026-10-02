@@ -6,6 +6,7 @@ sealed class FakeSingBoxHost : ISingBoxHost
     public List<string> Starts { get; } = new();
     public int Stops { get; private set; }
     public Exception? StartThrows { get; set; }
+    public Exception? StopThrows { get; set; }
     public event Action<string>? LineReceived;
     public event Action<int>? Exited;
 
@@ -20,6 +21,7 @@ sealed class FakeSingBoxHost : ISingBoxHost
     public Task StopAsync()
     {
         Stops++;
+        if (StopThrows is { } ex) throw ex;
         IsRunning = false;
         Exited?.Invoke(0); // contract: raised before StopAsync completes
         return Task.CompletedTask;
@@ -31,8 +33,12 @@ sealed class FakeSingBoxHost : ISingBoxHost
     public void RaiseLine(string line) => LineReceived?.Invoke(line);
 }
 
-sealed class FakeSingBoxApi : ISingBoxApi
+sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
 {
+    public bool ConnectionsUnreachable { get; set; }
+    public int Disposals { get; private set; }
+    public void Dispose() => Disposals++;
+
     public List<(string Group, string Outbound)> Selects { get; } = new();
     public List<SingBoxConnection> Connections { get; } = new();
 
@@ -43,5 +49,5 @@ sealed class FakeSingBoxApi : ISingBoxApi
     }
 
     public Task<IReadOnlyList<SingBoxConnection>?> GetConnectionsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<SingBoxConnection>?>(Connections.ToList());
+        Task.FromResult<IReadOnlyList<SingBoxConnection>?>(ConnectionsUnreachable ? null : Connections.ToList());
 }

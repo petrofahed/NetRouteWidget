@@ -13,14 +13,19 @@ public sealed record SmartRoutingStatus(
 /// Owns the sing-box lifecycle for Smart routing: when it runs, with which config, which exit the selectors use,
 /// crash/restart policy, LAN-outage "waiting" detection and the kept-off-4G counter.
 /// All state is guarded by one gate; host events arrive on other threads and queue behind it.
+/// LAN-only traffic never falls back to the phone on its own: when the LAN adapter vanishes sing-box keeps running
+/// (bound to the last-known LAN name) so those connections wait; only UseLanRulesOnPhoneAsync moves them.
 public sealed class SmartRoutingController
 {
     public const int CrashLimit = 3;
     public static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan WaitWindow = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan LanOfflinePopupDelay = TimeSpan.FromSeconds(10);
     public const int LanHealthyChecksToRevert = 3;
+    public const int ApiFailureLimit = 3;
 
     const string FaultMessage = "Smart routing stopped — sing-box keeps crashing (see log)";
+    const string NeedsBothMessage = "Needs both phone and LAN connected";
 
     readonly IReadOnlyList<RuleItem> _catalog;
     readonly ISingBoxHost _host;
@@ -39,7 +44,10 @@ public sealed class SmartRoutingController
     NetworkStatus? _net;
     AppSettings? _settings;
     string? _runningKey;
-    bool _stopping;
+    string? _lastLanName;
+    string? _lastLanDns;
+    volatile bool _stopping;
+    bool _shutdown;
     bool _faulted;
     bool _lastEnabled;
     RouteExit _wantedExit = RouteExit.Phone;
@@ -47,7 +55,9 @@ public sealed class SmartRoutingController
     bool _lanRulesOnPhone;
     bool _appliedLanRulesOnPhone;
     bool _lanOnline = true;
+    DateTimeOffset? _lanOfflineSince;
     int _lanHealthyCount;
+    int _apiFailures;
     bool _popupRaised;
     bool _keepWaiting;
 
@@ -74,33 +84,53 @@ public sealed class SmartRoutingController
 
     public async Task ApplyAsync(NetworkStatus net, AppSettings settings, CancellationToken ct = default)
     {
-        await _gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _net = net;
-            _settings = settings;
-            var smart = settings.SmartRouting;
-            if (smart.Enabled && !_lastEnabled)
+            if (_shutdown) return;
+            try
             {
-                _faulted = false; // switching it on again clears a fault
-                _crashes.Clear();
-            }
-            _lastEnabled = smart.Enabled;
-            _rules = RuleSet.Build(_catalog, smart);
-            UpdateLanHealth(net);
+                _net = net;
+                _settings = settings;
+                if (net.Adapters.Lan is { } lan)
+                {
+                    _lastLanName = lan.Name;
+                    _lastLanDns = lan.DnsServer;
+                }
 
-            var (state, _) = Desired();
-            if (state != SmartState.Running)
-            {
-                await StopIfRunningAsync();
+                var smart = settings.SmartRouting;
+                if (smart.Enabled && !_lastEnabled)
+                {
+                    // Switching it on again clears a fault and any leftover outage choices.
+                    _faulted = false;
+                    _crashes.Clear();
+                    _lanRulesOnPhone = false;
+                    _keepWaiting = false;
+                    _popupRaised = false;
+                }
+                _lastEnabled = smart.Enabled;
+                _rules = RuleSet.Build(_catalog, smart);
+                var reverted = UpdateLanHealth(net);
+
+                var (state, _) = Desired();
+                if (state != SmartState.Running)
+                {
+                    await StopIfRunningAsync().ConfigureAwait(false);
+                    Publish();
+                    return;
+                }
+
+                _wantedExit = net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone;
+                if (!_host.IsRunning || _runningKey != KeyFor(net)) await StartAsync(ct).ConfigureAwait(false);
+                else await SyncSelectorsAsync(ct).ConfigureAwait(false);
+                if (reverted) Raise(Notify, "LAN back — LAN-only traffic is back on the LAN");
                 Publish();
-                return;
             }
-
-            _wantedExit = net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone;
-            if (!_host.IsRunning || _runningKey != KeyFor(net)) await StartAsync(ct);
-            else await SyncSelectorsAsync(ct);
-            Publish();
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log($"Smart routing: apply failed: {ex.Message}");
+                SafePublish();
+            }
         }
         finally
         {
@@ -110,14 +140,21 @@ public sealed class SmartRoutingController
 
     public async Task UseLanRulesOnPhoneAsync()
     {
-        await _gate.WaitAsync();
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Only meaningful inside a real outage; a stray click must not move LAN-only traffic to the phone.
+            if (_shutdown || Desired().State != SmartState.Running || _lanOnline) return;
             _lanRulesOnPhone = true;
             _popupRaised = true;
             _log("Smart routing: LAN-only traffic uses the phone until the LAN is back");
-            await SyncSelectorsAsync(default);
+            await SyncSelectorsAsync(default).ConfigureAwait(false);
             Publish();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log($"Smart routing: could not switch LAN-only traffic to the phone: {ex.Message}");
+            SafePublish();
         }
         finally
         {
@@ -125,17 +162,48 @@ public sealed class SmartRoutingController
         }
     }
 
-    public void KeepWaiting() => _keepWaiting = true;
+    public async Task KeepWaitingAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_shutdown || Desired().State != SmartState.Running || _lanOnline) return;
+            _keepWaiting = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public async Task PollStatsAsync(CancellationToken ct = default)
     {
-        await _gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_api is null || !_host.IsRunning) return;
-            if (await _api.GetConnectionsAsync(ct) is not { } connections) return;
-            _counter.Update(connections, _rules, _appliedExit == RouteExit.Phone, Today());
-            Publish();
+            if (_shutdown || _api is null || !_host.IsRunning) return;
+            try
+            {
+                if (await _api.GetConnectionsAsync(ct).ConfigureAwait(false) is not { } connections)
+                {
+                    if (++_apiFailures < ApiFailureLimit) return;
+                    // A hung sing-box keeps the TUN capturing traffic, which would kill the internet: treat it as a crash.
+                    _log("Smart routing: control API unresponsive, restarting sing-box");
+                    await StopIfRunningAsync().ConfigureAwait(false);
+                    RecordCrash("control API unresponsive");
+                    if (Desired().State == SmartState.Running) await StartAsync(default).ConfigureAwait(false);
+                    Publish();
+                    return;
+                }
+                _apiFailures = 0;
+                _counter.Update(connections, _rules, _appliedExit == RouteExit.Phone, Today());
+                Publish();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log($"Smart routing: stats poll failed: {ex.Message}");
+                SafePublish();
+            }
         }
         finally
         {
@@ -143,12 +211,28 @@ public sealed class SmartRoutingController
         }
     }
 
+    /// Stops sing-box; a later ApplyAsync starts it again.
     public async Task StopAsync()
     {
-        await _gate.WaitAsync();
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopIfRunningAsync();
+            await StopIfRunningAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// Final stop for app exit: after this nothing restarts sing-box, even if a queued Apply or exit event arrives.
+    public async Task ShutdownAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _shutdown = true;
+            await StopIfRunningAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -158,13 +242,20 @@ public sealed class SmartRoutingController
 
     internal async Task ProcessLineAsync(string line)
     {
-        await _gate.WaitAsync();
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            _recentLines.Enqueue(line);
-            if (_recentLines.Count > 20) _recentLines.Dequeue();
-            if (_tracker is null || SingBoxLogParser.Parse(line) is not { } ev) return;
-            if (_tracker.Observe(ev) is not null) Publish();
+            try
+            {
+                _recentLines.Enqueue(line);
+                if (_recentLines.Count > 20) _recentLines.Dequeue();
+                if (_tracker is null || SingBoxLogParser.Parse(line) is not { } ev) return;
+                if (_tracker.Observe(ev) is not null) Publish();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log($"Smart routing: log line handling failed: {ex.Message}");
+            }
         }
         finally
         {
@@ -174,17 +265,25 @@ public sealed class SmartRoutingController
 
     internal async Task HandleExitAsync(int code)
     {
-        if (_stopping) return;
-        await _gate.WaitAsync();
+        if (_stopping || _shutdown) return;
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_stopping || _host.IsRunning) return; // a stop we asked for, or already restarted
-            _runningKey = null;
-            _api = null;
-            var lastError = _recentLines.LastOrDefault(l => l.Contains("FATAL") || l.Contains("ERROR"));
-            RecordCrash($"sing-box exited unexpectedly (code {code}){(lastError is null ? "" : ": " + lastError)}");
-            if (Desired().State == SmartState.Running) await StartAsync(default);
-            Publish();
+            if (_stopping || _shutdown || _host.IsRunning) return; // a stop we asked for, or already restarted
+            try
+            {
+                _runningKey = null;
+                DropApi();
+                var lastError = _recentLines.LastOrDefault(l => l.Contains("FATAL") || l.Contains("ERROR"));
+                RecordCrash($"sing-box exited unexpectedly (code {code}){(lastError is null ? "" : ": " + lastError)}");
+                if (Desired().State == SmartState.Running) await StartAsync(default).ConfigureAwait(false);
+                Publish();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log($"Smart routing: restart after exit failed: {ex.Message}");
+                SafePublish();
+            }
         }
         finally
         {
@@ -198,28 +297,35 @@ public sealed class SmartRoutingController
         if (_faulted) return (SmartState.Faulted, FaultMessage);
         if (!net.CanModify) return (SmartState.Unavailable, "Needs administrator rights");
         if (net.Mode == RoutingMode.Lan) return (SmartState.Unavailable, "Not needed in LAN mode");
-        if (net.Adapters.Phone is null || net.Adapters.Lan is null) return (SmartState.Unavailable, "Needs both phone and LAN connected");
+        // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT: LAN-only
+        // traffic has to wait for it, so sing-box keeps running against the last-known LAN adapter.
+        if (net.Adapters.Phone is null) return (SmartState.Unavailable, NeedsBothMessage);
+        if (net.Adapters.Lan is null && _lastLanName is null) return (SmartState.Unavailable, NeedsBothMessage);
         return (SmartState.Running, null);
     }
 
+    string? LanName(NetworkStatus net) => net.Adapters.Lan?.Name ?? _lastLanName;
+    string? LanDns(NetworkStatus net) => net.Adapters.Lan?.DnsServer ?? _lastLanDns;
+
     string KeyFor(NetworkStatus net) =>
-        $"{net.Adapters.Phone!.Name}|{net.Adapters.Lan!.Name}|{net.Adapters.Lan.DnsServer}|{_rules.Fingerprint}";
+        $"{net.Adapters.Phone!.Name}|{LanName(net)}|{LanDns(net)}|{_rules.Fingerprint}";
 
     async Task StartAsync(CancellationToken ct)
     {
-        await StopIfRunningAsync();
+        await StopIfRunningAsync().ConfigureAwait(false);
+        _apiFailures = 0;
         var net = _net!;
-        var port = _freePort();
-        var secret = Guid.NewGuid().ToString("N");
-        var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
-            _rules, net.Adapters.Phone!.Name, net.Adapters.Lan!.Name, net.Adapters.Lan.DnsServer,
-            _wantedExit, _lanRulesOnPhone, port, secret));
-        _tracker = new LanWaitTracker(config.RuleIndexToEntryId, _time);
-        _api = _createApi(port, secret);
-        _log($"Smart routing: starting sing-box ({_rules.Entries.Count} rules, exit {_wantedExit})");
         try
         {
-            await _host.StartAsync(config.Json, ct);
+            var port = _freePort();
+            var secret = Guid.NewGuid().ToString("N");
+            var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
+                _rules, net.Adapters.Phone!.Name, LanName(net)!, LanDns(net),
+                _wantedExit, _lanRulesOnPhone, port, secret));
+            _tracker = new LanWaitTracker(config.RuleIndexToEntryId, _time);
+            _api = _createApi(port, secret);
+            _log($"Smart routing: starting sing-box ({_rules.Entries.Count} rules, exit {_wantedExit})");
+            await _host.StartAsync(config.Json, ct).ConfigureAwait(false);
             _runningKey = KeyFor(net);
             _appliedExit = _wantedExit;
             _appliedLanRulesOnPhone = _lanRulesOnPhone;
@@ -227,7 +333,7 @@ public sealed class SmartRoutingController
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _runningKey = null;
-            _api = null;
+            DropApi();
             RecordCrash($"sing-box could not start: {ex.Message}");
         }
     }
@@ -237,34 +343,53 @@ public sealed class SmartRoutingController
         if (!_host.IsRunning)
         {
             _runningKey = null;
+            DropApi();
             return;
         }
         _stopping = true;
         try
         {
-            await _host.StopAsync();
+            await _host.StopAsync().ConfigureAwait(false);
+            _log("Smart routing: sing-box stopped");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log($"Smart routing: stopping sing-box failed: {ex.Message}");
         }
         finally
         {
             _stopping = false;
         }
         _runningKey = null;
+        DropApi();
+    }
+
+    void DropApi()
+    {
+        var api = _api;
         _api = null;
-        _log("Smart routing: sing-box stopped");
+        try
+        {
+            (api as IDisposable)?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _log($"Smart routing: disposing API client failed: {ex.Message}");
+        }
     }
 
     async Task SyncSelectorsAsync(CancellationToken ct)
     {
         if (_api is null) return;
         if (_appliedExit != _wantedExit
-            && await _api.SelectAsync(SingBoxConfigBuilder.DefaultTag, Tag(_wantedExit), ct))
+            && await _api.SelectAsync(SingBoxConfigBuilder.DefaultTag, Tag(_wantedExit), ct).ConfigureAwait(false))
         {
             _appliedExit = _wantedExit;
             _log($"Smart routing: default exit is now {_wantedExit}");
         }
         if (_appliedLanRulesOnPhone != _lanRulesOnPhone
             && await _api.SelectAsync(SingBoxConfigBuilder.LanOnlyTag,
-                   _lanRulesOnPhone ? SingBoxConfigBuilder.PhoneTag : SingBoxConfigBuilder.LanTag, ct))
+                   _lanRulesOnPhone ? SingBoxConfigBuilder.PhoneTag : SingBoxConfigBuilder.LanTag, ct).ConfigureAwait(false))
         {
             _appliedLanRulesOnPhone = _lanRulesOnPhone;
         }
@@ -272,25 +397,32 @@ public sealed class SmartRoutingController
 
     static string Tag(RouteExit exit) => exit == RouteExit.Lan ? SingBoxConfigBuilder.LanTag : SingBoxConfigBuilder.PhoneTag;
 
-    void UpdateLanHealth(NetworkStatus net)
+    /// Returns true when this probe ended a "use phone until LAN is back" period.
+    bool UpdateLanHealth(NetworkStatus net)
     {
         var healthy = net.Adapters.Lan is not null && net.LanLatencyMs is not null;
         if (!healthy)
         {
+            if (_lanOnline)
+            {
+                // Only failures seen from now on belong to this outage; earlier ones are stale.
+                _tracker?.Clear();
+                _lanOfflineSince = _time.GetUtcNow();
+            }
             _lanHealthyCount = 0;
             _lanOnline = false;
-            return;
+            return false;
         }
-        if (_lanOnline || ++_lanHealthyCount < LanHealthyChecksToRevert) return;
+        if (_lanOnline || ++_lanHealthyCount < LanHealthyChecksToRevert) return false;
 
         _lanOnline = true;
+        _lanOfflineSince = null;
         _popupRaised = false;
         _keepWaiting = false;
         _tracker?.Clear();
-        if (!_lanRulesOnPhone) return;
-        _lanRulesOnPhone = false;
-        Notify?.Invoke("LAN back — LAN-only traffic is back on the LAN");
-        _ = Task.CompletedTask; // selectors are synced by ApplyAsync right after this call
+        if (!_lanRulesOnPhone) return false;
+        _lanRulesOnPhone = false; // pushed to sing-box by SyncSelectorsAsync (or a restart) later in ApplyAsync
+        return true;
     }
 
     void RecordCrash(string message)
@@ -302,7 +434,7 @@ public sealed class SmartRoutingController
         if (_crashes.Count < CrashLimit || _faulted) return;
         _faulted = true;
         _log("Smart routing: " + FaultMessage);
-        Notify?.Invoke(FaultMessage);
+        Raise(Notify, FaultMessage);
     }
 
     void Publish()
@@ -316,11 +448,42 @@ public sealed class SmartRoutingController
 
         Status = new SmartRoutingStatus(state, message, _appliedExit, _lanRulesOnPhone, _lanOnline, waiting,
             _rules.Entries.Count, _counter.Snapshot);
-        StatusChanged?.Invoke(Status);
+        Raise(StatusChanged, Status);
 
         if (waiting.Count == 0 || _popupRaised || _keepWaiting) return;
+        // A flaky LAN must not spam popups: only a sustained outage asks the question.
+        if (_lanOfflineSince is not { } since || _time.GetUtcNow() - since < LanOfflinePopupDelay) return;
         _popupRaised = true;
-        WaitingDetected?.Invoke(waiting);
+        Raise(WaitingDetected, waiting);
+    }
+
+    void SafePublish()
+    {
+        try
+        {
+            Publish();
+        }
+        catch (Exception ex)
+        {
+            _log($"Smart routing: publishing status failed: {ex.Message}");
+        }
+    }
+
+    /// Subscribers run under the gate on whatever thread got here; one that throws must not break the state machine.
+    void Raise<T>(Action<T>? handler, T arg)
+    {
+        if (handler is null) return;
+        foreach (var d in handler.GetInvocationList().Cast<Action<T>>())
+        {
+            try
+            {
+                d(arg);
+            }
+            catch (Exception ex)
+            {
+                _log($"Smart routing: event subscriber failed: {ex.Message}");
+            }
+        }
     }
 
     DateOnly Today() => DateOnly.FromDateTime(_time.GetLocalNow().DateTime);
