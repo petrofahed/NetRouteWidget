@@ -19,7 +19,11 @@ public partial class SmartRoutingWindow : Window
     readonly List<Button> _addButtons = [];
     string? _structureKey;
 
-    public SmartRoutingWindow() => InitializeComponent();
+    public SmartRoutingWindow()
+    {
+        InitializeComponent();
+        Theme.Track(this);
+    }
 
     public event Action<bool>? MasterToggled;
     public event Action<string, bool>? ItemToggled;
@@ -116,11 +120,11 @@ public partial class SmartRoutingWindow : Window
         _controls[(string)groupToggle.Tag] = groupToggle;
         var header = new DockPanel();
         header.Children.Add(groupToggle);
-        var bytes = new TextBlock { Foreground = System.Windows.Media.Brushes.Gray, Margin = new Thickness(12, 0, 0, 0) };
+        var bytes = Secondary(new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0) });
         _groupBytes[group.Id] = bytes;
         DockPanel.SetDock(bytes, Dock.Right);
         header.Children.Add(bytes);
-        header.Children.Add(new TextBlock { Text = group.Name, FontWeight = FontWeights.SemiBold, Margin = new Thickness(6, 0, 0, 0) });
+        header.Children.Add(new TextBlock { Text = group.Name, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
 
         var items = new StackPanel { Margin = new Thickness(28, 4, 0, 4) };
         foreach (var item in group.Items)
@@ -128,7 +132,7 @@ public partial class SmartRoutingWindow : Window
             var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
             var toggle = new CheckBox { Content = item.Name, Tag = "i:" + item.Id };
             toggle.Click += (_, _) => ItemToggled?.Invoke(item.Id, toggle.IsChecked == true);
-            var itemBytes = new TextBlock { Foreground = System.Windows.Media.Brushes.Gray };
+            var itemBytes = Secondary(new TextBlock { VerticalAlignment = VerticalAlignment.Center });
             _itemBoxes[item.Id] = toggle;
             _itemBytes[item.Id] = itemBytes;
             _controls[(string)toggle.Tag] = toggle;
@@ -164,7 +168,7 @@ public partial class SmartRoutingWindow : Window
         panel.Children.Add(header);
 
         if (model.UserRules.Count == 0)
-            panel.Children.Add(new TextBlock { Text = "No rules yet — add an app or a website.", Foreground = System.Windows.Media.Brushes.Gray, Margin = new Thickness(28, 4, 0, 0) });
+            panel.Children.Add(Secondary(new TextBlock { Text = "No rules yet — add an app or a website.", Margin = new Thickness(28, 4, 0, 0) }));
 
         foreach (var rule in model.UserRules)
         {
@@ -172,7 +176,7 @@ public partial class SmartRoutingWindow : Window
             var row = new DockPanel { Margin = new Thickness(28, 2, 0, 2) };
             var remove = new Button { Content = "🗑", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Remove", Tag = "rm:" + id };
             remove.Click += (_, _) => UserRuleRemoved?.Invoke(rule.Rule);
-            var bytes = new TextBlock { Foreground = System.Windows.Media.Brushes.Gray, VerticalAlignment = VerticalAlignment.Center };
+            var bytes = Secondary(new TextBlock { VerticalAlignment = VerticalAlignment.Center });
             DockPanel.SetDock(remove, Dock.Right);
             DockPanel.SetDock(bytes, Dock.Right);
             row.Children.Add(remove);
@@ -191,6 +195,13 @@ public partial class SmartRoutingWindow : Window
             panel.Children.Add(row);
         }
         return panel;
+    }
+
+    /// Dimmed text that follows the theme (never a fixed colour).
+    static TextBlock Secondary(TextBlock text)
+    {
+        text.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+        return text;
     }
 
     void OnMaster(object sender, RoutedEventArgs e) => MasterToggled?.Invoke(MasterToggle.IsChecked == true);

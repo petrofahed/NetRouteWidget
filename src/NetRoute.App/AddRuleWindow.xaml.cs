@@ -13,6 +13,7 @@ public partial class AddRuleWindow : Window
     public AddRuleWindow(UserRuleType type)
     {
         InitializeComponent();
+        Theme.Track(this);
         _type = type;
         Loaded += (_, _) => Input.Focus();
         // An editable ComboBox's inner TextBox raises TextChanged, which bubbles up to the ComboBox.

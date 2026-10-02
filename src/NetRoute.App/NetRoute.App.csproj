@@ -9,6 +9,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>NetRouteWidget</AssemblyName>
     <RootNamespace>NetRoute.App</RootNamespace>
+    <!-- ThemeMode (Fluent theme per window) is experimental in .NET 10; used only on the management/dialog windows. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
