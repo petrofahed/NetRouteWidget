@@ -3701,6 +3701,7 @@ Confirm it contains `NetRouteWidget.exe`, `sing-box\sing-box.exe`, `sing-box\LIC
 14. **Hung sing-box:** end the sing-box process from Task Manager while the widget runs. Internet recovers within seconds (TUN removed, v1 routing), and the widget restarts sing-box.
 
 15. **Widget killed:** kill `NetRouteWidget.exe` in Task Manager while Smart routing runs. `sing-box.exe` disappears with it (job object), the `NetRoute` adapter vanishes, and internet keeps working over v1 routing. Also check after a normal Quit that `Get-NetAdapter -Name NetRoute` and `Get-NetRoute -InterfaceAlias NetRoute` show nothing.
+16. **Speed test with Smart routing ON (phone as default exit):** click ⚡ and check the sing-box debug log: no `speed.cloudflare.com` connection may appear (the probe's sockets are bound to the adapters' own addresses and must bypass the TUN). The phone and LAN numbers must also clearly differ. If the probe shows up in the log, the TUN diverted it: set `IP_UNICAST_IF` (interface index resolved from the source address) on the socket before `Connect`, in `HttpSpeedProbe`, or document the test as "measured with Smart routing off".
 
 - [ ] **Step 5: Commit, push and update the PR**
 
