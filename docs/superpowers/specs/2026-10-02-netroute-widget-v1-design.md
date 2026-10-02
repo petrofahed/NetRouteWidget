@@ -1,7 +1,7 @@
 # NetRoute Widget v1 — Design
 
 **Date:** 2026-10-02
-**Status:** Approved in brainstorming, pending written-spec review
+**Status:** Implemented (v1)
 
 ## Goal
 

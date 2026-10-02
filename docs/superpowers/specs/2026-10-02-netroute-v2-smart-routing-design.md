@@ -1,7 +1,7 @@
 # NetRoute Widget v2: Smart routing — Design
 
 **Date:** 2026-10-02
-**Status:** Approved in brainstorming; written spec pending user review
+**Status:** Approved (user: "start phase 2"); feasibility spike next
 **Builds on:** `2026-10-02-netroute-widget-v1-design.md` (v1 modes, auto-heal, break-glass)
 
 ## Goal
@@ -32,7 +32,8 @@ While the PC uses the **phone** for internet, keep data-hungry traffic **off 4G*
 - the "waiting" notification with its two actions;
 - the data-kept-off-4G counter;
 - sing-box lifecycle management;
-- break-glass support.
+- break-glass support;
+- an on-demand **speed test** button on the card (a 5 MB download through each adapter, showing both speeds; about 5 MB of mobile data per run).
 
 **Out of v2:**
 - the reverse direction ("send X via the phone while in LAN mode");
