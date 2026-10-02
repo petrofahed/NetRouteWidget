@@ -1,10 +1,12 @@
+using System.Text.RegularExpressions;
+
 namespace NetRoute.Core;
 
 public enum SmartState { Off, Unavailable, Starting, Running, Faulted }
 
 public sealed record SmartRoutingStatus(
     SmartState State, string? Message, RouteExit DefaultExit, bool LanRulesOnPhone, bool LanOnline,
-    IReadOnlyList<string> WaitingNames, int RuleCount, DailyStats Today)
+    IReadOnlyList<string> WaitingNames, int RuleCount, DailyStats Today, string? Detail = null)
 {
     public bool IsActive => State == SmartState.Running;
     public bool Waiting => WaitingNames.Count > 0;
@@ -18,6 +20,14 @@ public sealed record SmartRoutingStatus(
 public sealed class SmartRoutingController
 {
     public const int CrashLimit = 3;
+    /// "lan" outbound binding when no LAN adapter name is known at all (first run, LAN absent): sing-box starts fine with
+    /// a nonexistent bind_interface and every LAN-only dial just fails, which is the "wait" behaviour.
+    public const string LanPlaceholder = "NetRoute-LAN-not-connected";
+    const int DetailMaxLength = 120;
+    static readonly Regex AnsiCodes = new(@"\u001B\[[0-9;]*[A-Za-z]", RegexOptions.Compiled);
+    static readonly Regex TimestampPrefix = new(@"^\s*[+-]\d{4}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\.\d+)?\s+", RegexOptions.Compiled);
+    static readonly Regex ConnectionId = new(@"\[\d+\s[^\]]*\]\s*", RegexOptions.Compiled);
+    static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     public static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan WaitWindow = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan LanOfflinePopupDelay = TimeSpan.FromSeconds(10);
@@ -65,6 +75,7 @@ public sealed class SmartRoutingController
     bool _lanBackToastPending;
     bool _popupRaised;
     bool _keepWaiting;
+    string? _lastCrashDetail;
 
     public SmartRoutingController(
         IReadOnlyList<RuleItem> catalog, ISingBoxHost host, Func<int, string, ISingBoxApi> createApi,
@@ -102,6 +113,11 @@ public sealed class SmartRoutingController
                     _lastLanName = lan.Name;
                     _lastLanDns = lan.DnsServer ?? _lastLanDns; // a LAN with no DNS yet must not forget a known one
                 }
+                else if (_lastLanName is null)
+                {
+                    // Fresh process with the LAN absent (cable out at boot, router rebooting): use the saved name.
+                    _lastLanName = settings.SmartRouting.LastLanInterface;
+                }
 
                 var smart = settings.SmartRouting;
                 if (smart.Enabled && !_lastEnabled)
@@ -127,7 +143,7 @@ public sealed class SmartRoutingController
                     return;
                 }
 
-                _wantedExit = net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone;
+                _wantedExit = WantedExit(net);
                 if (!_host.IsRunning || _runningKey != KeyFor(net)) await StartAsync(ct).ConfigureAwait(false);
                 else await SyncSelectorsAsync(ct).ConfigureAwait(false);
                 // Only once the selector really moved back (a failed select is retried by the next Apply).
@@ -295,7 +311,8 @@ public sealed class SmartRoutingController
                 _runningKey = null;
                 DropApi();
                 var lastError = _recentLines.LastOrDefault(l => l.Contains("FATAL") || l.Contains("ERROR"));
-                RecordCrash($"sing-box exited unexpectedly (code {code}){(lastError is null ? "" : ": " + lastError)}");
+                RecordCrash($"sing-box exited unexpectedly (code {code}){(lastError is null ? "" : ": " + lastError)}",
+                    lastError ?? $"sing-box exited with code {code}");
                 if (Desired().State == SmartState.Running) await StartAsync(default).ConfigureAwait(false);
                 Publish();
             }
@@ -316,15 +333,23 @@ public sealed class SmartRoutingController
         if (_net is not { } net || _settings is not { } settings || !settings.SmartRouting.Enabled) return (SmartState.Off, null);
         if (_faulted) return (SmartState.Faulted, FaultMessage);
         if (!net.CanModify) return (SmartState.Unavailable, "Needs administrator rights");
-        if (net.Mode == RoutingMode.Lan) return (SmartState.Unavailable, "Not needed in LAN mode");
-        // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT: LAN-only
-        // traffic has to wait for it, so sing-box keeps running against the last-known LAN adapter.
+        if (net.Mode == RoutingMode.Auto) return (SmartState.Unavailable, "Paused in Auto mode"); // the widget steps aside
+        // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT, and neither
+        // does never having seen it: LAN-only traffic has to wait for it, so sing-box runs against the last-known
+        // (or saved, or placeholder) LAN adapter name. LAN mode keeps running too, so LAN-only items still wait there.
         if (net.Adapters.Phone is null) return (SmartState.Unavailable, NeedsBothMessage);
-        if (net.Adapters.Lan is null && _lastLanName is null) return (SmartState.Unavailable, NeedsBothMessage);
         return (SmartState.Running, null);
     }
 
-    string? LanName(NetworkStatus net) => net.Adapters.Lan?.Name ?? _lastLanName;
+    /// The exit for traffic no rule claims. v1 falls back to the phone whenever the LAN is unplugged, and in LAN mode
+    /// it heals onto the phone, so unmatched traffic follows; LAN-only items never do (they use their own selector).
+    static RouteExit WantedExit(NetworkStatus net) => net.Mode switch
+    {
+        RoutingMode.Lan => net.IsHealing || net.Adapters.Lan is null ? RouteExit.Phone : RouteExit.Lan,
+        _ => net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone,
+    };
+
+    string LanName(NetworkStatus net) => net.Adapters.Lan?.Name ?? _lastLanName ?? LanPlaceholder;
     string? LanDns(NetworkStatus net) => net.Adapters.Lan?.DnsServer ?? _lastLanDns;
 
     string KeyFor(NetworkStatus net) =>
@@ -347,7 +372,7 @@ public sealed class SmartRoutingController
             var port = _freePort();
             var secret = Guid.NewGuid().ToString("N");
             var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
-                _rules, net.Adapters.Phone!.Name, LanName(net)!, LanDns(net),
+                _rules, net.Adapters.Phone!.Name, LanName(net), LanDns(net),
                 _wantedExit, _lanRulesOnPhone, port, secret));
             _tracker = new LanWaitTracker(config.RuleIndexToEntryId, _time);
             _api = _createApi(port, secret);
@@ -362,7 +387,7 @@ public sealed class SmartRoutingController
         {
             _runningKey = null;
             DropApi();
-            RecordCrash($"sing-box could not start: {ex.Message}");
+            RecordCrash($"sing-box could not start: {ex.Message}", ex.Message);
         }
     }
 
@@ -455,8 +480,9 @@ public sealed class SmartRoutingController
         _lanBackToastPending = true;
     }
 
-    void RecordCrash(string message)
+    void RecordCrash(string message, string? detail = null)
     {
+        _lastCrashDetail = CleanDetail(detail ?? message);
         var now = _time.GetUtcNow();
         _crashes.Add(now);
         _crashes.RemoveAll(t => now - t > CrashWindow);
@@ -465,6 +491,16 @@ public sealed class SmartRoutingController
         _faulted = true;
         _log("Smart routing: " + FaultMessage);
         Raise(Notify, FaultMessage);
+    }
+
+    /// One short line for the card: no colour codes, no log timestamp or connection id, at most DetailMaxLength long.
+    static string CleanDetail(string raw)
+    {
+        var text = AnsiCodes.Replace(raw, "");
+        text = TimestampPrefix.Replace(text, "");
+        text = ConnectionId.Replace(text, "");
+        text = Whitespace.Replace(text, " ").Trim();
+        return text.Length <= DetailMaxLength ? text : text[..(DetailMaxLength - 1)] + "…";
     }
 
     void Publish()
@@ -479,7 +515,7 @@ public sealed class SmartRoutingController
             : [];
 
         Status = new SmartRoutingStatus(state, message, _appliedExit, _lanRulesOnPhone, _lanOnline, waiting,
-            _rules.Entries.Count, _counter.Snapshot);
+            _rules.Entries.Count, _counter.Snapshot, state == SmartState.Faulted ? _lastCrashDetail : null);
         Raise(StatusChanged, Status);
 
         if (waiting.Count == 0 || _popupRaised || _keepWaiting) return;

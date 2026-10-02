@@ -59,7 +59,7 @@ public class SmartRoutingControllerTests
     }
 
     [Theory]
-    [InlineData(RoutingMode.Lan, true, "Not needed in LAN mode")]
+    [InlineData(RoutingMode.Auto, true, "Paused in Auto mode")]
     [InlineData(RoutingMode.Phone, false, "Needs administrator rights")]
     public async Task Is_unavailable_and_stopped_when_not_applicable(RoutingMode mode, bool canModify, string message)
     {
@@ -84,16 +84,67 @@ public class SmartRoutingControllerTests
         Assert.Equal((SmartState.Unavailable, "Needs both phone and LAN connected"), (c.Status.State, c.Status.Message));
     }
 
+    // ---- Final pass C1: start with the LAN absent ----
+
+    static AppSettings OnWithSavedLan(string? lanName) =>
+        new() { SmartRouting = new SmartRoutingSettings { Enabled = true, LastLanInterface = lanName } };
+
     [Fact]
-    public async Task A_lan_that_was_never_seen_is_unavailable()
+    public async Task Starts_with_the_lan_absent_using_the_saved_lan_name()
+    {
+        var c = Create();
+
+        await c.ApplyAsync(Net(lan: false), OnWithSavedLan("Ethernet 9"));
+
+        var json = Assert.Single(_host.Starts);
+        Assert.Contains("\"bind_interface\": \"Ethernet 9\"", json);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.False(c.Status.LanOnline);
+    }
+
+    [Fact]
+    public async Task Starts_with_a_placeholder_when_no_lan_name_is_known_and_lan_only_traffic_waits()
     {
         var c = Create();
 
         await c.ApplyAsync(Net(lan: false), On());
 
-        Assert.Empty(_host.Starts);
-        Assert.Equal((SmartState.Unavailable, "Needs both phone and LAN connected"), (c.Status.State, c.Status.Message));
+        var json = Assert.Single(_host.Starts);
+        Assert.Contains("\"bind_interface\": \"" + SmartRoutingController.LanPlaceholder + "\"", json);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.False(c.Status.LanOnline);
+
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync(FailLanOnly);
+        Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
     }
+
+    [Fact]
+    public async Task The_real_lan_appearing_with_another_name_restarts_once()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(lan: false), On());
+
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(), On());
+
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Equal(1, _host.Stops);
+        Assert.Contains("\"bind_interface\": \"Ethernet\"", _host.Starts[1]);
+    }
+
+    [Fact]
+    public async Task The_saved_lan_name_matching_the_real_lan_does_not_restart()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(lan: false), OnWithSavedLan("Ethernet"));
+
+        await c.ApplyAsync(Net(lanDns: null), OnWithSavedLan("Ethernet")); // no DNS learnt either: same key
+
+        Assert.Single(_host.Starts);
+    }
+
 
     [Fact]
     public async Task Lan_lost_while_running_keeps_sing_box_running_and_marks_lan_offline()
@@ -152,13 +203,12 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
-    public async Task Same_inputs_do_not_restart_and_auto_mode_uses_phone()
+    public async Task Same_inputs_do_not_restart()
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
 
         await c.ApplyAsync(Net(), On());
-        await c.ApplyAsync(Net(RoutingMode.Auto), On());
 
         Assert.Single(_host.Starts);
         Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
@@ -492,7 +542,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
         _host.StopThrows = new IOException("access denied");
 
-        await c.ApplyAsync(Net(RoutingMode.Lan), On()); // must not throw
+        await c.ApplyAsync(Net(RoutingMode.Auto), On()); // must not throw
         Assert.Equal(SmartState.Unavailable, c.Status.State);
 
         _host.StopThrows = null;
@@ -686,7 +736,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
         _host.StopThrows = new IOException("access denied");
 
-        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+        await c.ApplyAsync(Net(RoutingMode.Auto), On());
 
         Assert.Equal(SmartState.Unavailable, c.Status.State);
         Assert.Equal("sing-box could not be stopped (see log)", c.Status.Message);
@@ -760,5 +810,120 @@ public class SmartRoutingControllerTests
 
         Assert.Equal(0, statusEvents);
         Assert.Empty(_popups);
+    }
+
+    // ---- Final pass I1: LAN mode keeps Smart routing running ----
+
+    [Fact]
+    public async Task Lan_mode_keeps_running_with_the_default_on_the_lan()
+    {
+        var c = Create();
+
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+
+        Assert.Single(_host.Starts);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(RouteExit.Lan, c.Status.DefaultExit);
+    }
+
+    [Fact]
+    public async Task Lan_mode_healing_flips_the_default_selector_to_the_phone()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+
+        await c.ApplyAsync(Net(RoutingMode.Lan, healing: true), On());
+
+        Assert.Single(_host.Starts);
+        Assert.Contains(("default", "phone"), _api.Selects);
+        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+    }
+
+    [Fact]
+    public async Task Lan_mode_with_the_lan_absent_defaults_to_the_phone_while_sing_box_keeps_running()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false), On());
+
+        Assert.Single(_host.Starts);
+        Assert.Equal(0, _host.Stops);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Contains(("default", "phone"), _api.Selects);
+        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+    }
+
+    [Fact]
+    public async Task Lan_only_waiting_still_works_in_lan_mode()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+        await c.ApplyAsync(Net(RoutingMode.Lan, lanMs: null), On());
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+
+        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync(FailLanOnly);
+
+        Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
+        Assert.Empty(_api.Selects); // nothing was moved to the phone
+    }
+
+    // ---- Final pass I2: Auto pauses ----
+
+    [Fact]
+    public async Task Auto_mode_pauses_smart_routing_with_a_message()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+
+        await c.ApplyAsync(Net(RoutingMode.Auto), On());
+
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal((SmartState.Unavailable, "Paused in Auto mode"), (c.Status.State, c.Status.Message));
+    }
+
+    // ---- Final pass M1: why it failed ----
+
+    [Fact]
+    public async Task Faulted_status_carries_the_cleaned_last_error()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ProcessLineAsync("\u001b[31m+0300 2026-10-02 16:50:47 FATAL [42 1ms] start service: listen tcp 127.0.0.1:40000: bind: access denied\u001b[0m");
+
+        for (var i = 0; i < 3; i++)
+        {
+            _host.Crash();
+            await c.HandleExitAsync(1);
+        }
+
+        Assert.Equal(SmartState.Faulted, c.Status.State);
+        Assert.Equal("Smart routing stopped — sing-box keeps crashing (see log)", c.Status.Message);
+        Assert.Equal("FATAL start service: listen tcp 127.0.0.1:40000: bind: access denied", c.Status.Detail);
+    }
+
+    [Fact]
+    public async Task Faulted_detail_for_a_start_failure_is_the_exception_message_and_is_truncated()
+    {
+        var c = Create();
+        _host.StartThrows = new FileNotFoundException(new string('x', 300));
+
+        for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(), On());
+
+        Assert.Equal(SmartState.Faulted, c.Status.State);
+        Assert.NotNull(c.Status.Detail);
+        Assert.True(c.Status.Detail!.Length <= 120, c.Status.Detail);
+        Assert.EndsWith("…", c.Status.Detail);
+    }
+
+    [Fact]
+    public async Task Detail_is_null_unless_faulted()
+    {
+        var c = Create();
+
+        await c.ApplyAsync(Net(), On());
+
+        Assert.Null(c.Status.Detail);
     }
 }

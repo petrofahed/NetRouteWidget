@@ -29,8 +29,10 @@ public static class SmartRoutingPresenter
         SmartState.Off or SmartState.Starting when !string.IsNullOrEmpty(s.Message) => new($"⚠ {s.Message}", SmartTone.Warning),
         SmartState.Off => new("⚡ Smart routing off", SmartTone.Muted),
         SmartState.Starting => new("⚡ Smart routing starting…", SmartTone.Muted),
+        SmartState.Unavailable when s.Message?.StartsWith("Paused ", StringComparison.Ordinal) == true =>
+            new($"⚡ Smart routing {char.ToLowerInvariant(s.Message[0])}{s.Message[1..]}", SmartTone.Muted), // "paused in Auto mode"
         SmartState.Unavailable => new($"⚡ Smart routing paused — {s.Message}", SmartTone.Muted),
-        SmartState.Faulted => new($"⚠ {s.Message}", SmartTone.Warning),
+        SmartState.Faulted => new(string.IsNullOrEmpty(s.Detail) ? $"⚠ {s.Message}" : $"⚠ {s.Message} — {s.Detail}", SmartTone.Warning),
         _ when s.Waiting => new("⏸ LAN-only traffic waiting (LAN offline)", SmartTone.Warning),
         _ when s.LanRulesOnPhone => new("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
         _ => new($"⚡ Smart routing ON · {s.RuleCount} rules · {ByteFormat.Human(s.Today.Total)} kept off 4G today", SmartTone.Normal),

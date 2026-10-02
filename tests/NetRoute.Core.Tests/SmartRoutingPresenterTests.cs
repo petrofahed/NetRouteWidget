@@ -31,14 +31,36 @@ public class SmartRoutingPresenterTests
             SmartRoutingPresenter.Row(Status(today: stats)));
         Assert.Equal(new SmartRow("⚡ Smart routing off", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Off)));
         Assert.Equal(new SmartRow("⚡ Smart routing starting…", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Starting)));
-        Assert.Equal(new SmartRow("⚡ Smart routing paused — Not needed in LAN mode", SmartTone.Muted),
-            SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Not needed in LAN mode")));
+        Assert.Equal(new SmartRow("⚡ Smart routing paused — Needs both phone and LAN connected", SmartTone.Muted),
+            SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Needs both phone and LAN connected")));
         Assert.Equal(new SmartRow("⚠ Smart routing stopped — sing-box keeps crashing (see log)", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(SmartState.Faulted, "Smart routing stopped — sing-box keeps crashing (see log)")));
         Assert.Equal(new SmartRow("⏸ LAN-only traffic waiting (LAN offline)", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(waiting: ["YouTube"])));
         Assert.Equal(new SmartRow("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(lanRulesOnPhone: true)));
+    }
+
+    [Fact]
+    public void Faulted_row_appends_the_detail_when_there_is_one()
+    {
+        const string message = "Smart routing stopped — sing-box keeps crashing (see log)";
+
+        Assert.Equal(new SmartRow($"⚠ {message} — FATAL bind: access denied", SmartTone.Warning),
+            SmartRoutingPresenter.Row(Status(SmartState.Faulted, message) with { Detail = "FATAL bind: access denied" }));
+        Assert.Equal(new SmartRow($"⚠ {message}", SmartTone.Warning),
+            SmartRoutingPresenter.Row(Status(SmartState.Faulted, message) with { Detail = "" }));
+        Assert.Equal(new SmartRow($"⚠ {message}", SmartTone.Warning),
+            SmartRoutingPresenter.Row(Status(SmartState.Faulted, message) with { Detail = null }));
+    }
+
+    [Fact]
+    public void A_paused_message_reads_as_a_sentence_not_a_repeat()
+    {
+        Assert.Equal(new SmartRow("⚡ Smart routing paused in Auto mode", SmartTone.Muted),
+            SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Paused in Auto mode")));
+        Assert.Equal(new SmartRow("⚡ Smart routing paused — Needs administrator rights", SmartTone.Muted),
+            SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Needs administrator rights")));
     }
 
     [Fact]

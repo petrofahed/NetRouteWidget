@@ -49,6 +49,12 @@ public sealed partial record UserRule(UserRuleType Type, string Value, bool Enab
 public sealed record SmartRoutingSettings
 {
     public bool Enabled { get; init; }
+
+    /// The LAN adapter name last seen by v1. Smart routing binds its "lan" outbound to it when it starts while the LAN
+    /// is absent (cable out at boot, router rebooting), so LAN-only traffic waits instead of falling onto 4G.
+    /// Not part of the rule fingerprint: changing it never restarts sing-box by itself.
+    public string? LastLanInterface { get; init; }
+
     public IReadOnlyDictionary<string, bool> Items { get; init; } = new Dictionary<string, bool>();
     public IReadOnlyList<UserRule> UserRules { get; init; } = [];
 
@@ -64,6 +70,16 @@ public sealed record SmartRoutingSettings
     public SmartRoutingSettings WithoutUserRule(UserRule rule) =>
         this with { UserRules = [.. UserRules.Where(r => !SameRule(r, rule))] };
 
+    /// True (with the updated settings) only when a LAN is present and its name differs from the saved one, so callers
+    /// write the settings file on a change rather than on every status update.
+    public bool TryRememberLan(string? seen, out SmartRoutingSettings updated)
+    {
+        updated = this;
+        if (string.IsNullOrWhiteSpace(seen) || seen == LastLanInterface) return false;
+        updated = this with { LastLanInterface = seen };
+        return true;
+    }
+
     /// False for hand-edited or corrupt content that would crash later (null collections or rules, blank values, unknown rule types).
     public bool IsValid() =>
         Items is not null && UserRules is not null
@@ -73,7 +89,7 @@ public sealed record SmartRoutingSettings
         a.Type == b.Type && string.Equals(a.Value, b.Value, StringComparison.OrdinalIgnoreCase);
 
     public bool Equals(SmartRoutingSettings? other) =>
-        other is not null && Enabled == other.Enabled
+        other is not null && Enabled == other.Enabled && LastLanInterface == other.LastLanInterface
         && Items.Count == other.Items.Count
         && Items.All(kv => other.Items.TryGetValue(kv.Key, out var v) && v == kv.Value)
         && UserRules.SequenceEqual(other.UserRules);

@@ -107,4 +107,40 @@ public sealed class SmartRoutingSettingsTests : IDisposable
         Assert.Equal(new SmartRoutingSettings(), loaded.Settings.SmartRouting);
         Assert.False(loaded.Settings.SmartRouting.Enabled);
     }
+
+    [Fact]
+    public void Last_lan_interface_round_trips_and_is_part_of_equality()
+    {
+        var store = new SettingsStore(Path.Combine(_dir, "settings.json"));
+        var settings = new AppSettings { SmartRouting = new SmartRoutingSettings { Enabled = true, LastLanInterface = "Ethernet 2" } };
+
+        store.Save(settings);
+
+        var loaded = store.Load().Settings;
+        Assert.Equal("Ethernet 2", loaded.SmartRouting.LastLanInterface);
+        Assert.Equal(settings, loaded);
+        Assert.NotEqual(settings.SmartRouting, settings.SmartRouting with { LastLanInterface = "Ethernet" });
+        Assert.NotEqual(settings.SmartRouting, settings.SmartRouting with { LastLanInterface = null });
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Ethernet 2")]
+    public void Any_last_lan_interface_is_valid(string? name) =>
+        Assert.True(new SmartRoutingSettings { LastLanInterface = name }.IsValid());
+
+    [Fact]
+    public void Remembering_the_lan_name_only_reports_a_change()
+    {
+        var settings = new SmartRoutingSettings();
+
+        Assert.True(settings.TryRememberLan("Ethernet", out var first));
+        Assert.Equal("Ethernet", first.LastLanInterface);
+        Assert.False(first.TryRememberLan("Ethernet", out _));   // same name: no write
+        Assert.False(first.TryRememberLan(null, out _));          // LAN absent: keep the last known
+        Assert.False(first.TryRememberLan("  ", out _));
+        Assert.True(first.TryRememberLan("Ethernet 2", out var renamed));
+        Assert.Equal("Ethernet 2", renamed.LastLanInterface);
+    }
 }
