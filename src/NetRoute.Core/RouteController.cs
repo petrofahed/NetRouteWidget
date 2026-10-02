@@ -242,7 +242,8 @@ public sealed class RouteController
             ResetHealing();
             return;
         }
-        if (!measured) return;
+        // No IPv4 yet (e.g. DHCP pending after a replug): nothing was measured, so it is no evidence either way.
+        if (!measured || preferred.IPv4 is null) return;
 
         if (!_healing)
         {

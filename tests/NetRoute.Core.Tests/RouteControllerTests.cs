@@ -373,4 +373,19 @@ public class RouteControllerTests
         Assert.False(controller.Status.IsHealing);
         Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
     }
+
+    [Fact]
+    public async Task Preferred_adapter_without_an_address_yet_does_not_count_as_failed()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _adapters.Adapters.RemoveAll(a => a.Index == 31);
+        _adapters.Adapters.Add(TestAdapters.Phone(index: 36) with { IPv4 = null }); // replugged, DHCP pending
+        _metrics.Add(36);
+
+        await RefreshTimes(controller, 5);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(36, IpFamily.IPv4));
+    }
 }
