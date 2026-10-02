@@ -29,6 +29,7 @@ public partial class App : Application
     bool _speedTestRunning;
     bool _smartStopped;
     SmartRoutingWindow? _smartWindow;
+    WaitingPopup? _waitingPopup;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -265,8 +266,7 @@ public partial class App : Application
                 _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next, restored, log.Info);
             smart.StatusChanged += s => Dispatcher.BeginInvoke(new Action(() => RenderSmart(s)));
             smart.Notify += m => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(m)));
-            smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() =>
-                _tray?.Notify(SmartRoutingPresenter.WaitingText(names))));
+            smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() => ShowWaitingPopup(names)));
 
             // Hook into the v1 controller last, so a failure above leaves it untouched.
             controller.ExternalPathResolver = index =>
@@ -297,6 +297,22 @@ public partial class App : Application
     {
         _card?.RenderSmart(SmartRoutingPresenter.Row(status));
         RenderSmartWindow();
+        if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone || !status.IsActive)) _waitingPopup.Close();
+    }
+
+    void ShowWaitingPopup(IReadOnlyList<string> names)
+    {
+        var text = SmartRoutingPresenter.WaitingText(names);
+        if (_waitingPopup is not null)
+        {
+            _waitingPopup.SetText(text);
+            return;
+        }
+        var popup = _waitingPopup = new WaitingPopup(text);
+        popup.UsePhoneClicked += () => _ = _smart?.UseLanRulesOnPhoneAsync();
+        popup.KeepWaitingClicked += () => _ = _smart?.KeepWaitingAsync();
+        popup.Closed += (_, _) => _waitingPopup = null;
+        popup.Show();
     }
 
     void RenderSmartWindow()
