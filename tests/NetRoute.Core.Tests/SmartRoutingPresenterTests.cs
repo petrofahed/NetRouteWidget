@@ -13,6 +13,13 @@ public class SmartRoutingPresenterTests
     [InlineData(1536, "2 KB")]
     [InlineData(5 * 1024 * 1024 + 300_000, "5.3 MB")]
     [InlineData(1_288_490_189, "1.2 GB")]
+    [InlineData(512, "1 KB")]
+    [InlineData(2560, "3 KB")]
+    [InlineData(1048575, "1 MB")]
+    [InlineData(1048576, "1 MB")]
+    [InlineData(1073741823, "1 GB")]
+    [InlineData(1073741824, "1 GB")]
+    [InlineData(-5, "0 KB")]
     public void Bytes_are_human_readable(long bytes, string expected) => Assert.Equal(expected, ByteFormat.Human(bytes));
 
     [Fact]
@@ -32,6 +39,14 @@ public class SmartRoutingPresenterTests
             SmartRoutingPresenter.Row(Status(waiting: ["YouTube"])));
         Assert.Equal(new SmartRow("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(lanRulesOnPhone: true)));
+    }
+
+    [Fact]
+    public void Off_with_a_message_shows_a_warning_row()
+    {
+        Assert.Equal(new SmartRow("⚠ sing-box could not be stopped (see log)", SmartTone.Warning),
+            SmartRoutingPresenter.Row(Status(SmartState.Off, "sing-box could not be stopped (see log)")));
+        Assert.Equal(new SmartRow("⚡ Smart routing off", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Off, "")));
     }
 
     [Fact]

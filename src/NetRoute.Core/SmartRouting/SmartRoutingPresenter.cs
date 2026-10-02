@@ -4,12 +4,17 @@ namespace NetRoute.Core;
 
 public static class ByteFormat
 {
-    public static string Human(long bytes) => bytes switch
+    /// Rounds first, then picks the unit, so a boundary value never shows as "1024 KB" or "1024 MB".
+    public static string Human(long bytes)
     {
-        < 1024L * 1024 => $"{Math.Round(bytes / 1024.0).ToString("0", CultureInfo.InvariantCulture)} KB",
-        < 1024L * 1024 * 1024 => $"{(bytes / (1024.0 * 1024)).ToString("0.#", CultureInfo.InvariantCulture)} MB",
-        _ => $"{(bytes / (1024.0 * 1024 * 1024)).ToString("0.0", CultureInfo.InvariantCulture)} GB",
-    };
+        bytes = Math.Max(bytes, 0);
+        var kb = Math.Round(bytes / 1024.0, MidpointRounding.AwayFromZero);
+        if (kb < 1024) return $"{kb.ToString("0", CultureInfo.InvariantCulture)} KB";
+        var mb = Math.Round(bytes / (1024.0 * 1024), 1, MidpointRounding.AwayFromZero);
+        if (mb < 1024) return $"{mb.ToString("0.#", CultureInfo.InvariantCulture)} MB";
+        var gb = Math.Round(bytes / (1024.0 * 1024 * 1024), 1, MidpointRounding.AwayFromZero);
+        return $"{gb.ToString("0.#", CultureInfo.InvariantCulture)} GB";
+    }
 }
 
 public enum SmartTone { Normal, Muted, Warning }
@@ -20,6 +25,8 @@ public static class SmartRoutingPresenter
 {
     public static SmartRow Row(SmartRoutingStatus s) => s.State switch
     {
+        // A message while Off/Starting is a warning from the controller (e.g. sing-box could not be stopped): show it.
+        SmartState.Off or SmartState.Starting when !string.IsNullOrEmpty(s.Message) => new($"⚠ {s.Message}", SmartTone.Warning),
         SmartState.Off => new("⚡ Smart routing off", SmartTone.Muted),
         SmartState.Starting => new("⚡ Smart routing starting…", SmartTone.Muted),
         SmartState.Unavailable => new($"⚡ Smart routing paused — {s.Message}", SmartTone.Muted),

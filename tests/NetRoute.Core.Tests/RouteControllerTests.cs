@@ -575,4 +575,57 @@ public class RouteControllerTests
         Assert.Equal(InternetPath.Phone, controller.Status.ActivePath);
         Assert.Empty(_toasts);
     }
+
+    [Fact]
+    public async Task Tun_interface_is_reported_for_ipv6_too()
+    {
+        var controller = Create();
+        controller.ExternalPathResolver = index => index == 97 ? InternetPath.Phone : null;
+
+        _routes.BestV6 = 97;
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(InternetPath.Phone, controller.Status.Ipv6Path);
+    }
+
+    [Fact]
+    public async Task Set_mode_uses_the_external_path_resolver()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        controller.ExternalPathResolver = index => index == 97 ? InternetPath.Phone : null;
+
+        _routes.BestV4 = 97;
+        await controller.SetModeAsync(RoutingMode.Phone);
+
+        Assert.Equal(InternetPath.Phone, controller.Status.ActivePath);
+    }
+
+    [Fact]
+    public async Task Tun_disappearing_while_the_phone_is_best_raises_no_toast()
+    {
+        var controller = Create();
+        controller.ExternalPathResolver = index => index == 97 ? InternetPath.Phone : null;
+        _routes.BestV4 = 97;
+        await controller.RefreshAsync(measureLatency: true);
+
+        _routes.BestV4 = 31; // TUN gone, the phone adapter carries traffic directly
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(InternetPath.Phone, controller.Status.ActivePath);
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
+    public async Task Tun_exiting_via_lan_while_phone_mode_is_reported_as_a_fallback()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Phone });
+        controller.ExternalPathResolver = index => index == 97 ? InternetPath.Lan : null;
+
+        _routes.BestV4 = 97;
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(InternetPath.Lan, controller.Status.ActivePath);
+        Assert.True(controller.Status.IsFallback);
+    }
 }
