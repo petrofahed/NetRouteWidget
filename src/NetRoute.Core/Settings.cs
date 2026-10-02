@@ -12,6 +12,7 @@ public sealed record AppSettings
     public double? CardTop { get; init; }
     public bool CardVisible { get; init; } = true;
     public bool StartWithWindows { get; init; }
+    public SmartRoutingSettings SmartRouting { get; init; } = new();
 
     [JsonIgnore]
     public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac);
@@ -48,6 +49,7 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
             var settings = JsonSerializer.Deserialize<AppSettings>(ReadWithRetry(), Options)
                 ?? throw new JsonException("Settings file is null");
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
+            if (settings.SmartRouting is null) settings = settings with { SmartRouting = new SmartRoutingSettings() };
             return new(settings, false);
         }
         catch (JsonException)
