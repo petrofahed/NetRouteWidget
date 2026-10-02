@@ -41,8 +41,8 @@ Local traffic already works regardless of the default route, because Windows has
 
 ### Status shown
 
-- The adapter **actually** carrying internet, read live from Windows' best-route lookup for a public address (e.g. 1.1.1.1), not assumed from the mode.
-- Up/down state of each adapter, its IPv4 address, and its latency (ping sourced from that adapter's address).
+- The adapter **actually** carrying internet, read live from Windows' best-route lookup for a public IPv4 address (1.1.1.1) and a public IPv6 address, not assumed from the mode. A note is shown when IPv6 takes a different adapter than IPv4.
+- Up/down state of each adapter, its IPv4 address, and its latency (TCP-connect probe sourced from that adapter's address).
 - A fallback state: mode is Phone, but the phone is offline and internet is going via the LAN (or the reverse in LAN mode).
 
 ## Architecture
@@ -70,13 +70,13 @@ NetRouteWidget.sln
   - User overrides from Settings (stored by interface description and, for the LAN, MAC address) win over auto-detection.
   - If there is no candidate or more than one, it reports this as "not found / ambiguous" instead of guessing.
 - **RoutingEngine**: `Apply(Mode)` sets interface metrics through the IP Helper API (`GetIpInterfaceEntry` / `SetIpInterfaceEntry`; `UseAutomaticMetric` for Auto), then reads them back to verify. It returns a result with the metrics actually applied, or an error with the reason.
-- **NetworkMonitor**:
-  - subscribes to `NotifyIpInterfaceChange` and `NotifyRouteChange2`;
-  - debounces bursts (about 1.5 s quiet period), then raises a single `NetworkChanged` event;
-  - determines the active internet interface with `GetBestInterfaceEx` (1.1.1.1);
-  - measures per-adapter latency by pinging 1.1.1.1 sourced from each adapter's IP, every 5 s while the card is visible and every 30 s while it is hidden.
+- **Network monitoring** (implemented as a `Debouncer` plus a `RouteController` in Core, driven by the app):
+  - listens to .NET's `NetworkChange.NetworkAddressChanged` / `NetworkAvailabilityChanged` and debounces bursts (about 1.5 s quiet period) into a single refresh;
+  - also runs a poll refresh every 5 s while the card is visible and every 30 s while it is hidden, so a missed event heals itself;
+  - determines the active internet interface with `GetBestInterfaceEx` for an IPv4 target (1.1.1.1) **and** an IPv6 target (2606:4700:4700::1111). If IPv6 resolves to a different adapter than IPv4 (e.g. only the LAN has an IPv6 default route), the card shows a warning note, because metrics can only choose between routes that exist;
+  - measures per-adapter latency with a TCP connect to 1.1.1.1:443 from a socket bound to each adapter's IPv4 address (2 s timeout). Windows' strong-host model sends it out of that adapter. TCP is used because some networks drop ICMP.
 - **Settings**: JSON at `%AppData%\NetRouteWidget\settings.json` holding the mode, adapter overrides, card position, card visibility and start-with-Windows. A missing or corrupt file means defaults are used and the file is rewritten.
-- All Windows calls sit behind small interfaces (`IAdapterSource`, `IInterfaceMetrics`, `IRouteQuery`, `IPinger`) so the logic is unit-testable without touching real networking.
+- All Windows calls sit behind small interfaces (`IAdapterSource`, `IInterfaceMetrics`, `IRouteQuery`, `ILatencyProbe`) so the logic is unit-testable without touching real networking.
 
 ### NetRoute.App
 
@@ -98,7 +98,7 @@ NetRouteWidget.sln
   └──────────────────────────────────┘
   ```
 
-  - Dots: green = up with internet, amber = up but the ping fails, gray = disconnected. The row carrying internet is bold.
+  - Dots: green = up with internet, amber = up but the latency probe fails, gray = disconnected. The row carrying internet is bold.
   - The header shows "Internet via LAN (phone offline)" in amber while in fallback.
   - The card can be dragged and its position is remembered. ✕ hides it to the tray.
   - The ⋮ menu offers: Start with Windows, choose adapters manually, open Windows network settings, Quit.
@@ -115,7 +115,8 @@ NetRouteWidget.sln
 ## Error handling
 
 - **Not elevated**: status-only mode. Mode buttons are disabled and a "Restart as admin" link is shown.
-- **Apply fails or the verification read-back mismatches**: the error is shown in the card header, and the UI reflects the metrics Windows actually has.
+- **Apply fails or the verification read-back mismatches**: the error is shown in the card header, and the UI reflects the metrics Windows actually has. A failed mode change keeps the previous mode (not saved), and the next refresh re-asserts it.
+- **Adapter override changed**: the previously used adapter that is no longer phone/LAN is reset to automatic metric, so a stale preferred metric cannot keep winning.
 - **Adapter not found / ambiguous**: the card shows "Phone: not connected" or "Choose LAN adapter" and links to the adapter picker.
 - **Settings missing or corrupt**: defaults are used and the file is rewritten; the event is logged.
 - **Logging**: a rolling daily log in `%AppData%\NetRouteWidget\logs\` (7 days kept) records mode changes, adapter events, applied metrics and errors.
