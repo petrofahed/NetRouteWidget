@@ -28,9 +28,21 @@ public sealed class RouteController
     /// Consecutive good checks of the preferred adapter before healing ends.
     public const int RecoverAfterGoodChecks = 3;
 
+    /// Upper limit for the good checks needed before healing ends, however often healing repeats.
+    public const int MaxRecoverAfterGoodChecks = 48;
+
+    /// Measured checks without healing, after a heal ended, that return the backoff to the base rule.
+    public const int CalmChecksToResetBackoff = 60;
+
     // Heal state is read and written only while holding _gate.
     bool _healing;
     int _healCount;
+    int _recoverThreshold = RecoverAfterGoodChecks;
+    int _checksSinceHealEnded;
+    bool _hadHeal;
+
+    /// Good checks of the preferred adapter that end healing now; grows while healing keeps repeating.
+    internal int RecoverThreshold => _recoverThreshold;
 
     public RouteController(
         IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
@@ -221,10 +233,14 @@ public sealed class RouteController
         _ => mode,
     };
 
+    /// Drops all heal state, including the backoff: an explicit user action or scope loss starts fresh.
     void ResetHealing()
     {
         _healing = false;
         _healCount = 0;
+        _recoverThreshold = RecoverAfterGoodChecks;
+        _checksSinceHealEnded = 0;
+        _hadHeal = false;
     }
 
     void UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
@@ -247,17 +263,31 @@ public sealed class RouteController
 
         if (!_healing)
         {
+            if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
+            {
+                _checksSinceHealEnded++;
+                if (_checksSinceHealEnded == CalmChecksToResetBackoff) _recoverThreshold = RecoverAfterGoodChecks;
+            }
+
             _healCount = preferredMs is null && backupMs is not null ? _healCount + 1 : 0;
             if (_healCount < HealAfterFailedChecks) return;
             _healing = true;
             _healCount = 0;
+            if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
+            {
+                _recoverThreshold = Math.Min(_recoverThreshold * 2, MaxRecoverAfterGoodChecks);
+                _log($"Auto-heal: repeated failure; waiting for {_recoverThreshold} good checks before switching back");
+            }
             _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
         }
         else
         {
             _healCount = preferredMs is not null ? _healCount + 1 : 0;
-            if (_healCount < RecoverAfterGoodChecks) return;
-            ResetHealing();
+            if (_healCount < _recoverThreshold) return;
+            _healing = false;
+            _healCount = 0;
+            _hadHeal = true;
+            _checksSinceHealEnded = 0;
             _log($"Auto-heal ended: {preferred.Name} has internet again");
         }
     }

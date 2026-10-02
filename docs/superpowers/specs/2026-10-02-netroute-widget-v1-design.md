@@ -51,6 +51,7 @@ Local traffic already works regardless of the default route, because Windows has
   - The card header reads "Internet via LAN (phone has no internet)", and the toast reads "Phone lost internet — internet via LAN".
   - The preferred adapter keeps being probed. After 3 consecutive good checks the original metrics come back, with the toast "Phone back — internet via Phone".
   - Healing ends immediately when the user changes the mode or the adapters, or when the backup adapter disappears.
+  - Repeated heals soon after recovering double the good checks needed before switching back (up to 48); a calm period of 60 checks resets it.
   - Auto mode never heals.
 - **Restore script.** `Restore-Network.cmd` (in `tools/`, shipped next to the exe) self-elevates, stops the widget, sets every interface with a manual metric back to automatic, sets the saved mode to Auto, and optionally removes the startup task.
   - `/check` is a dry run that changes nothing.

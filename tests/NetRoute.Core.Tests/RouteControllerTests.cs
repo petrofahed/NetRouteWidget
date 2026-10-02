@@ -388,4 +388,83 @@ public class RouteControllerTests
         Assert.False(controller.Status.IsHealing);
         Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(36, IpFamily.IPv4));
     }
+
+    async Task HealPhone(RouteController controller)
+    {
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, RouteController.HealAfterFailedChecks);
+        Assert.True(controller.Status.IsHealing);
+    }
+
+    async Task RecoverPhone(RouteController controller, int goodChecks)
+    {
+        _probe.BySource["192.168.42.11"] = 38;
+        await RefreshTimes(controller, goodChecks);
+    }
+
+    [Fact]
+    public async Task Repeated_heal_doubles_the_wait_before_switching_back()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        Assert.False(controller.Status.IsHealing);
+
+        await HealPhone(controller); // fails again soon after recovering
+        Assert.Equal(6, controller.RecoverThreshold);
+
+        await RecoverPhone(controller, 5);
+        Assert.True(controller.Status.IsHealing);
+        await RecoverPhone(controller, 1);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Backoff_resets_after_a_calm_period()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 6);
+        Assert.False(controller.Status.IsHealing);
+
+        await RecoverPhone(controller, RouteController.CalmChecksToResetBackoff);
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Backoff_is_capped()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        for (var i = 0; i < 8; i++)
+        {
+            await HealPhone(controller);
+            await RecoverPhone(controller, controller.RecoverThreshold);
+        }
+
+        Assert.Equal(RouteController.MaxRecoverAfterGoodChecks, controller.RecoverThreshold);
+    }
+
+    [Fact]
+    public async Task User_mode_change_resets_the_backoff()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        await HealPhone(controller);
+        Assert.Equal(6, controller.RecoverThreshold);
+
+        await controller.SetModeAsync(RoutingMode.Phone);
+
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+    }
 }
