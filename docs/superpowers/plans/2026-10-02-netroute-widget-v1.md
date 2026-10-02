@@ -4360,3 +4360,120 @@ git commit -m "feat: break-glass Restore-Network.cmd shipped next to the exe" -m
      - Expected: the widget closes; `Get-NetIPInterface -AddressFamily IPv4 | ft InterfaceAlias,InterfaceMetric,AutomaticMetric` shows `Enabled` everywhere; `settings.json` shows `"Mode": "Auto"`.
      - Start the widget again and choose Phone.
 - **Step 4 README:** in "Undo everything", put this first, before the PowerShell commands: "**Easiest:** double-click `Restore-Network.cmd` next to the exe (also in `tools/`). It stops the widget, gives every adapter back to Windows' automatic priority and sets the widget to Auto. `Restore-Network.cmd /check` shows what it would do." Also add **auto-heal** to the "What it does" bullets: "If the preferred connection is up but has no internet (e.g. phone data off), the widget switches to the other one until it recovers."
+
+---
+
+### Task 14: Auto-heal backoff (added 2026-10-02 after the user checkpoint)
+
+**Why:** during the Task 9 checkpoint, the carrier blocked tethered traffic for several minutes each time, roughly 30–60 s after the phone started carrying everything. With a fixed rule of "3 good checks → switch back", auto-heal would flip Phone ↔ LAN about every minute and show a toast each time. The fix: each time the widget heals again shortly after recovering, it doubles the number of good checks needed before switching back. After a calm period it returns to the base rule.
+
+**Files:**
+- Modify: `src/NetRoute.Core/RouteController.cs`
+- Modify: `tests/NetRoute.Core.Tests/RouteControllerTests.cs`
+- Modify: `docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md` (Break-glass section: one sentence on the backoff)
+
+**Interfaces:**
+- Consumes: the Task 12 heal state (`_healing`, `_healCount`, `UpdateHealing`, `ResetHealing`, `RecoverAfterGoodChecks`).
+- Produces:
+  - `public const int MaxRecoverAfterGoodChecks = 48`
+  - `public const int CalmChecksToResetBackoff = 60`
+  - `internal int RecoverThreshold { get; }` (for tests)
+
+**Behaviour:**
+- The controller keeps `_recoverThreshold`, starting at `RecoverAfterGoodChecks` (3).
+- Recovery happens after `_recoverThreshold` consecutive good checks, instead of the fixed 3.
+- Counting checks while not healing:
+  - The controller keeps `_checksSinceHealEnded`. It is incremented on every *measured* check while not healing, and only after at least one heal has ended.
+  - When `_checksSinceHealEnded` reaches `CalmChecksToResetBackoff` (60 checks, about 5 min with the card visible or 10 min hidden), `_recoverThreshold` resets to 3.
+- Starting a heal: if a heal starts while `_checksSinceHealEnded` is below the calm limit and a previous heal exists, then `_recoverThreshold = Math.Min(_recoverThreshold * 2, MaxRecoverAfterGoodChecks)`.
+- `ResetHealing()`, which the user's mode/override changes and scope loss call, also resets the backoff: `_recoverThreshold = 3`, and the "previous heal" memory is cleared. An explicit user action starts fresh.
+- Logging: when the threshold grows, write `Auto-heal: repeated failure; waiting for {n} good checks before switching back`.
+- All of this state lives under `_gate`, like the rest of the heal state.
+
+- [ ] **Step 1: Write the failing tests** (append inside `RouteControllerTests`)
+
+```csharp
+    async Task HealPhone(RouteController controller)
+    {
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, RouteController.HealAfterFailedChecks);
+        Assert.True(controller.Status.IsHealing);
+    }
+
+    async Task RecoverPhone(RouteController controller, int goodChecks)
+    {
+        _probe.BySource["192.168.42.11"] = 38;
+        await RefreshTimes(controller, goodChecks);
+    }
+
+    [Fact]
+    public async Task Repeated_heal_doubles_the_wait_before_switching_back()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        Assert.False(controller.Status.IsHealing);
+
+        await HealPhone(controller); // fails again soon after recovering
+        Assert.Equal(6, controller.RecoverThreshold);
+
+        await RecoverPhone(controller, 5);
+        Assert.True(controller.Status.IsHealing);
+        await RecoverPhone(controller, 1);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Backoff_resets_after_a_calm_period()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 6);
+        Assert.False(controller.Status.IsHealing);
+
+        await RecoverPhone(controller, RouteController.CalmChecksToResetBackoff);
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Backoff_is_capped()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        for (var i = 0; i < 8; i++)
+        {
+            await HealPhone(controller);
+            await RecoverPhone(controller, controller.RecoverThreshold);
+        }
+
+        Assert.Equal(RouteController.MaxRecoverAfterGoodChecks, controller.RecoverThreshold);
+    }
+
+    [Fact]
+    public async Task User_mode_change_resets_the_backoff()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+        await RecoverPhone(controller, 3);
+        await HealPhone(controller);
+        Assert.Equal(6, controller.RecoverThreshold);
+
+        await controller.SetModeAsync(RoutingMode.Phone);
+
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+    }
+```
+
+- [ ] **Step 2: Run, verify they fail.** Run `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"`. Expected: the build FAILS on the missing `RecoverThreshold` / `CalmChecksToResetBackoff` / `MaxRecoverAfterGoodChecks`.
+- [ ] **Step 3: Implement** the behaviour above in `RouteController` (fields `_recoverThreshold`, `_checksSinceHealEnded`, `_hadHeal`, all under the gate). Update the spec's Break-glass bullet: "Repeated heals soon after recovering double the good checks needed before switching back (up to 48); a calm period of 60 checks resets it."
+- [ ] **Step 4: Run and verify they pass.** Expected: PASS, 89 unit tests. `dotnet build` of the App into a scratch folder gives 0 warnings.
+- [ ] **Step 5: Commit** with subject `feat(core): back off auto-heal switch-back after repeated failures` and the standard trailers.
