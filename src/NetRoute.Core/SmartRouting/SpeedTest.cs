@@ -20,7 +20,7 @@ public static class SpeedTest
         return new SpeedTestResult(await phone, await lan);
     }
 
-    public static string Describe(SpeedTestResult r) => $"⚡ Phone {Mbps(r.PhoneMbps)} · LAN {Mbps(r.LanMbps)}";
+    public static string Describe(SpeedTestResult r) => $"⏱ Phone {Mbps(r.PhoneMbps)} · LAN {Mbps(r.LanMbps)}";
 
     static Task<double?> Measure(ISpeedProbe probe, AdapterInfo? adapter, CancellationToken ct) =>
         adapter?.IPv4 is { } ip && IPAddress.TryParse(ip, out var address)

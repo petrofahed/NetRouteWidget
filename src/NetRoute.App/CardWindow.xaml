@@ -119,7 +119,7 @@
 
             <Border Height="1" Margin="0,8" Background="{DynamicResource CardBorder}" />
             <DockPanel>
-                <Button DockPanel.Dock="Right" Content="⚡" Style="{StaticResource IconButton}" Click="OnSpeedTest"
+                <Button DockPanel.Dock="Right" Content="⏱" Style="{StaticResource IconButton}" Click="OnSpeedTest"
                         ToolTip="Speed test of both connections (uses about 5 MB of mobile data)" />
                 <Button DockPanel.Dock="Right" Content="⚙" Style="{StaticResource IconButton}" Click="OnSmartSettings"
                         ToolTip="Smart routing: choose what stays off 4G" />

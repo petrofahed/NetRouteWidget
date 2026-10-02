@@ -27,7 +27,7 @@ public class SpeedTestTests
 
         Assert.Equal(new SpeedTestResult(20.24, null), result);
         Assert.Equal(new[] { "192.168.42.11", "192.168.86.42" }, probe.Sources.Select(s => s.ToString()).Order());
-        Assert.Equal("⚡ Phone 20.2 Mbit/s · LAN —", SpeedTest.Describe(result));
+        Assert.Equal("⏱ Phone 20.2 Mbit/s · LAN —", SpeedTest.Describe(result));
     }
 
     [Fact]
