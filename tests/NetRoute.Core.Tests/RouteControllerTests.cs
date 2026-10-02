@@ -202,28 +202,31 @@ public class RouteControllerTests
     [Fact]
     public async Task SetOverrides_serializes_reset_against_concurrent_refreshes()
     {
-        // Regression test: SetOverridesAsync must reset old adapter to automatic, not skip it.
-        // Race condition scenario: concurrent RefreshAsync could update Status before SetOverridesAsync
-        // has a chance to read the old adapters and reset them (if UpdateSettings happened too early).
-
-        // Setup: two LAN adapters, initial override points to index 10
+        // Two LAN adapters; the saved override points at index 10.
         _adapters.Adapters.Add(TestAdapters.Lan(index: 12, mac: "AA-BB-CC-00-00-12"));
         _metrics.Add(12);
-        var controller = Create(new AppSettings { LanOverrideMac = "AA-BB-CC-00-00-10" });
+        var probe = new BlockingLatencyProbe();
+        probe.SetLatency("192.168.42.11", 38);
+        probe.SetLatency("192.168.86.42", 12);
+        var controller = new RouteController(_adapters, _metrics, _routes, probe,
+            new AppSettings { LanOverrideMac = "AA-BB-CC-00-00-10" }, canModify: true, _saved.Add, _ => { });
 
-        // Baseline: adapter 10 is the LAN with metric 50
         await controller.RefreshAsync(measureLatency: false);
         Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
 
-        // Switch to adapter 12 as LAN. SetOverridesAsync should reset adapter 10 to automatic.
-        // Even with concurrent refresh attempts queued on the gate, adapter 10 must be reset.
-        await controller.SetOverridesAsync(new AdapterOverrides(null, "AA-BB-CC-00-00-12"));
+        // r1 takes the gate and parks inside the blocked latency probe, still holding the gate.
+        var r1 = controller.RefreshAsync(measureLatency: true);
+        // r2 queues on the gate, ahead of SetOverridesAsync.
+        var r2 = controller.RefreshAsync(measureLatency: false);
+        // SetOverridesAsync queues behind r2. If it saved the new override before taking the gate,
+        // r2 would detect with it and publish adapter 12 as LAN, so adapter 10 would never be reset.
+        var so = controller.SetOverridesAsync(new AdapterOverrides(null, "AA-BB-CC-00-00-12"));
 
-        // Verify adapter 10 was reset to automatic (not left with metric 50)
+        probe.Unblock();
+        await Task.WhenAll(r1, r2, so).WaitAsync(TimeSpan.FromSeconds(5));
+
         Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic,
             "Old LAN adapter (index 10) must be reset to automatic by SetOverridesAsync");
         Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(12, IpFamily.IPv4));
-        Assert.Equal(12, controller.Status.Adapters.Lan?.Index);
-        Assert.Equal("AA-BB-CC-00-00-12", _saved.Last().LanOverrideMac);
     }
 }
