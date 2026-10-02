@@ -2466,6 +2466,8 @@ Run: `dotnet test --filter "Category!=Integration"`. Expected: PASS, with all v1
 
 ### Task 9: Windows sing-box host, Clash API client and free port
 
+> **Implemented differently from the code below (review fixes, binding).** `SingBoxHost` takes only `exePath`: it runs `sing-box run -c stdin` and feeds the config on stdin, so no config file is ever written (the elevated process must not read a user-writable file). The process is assigned to a shared kill-on-close Windows Job Object, so it dies with the widget (verified by experiment). `StopAsync` is bounded (10 s, `TimeoutException`), `KillOrphans` waits for exit, and subscriber exceptions are isolated. `KillOnParentExit` and `internal CurrentProcess` are exposed for tests.
+
 **Files:**
 - Create: `src/NetRoute.Core/Windows/SingBoxHost.cs`, `src/NetRoute.Core/Windows/SingBoxApi.cs`, `src/NetRoute.Core/Windows/FreePort.cs`
 - Create: `tests/NetRoute.Core.Tests/SingBoxApiParseTests.cs` (unit)
@@ -3006,8 +3008,7 @@ In `src/NetRoute.App/AppPaths.cs`, add:
 
 ```csharp
     public static readonly string SingBoxExe = Path.Combine(AppContext.BaseDirectory, "sing-box", "sing-box.exe");
-    public static readonly string SingBoxConfig = Path.Combine(Root, "sing-box.json");
-    public static readonly string StatsFile = Path.Combine(Root, "stats.json");
+        public static readonly string StatsFile = Path.Combine(Root, "stats.json");
 ```
 
 In `src/NetRoute.App/CardWindow.xaml`, directly after the mode-buttons `</UniformGrid>`, insert:
@@ -3072,7 +3073,7 @@ Inside the startup `try`, right after `controller.AutoSwitched += …`, add:
             _catalog = RuleCatalog.Load(RuleCatalog.DefaultPath);
             var orphans = SingBoxHost.KillOrphans(AppPaths.SingBoxExe);
             if (orphans > 0) log.Info($"Stopped {orphans} leftover sing-box process(es)");
-            var host = new SingBoxHost(AppPaths.SingBoxExe, AppPaths.SingBoxConfig);
+            var host = new SingBoxHost(AppPaths.SingBoxExe); // config is passed on stdin: nothing is written to a user-writable file
             host.LineReceived += line =>
             {
                 if (line.Contains("ERROR") || line.Contains("FATAL") || line.Contains("WARN")) log.Info("sing-box: " + line);
@@ -3698,6 +3699,8 @@ Confirm it contains `NetRouteWidget.exe`, `sing-box\sing-box.exe`, `sing-box\LIC
 12. **UDP/QUIC failure line:** with the LAN unplugged, play a YouTube video (it uses QUIC) and check that the sing-box lines for its failures are recognised: the waiting popup must appear even when only UDP connections fail. If not, extend `SingBoxLogParser` with the packet-connection failure format.
 13. **Rule index check:** the sing-box log's `router: match[N]` index equals the position in `route.rules` (the Task 9 integration test pins this; confirm with a live YouTube line).
 14. **Hung sing-box:** end the sing-box process from Task Manager while the widget runs. Internet recovers within seconds (TUN removed, v1 routing), and the widget restarts sing-box.
+
+15. **Widget killed:** kill `NetRouteWidget.exe` in Task Manager while Smart routing runs. `sing-box.exe` disappears with it (job object), the `NetRoute` adapter vanishes, and internet keeps working over v1 routing. Also check after a normal Quit that `Get-NetAdapter -Name NetRoute` and `Get-NetRoute -InterfaceAlias NetRoute` show nothing.
 
 - [ ] **Step 5: Commit, push and update the PR**
 
