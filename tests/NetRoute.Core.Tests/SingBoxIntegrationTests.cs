@@ -38,4 +38,20 @@ public partial class SingBoxIntegrationTests
         Assert.Contains("sing-box version 1.14.2", output);
         Assert.Contains("with_clash_api", output);
     }
+
+    [Fact]
+    public void Built_config_passes_sing_box_check()
+    {
+        var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
+            RuleSet.Build(RuleCatalog.Load(RuleCatalog.DefaultPath), new SmartRoutingSettings()),
+            "Ethernet 5", "Ethernet", "192.168.86.1", RouteExit.Phone, false, 41234, "s3cret"));
+        var path = Path.Combine(Path.GetTempPath(), $"netroute-check-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, config.Json);
+        try
+        {
+            var (exit, output) = RunSingBox("check", "-c", path);
+            Assert.True(exit == 0, output);
+        }
+        finally { File.Delete(path); }
+    }
 }
