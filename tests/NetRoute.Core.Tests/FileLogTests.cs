@@ -39,6 +39,25 @@ public sealed class FileLogTests : IDisposable
     }
 
     [Fact]
+    public void Prune_skips_an_old_file_it_cannot_delete()
+    {
+        Directory.CreateDirectory(_dir);
+        var old = Path.Combine(_dir, "netroute-20260101.log");
+        File.WriteAllText(old, "x");
+        File.SetAttributes(old, FileAttributes.ReadOnly);
+        try
+        {
+            new FileLog(_dir, _time).PruneOldFiles();
+
+            Assert.True(File.Exists(old));
+        }
+        finally
+        {
+            File.SetAttributes(old, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
     public void Prune_on_missing_directory_does_nothing()
     {
         new FileLog(_dir, _time).PruneOldFiles();

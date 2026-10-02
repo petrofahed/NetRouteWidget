@@ -21,6 +21,7 @@ public partial class App : Application
     CardWindow? _card;
     Debouncer? _debouncer;
     bool _startupEnabled;
+    DateTime _lastPruneDay;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -31,56 +32,78 @@ public partial class App : Application
             return;
         }
 
-        var log = _log = new FileLog(AppPaths.LogDir);
-        log.PruneOldFiles();
-        DispatcherUnhandledException += (_, args) =>
+        // Anything failing from here on must not leave a process running with no tray icon.
+        try
         {
-            log.Error("Unhandled UI exception", args.Exception);
-            args.Handled = true;
-        };
+            var log = _log = new FileLog(AppPaths.LogDir);
+            DispatcherUnhandledException += (_, args) =>
+            {
+                log.Error("Unhandled UI exception", args.Exception);
+                args.Handled = true;
+            };
+            PruneLogs();
 
-        var store = new SettingsStore(AppPaths.SettingsFile);
-        var loaded = store.Load();
-        if (loaded.Recovered) log.Error("Settings file was corrupt; defaults restored");
-        var elevated = Elevation.IsElevated();
-        _startupEnabled = _startupTask.Exists();
-        log.Info($"Starting: elevated={elevated}, mode={loaded.Settings.Mode}, startWithWindows={_startupEnabled}");
+            var store = new SettingsStore(AppPaths.SettingsFile);
+            var loaded = store.Load();
+            if (loaded.Recovered) log.Error("Settings file was unreadable or corrupt; using defaults");
+            var elevated = Elevation.IsElevated();
+            _startupEnabled = _startupTask.Exists();
+            log.Info($"Starting: elevated={elevated}, mode={loaded.Settings.Mode}, startWithWindows={_startupEnabled}");
 
-        var controller = _controller = new RouteController(
-            new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
-            loaded.Settings, elevated, store.Save, log.Info);
-        controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
-        controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
+            var controller = _controller = new RouteController(
+                new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
+                loaded.Settings, elevated, store.Save, log.Info);
+            controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
+            controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 
-        _tray = new TrayIcon();
-        _tray.ModeRequested += mode => _ = controller.SetModeAsync(mode);
-        _tray.ToggleCardRequested += ToggleCard;
-        _tray.ShowCardRequested += ShowCard;
-        _tray.StartWithWindowsToggled += ToggleStartWithWindows;
-        _tray.QuitRequested += Quit;
+            _tray = new TrayIcon();
+            _tray.ModeRequested += mode => _ = controller.SetModeAsync(mode);
+            _tray.ToggleCardRequested += ToggleCard;
+            _tray.ShowCardRequested += ShowCard;
+            _tray.StartWithWindowsToggled += ToggleStartWithWindows;
+            _tray.QuitRequested += Quit;
 
-        _card = new CardWindow();
-        _card.ModeRequested += mode => _ = controller.SetModeAsync(mode);
-        _card.HideRequested += HideCard;
-        _card.Moved += (left, top) => controller.UpdateSettings(s => s with { CardLeft = left, CardTop = top });
-        _card.StartWithWindowsToggled += ToggleStartWithWindows;
-        _card.OpenNetworkSettingsRequested += OpenNetworkSettings;
-        _card.ChooseAdaptersRequested += ChooseAdapters;
-        _card.RestartAsAdminRequested += RestartAsAdmin;
-        _card.QuitRequested += Quit;
+            _card = new CardWindow();
+            _card.ModeRequested += mode => _ = controller.SetModeAsync(mode);
+            _card.HideRequested += HideCard;
+            _card.Moved += (left, top) => controller.UpdateSettings(s => s with { CardLeft = left, CardTop = top });
+            _card.StartWithWindowsToggled += ToggleStartWithWindows;
+            _card.OpenNetworkSettingsRequested += OpenNetworkSettings;
+            _card.ChooseAdaptersRequested += ChooseAdapters;
+            _card.RestartAsAdminRequested += RestartAsAdmin;
+            _card.QuitRequested += Quit;
 
-        _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
+            _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
 
-        _debouncer = new Debouncer(TimeSpan.FromMilliseconds(1500), () => _ = controller.RefreshAsync(measureLatency: true));
-        NetworkChange.NetworkAddressChanged += OnNetworkEvent;
-        NetworkChange.NetworkAvailabilityChanged += OnNetworkEvent;
-        _poll.Tick += async (_, _) => await controller.RefreshAsync(measureLatency: true);
+            _debouncer = new Debouncer(TimeSpan.FromMilliseconds(1500), () => _ = controller.RefreshAsync(measureLatency: true));
+            NetworkChange.NetworkAddressChanged += OnNetworkEvent;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkEvent;
+            _poll.Tick += async (_, _) =>
+            {
+                if (DateTime.Today != _lastPruneDay) PruneLogs(); // the widget may run for days
+                await controller.RefreshAsync(measureLatency: true);
+            };
 
-        Render(controller.Status);
-        if (loaded.Settings.CardVisible) ShowCard();
-        UpdatePollInterval();
-        _poll.Start();
-        await controller.RefreshAsync(measureLatency: true);
+            Render(controller.Status);
+            if (loaded.Settings.CardVisible) ShowCard();
+            UpdatePollInterval();
+            _poll.Start();
+            await controller.RefreshAsync(measureLatency: true);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Startup failed", ex);
+            MessageBox.Show($"NetRoute Widget could not start: {ex.Message}", "NetRoute Widget",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            _card?.ForceClose(); // a real close, so OnClosing does not cancel it or persist CardVisible=false
+            Shutdown();
+        }
+    }
+
+    void PruneLogs()
+    {
+        _lastPruneDay = DateTime.Today;
+        _log?.PruneOldFiles();
     }
 
     protected override void OnExit(ExitEventArgs e)

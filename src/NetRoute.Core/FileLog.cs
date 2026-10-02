@@ -19,13 +19,18 @@ public sealed class FileLog(string directory, TimeProvider? time = null)
     {
         if (!Directory.Exists(directory)) return;
         var oldestKept = _time.GetLocalNow().Date.AddDays(-(KeepDays - 1));
-        foreach (var file in Directory.GetFiles(directory, "netroute-*.log"))
+        string[] files;
+        try { files = Directory.GetFiles(directory, "netroute-*.log"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
+
+        foreach (var file in files)
         {
             var stamp = Path.GetFileNameWithoutExtension(file)["netroute-".Length..];
             if (DateTime.TryParseExact(stamp, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day)
                 && day < oldestKept)
             {
-                try { File.Delete(file); } catch (IOException) { }
+                try { File.Delete(file); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
     }

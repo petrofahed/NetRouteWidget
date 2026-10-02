@@ -28,6 +28,7 @@ public sealed class SettingsStore(string path)
     };
 
     /// Missing file: defaults (written). Corrupt file: defaults (rewritten), Recovered = true.
+    /// Unreadable file (locked, access denied): defaults, Recovered = true, file left as it is.
     public SettingsLoadResult Load()
     {
         if (!File.Exists(path))
@@ -47,8 +48,13 @@ public sealed class SettingsStore(string path)
         catch (JsonException)
         {
             var defaults = new AppSettings();
-            Save(defaults);
+            try { Save(defaults); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             return new(defaults, true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new(new AppSettings(), Recovered: true);
         }
     }
 

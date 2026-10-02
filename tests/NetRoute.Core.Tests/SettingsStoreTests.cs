@@ -54,6 +54,33 @@ public sealed class SettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Unreadable_file_loads_defaults_and_is_left_alone()
+    {
+        const string content = "{ \"Mode\": \"Lan\" }";
+        File.WriteAllText(FilePath, content);
+
+        SettingsLoadResult result;
+        using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+            result = new SettingsStore(FilePath).Load();
+
+        Assert.True(result.Recovered);
+        Assert.Equal(new AppSettings(), result.Settings);
+        Assert.Equal(content, File.ReadAllText(FilePath));
+    }
+
+    [Fact]
+    public void Corrupt_file_that_cannot_be_repaired_still_loads_defaults()
+    {
+        File.WriteAllText(FilePath, "{ this is not json");
+        Directory.CreateDirectory(FilePath + ".tmp"); // the repair's temp file cannot be written
+
+        var result = new SettingsStore(FilePath).Load();
+
+        Assert.True(result.Recovered);
+        Assert.Equal(new AppSettings(), result.Settings);
+    }
+
+    [Fact]
     public void Unknown_mode_number_is_treated_as_corrupt()
     {
         File.WriteAllText(FilePath, "{ \"Mode\": 7 }");
