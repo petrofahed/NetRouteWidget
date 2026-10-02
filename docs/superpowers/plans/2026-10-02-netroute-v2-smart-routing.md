@@ -3703,6 +3703,21 @@ Confirm it contains `NetRouteWidget.exe`, `sing-box\sing-box.exe`, `sing-box\LIC
 15. **Widget killed:** kill `NetRouteWidget.exe` in Task Manager while Smart routing runs. `sing-box.exe` disappears with it (job object), the `NetRoute` adapter vanishes, and internet keeps working over v1 routing. Also check after a normal Quit that `Get-NetAdapter -Name NetRoute` and `Get-NetRoute -InterfaceAlias NetRoute` show nothing.
 16. **Speed test with Smart routing ON (phone as default exit):** click ⚡ and check the sing-box debug log: no `speed.cloudflare.com` connection may appear (the probe's sockets are bound to the adapters' own addresses and must bypass the TUN). The phone and LAN numbers must also clearly differ. If the probe shows up in the log, the TUN diverted it: set `IP_UNICAST_IF` (interface index resolved from the source address) on the socket before `Connect`, in `HttpSpeedProbe`, or document the test as "measured with Smart routing off".
 
+17. **Final-review additions (run these too):**
+    - **(a) Hard kills.** After killing sing-box in Task Manager, killing the widget, and running the restore script, `Get-NetAdapter -Name NetRoute` and `Get-NetRoute -InterfaceAlias NetRoute` must both show nothing.
+    - **(b) Probes bypass the TUN.** With Smart routing on, the sing-box log must show no widget connections to `1.1.1.1:443` or `8.8.8.8:443`. With the router's internet down but the cable still in, the LAN must show as offline.
+    - **(c) Kaspersky.** It allows the TUN. The kill-on-close job still works while Kaspersky runs.
+    - **(d) Start with the LAN unplugged.** After a restart of the widget with the cable out, LAN-only items wait and the popup appears. Unmatched traffic still works over the phone.
+    - **(e) Restore, then logon.** Run `Restore-Network.cmd` and answer N to removing the startup task. After the next logon Smart routing is OFF.
+    - **(f) Rule case.** An app rule typed in the wrong case (for example `idman.exe` for `IDMan.exe`) still routes to the LAN.
+    - **(g) IPv6.** Precondition: the phone adapter has no global IPv6 address (`Get-NetIPAddress -InterfaceAlias "Ethernet 5" -AddressFamily IPv6`). If it does, tell the developer.
+    - **(h) TUN name.** The adapter is named exactly `NetRoute` (a stale one would make a new one `NetRoute 2` and break `TunIndex()`).
+    - **(i) Flaky LAN.** Under heavy LAN load, no false waiting popups.
+    - **(j) Carrier block in Phone mode.** The v1 heal flips the Smart routing default exit to the LAN within about 15–30 s, and the card shows it.
+    - **(k) LAN mode.** Switch to LAN mode with Smart routing on: the `NetRoute` adapter stays; unplug the LAN, unmatched traffic goes over the phone while YouTube/Windows Update wait.
+    - **(l) Auto mode.** Switch to Auto: the card says "Smart routing paused in Auto mode" and the `NetRoute` adapter disappears.
+
+
 - [ ] **Step 5: Commit, push and update the PR**
 
 ```powershell

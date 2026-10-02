@@ -1,7 +1,7 @@
 # NetRoute Widget v2: Smart routing — Design
 
 **Date:** 2026-10-02
-**Status:** Approved (user: "start phase 2"); feasibility spike next
+**Status:** Built and reviewed; awaiting on-machine verification by the user
 **Builds on:** `2026-10-02-netroute-widget-v1-design.md` (v1 modes, auto-heal, break-glass)
 
 ## Goal
@@ -46,9 +46,9 @@ While the PC uses the **phone** for internet, keep data-hungry traffic **off 4G*
 
 ### When rules apply
 
-Rules are active only while Smart routing is ON **and** the mode is Phone or Auto. In LAN mode everything goes through the LAN anyway, so sing-box is not needed and is stopped.
+Rules are active only while Smart routing is ON **and** the mode is Phone or LAN (decided during the final review). In **LAN mode** it keeps running too, so that LAN-only items still wait during a LAN problem instead of silently falling back to 4G. In **Auto** mode Smart routing is **paused** (the widget steps aside and Windows decides).
 
-In Auto, non-matching traffic goes through the phone. sing-box needs a fixed default exit, and the user's stated intent is "phone unless saving data".
+The default exit for non-matching traffic follows the mode: Phone mode → the phone (the LAN while v1 auto-heals); LAN mode → the LAN (the phone while v1 auto-heals, and also while the LAN adapter is absent, so unmatched traffic is never stranded). LAN-only items always use the LAN and wait if it is down.
 
 ### Matching precedence (first match wins)
 
@@ -99,7 +99,8 @@ Notes on the list:
   - LAN dies: the "waiting" flow above applies.
 - **v1 interface metrics stay applied underneath** as the safety net. If sing-box stops, its virtual adapter disappears and routing falls back to v1 automatically.
 - **Auto-heal moving the default exit** (phone ↔ LAN) switches sing-box's `default` selector at runtime through its local control API. No restart is needed.
-- **Switching to LAN mode** stops sing-box. Switching back to Phone or Auto starts it again.
+- **Switching between Phone and LAN mode** does not restart sing-box (only the default exit changes). **Switching to Auto** stops it ("Paused in Auto mode"); switching back starts it again.
+- **Starting with the LAN absent** (boot with the cable out, router rebooting): sing-box starts anyway, bound to the last known LAN adapter name (saved in settings) or a placeholder, so LAN-only traffic waits instead of using 4G.
 - **Break-glass:** `Restore-Network.cmd` also stops `sing-box.exe`, and the virtual adapter is removed with it.
 
 ## Architecture
@@ -172,7 +173,10 @@ Notes on the list:
 - **Phone or LAN adapter renamed or recreated** (replug): the config is regenerated and sing-box restarted (about 1 s). Restarts are debounced together with v1's network-change debounce.
 - **The control API doesn't answer:** a health ping fails 3 times in a row, which is treated as a crash.
 - **Not elevated:** Smart routing needs admin rights for the virtual adapter. The switch is disabled with the same "Read-only — restart as admin" hint as v1.
-- **Quitting the widget** stops sing-box. Routing is left as v1 left it.
+- **Quitting the widget** stops sing-box. Routing is left as v1 left it. A cancelled sign-out does not stop it; a widget crash or kill takes sing-box down with it (Windows job object), and `KillOrphans` cleans up any leftover at the next start.
+- **Break-glass:** `Restore-Network.cmd` also stops sing-box, switches the saved Smart routing setting off (so it does not come back at the next logon), and reports a leftover `NetRoute` adapter.
+- **Config delivery:** the generated sing-box config is passed on stdin; no config file is written (the elevated process must not read a user-writable file).
+- **Matching:** app rules match the executable file name case-insensitively (`process_path_regex`), and sing-box resolves IPv4 only (`dns.strategy = ipv4_only`).
 
 ## Testing
 
