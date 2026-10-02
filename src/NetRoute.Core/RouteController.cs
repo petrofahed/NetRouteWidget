@@ -22,6 +22,16 @@ public sealed class RouteController
     bool _hasRefreshed;
     bool _userChangePending;
 
+    /// Consecutive failed checks of the preferred adapter (while the backup answers) before healing.
+    public const int HealAfterFailedChecks = 3;
+
+    /// Consecutive good checks of the preferred adapter before healing ends.
+    public const int RecoverAfterGoodChecks = 3;
+
+    // Heal state is read and written only while holding _gate.
+    bool _healing;
+    int _healCount;
+
     public RouteController(
         IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
         AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log)
@@ -64,25 +74,29 @@ public sealed class RouteController
             var mode = Settings.Mode;
             var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
 
-            string? error = null;
-            if (before.CanModify && !_engine.IsInSync(mode, detection))
-            {
-                _log($"Metrics differ from {mode} mode; applying");
-                var result = _engine.Apply(mode, detection);
-                if (!result.Success)
-                {
-                    error = result.Error;
-                    _log($"Apply {mode} failed: {result.Error}");
-                }
-            }
-
             var (phoneMs, lanMs) = measureLatency
                 ? await MeasureAsync(detection, ct)
                 : (detection.Phone is null ? null : before.PhoneLatencyMs, detection.Lan is null ? null : before.LanLatencyMs);
 
+            UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
+            var effective = EffectiveMode(mode);
+
+            string? error = null;
+            if (before.CanModify && !_engine.IsInSync(effective, detection))
+            {
+                _log($"Metrics differ from {effective} metrics; applying");
+                var result = _engine.Apply(effective, detection);
+                if (!result.Success)
+                {
+                    error = result.Error;
+                    _log($"Apply {effective} failed: {result.Error}");
+                }
+            }
+
             var after = before with
             {
                 Mode = mode,
+                IsHealing = _healing,
                 Adapters = detection,
                 ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
@@ -117,6 +131,7 @@ public sealed class RouteController
         await _gate.WaitAsync(ct);
         try
         {
+            ResetHealing();
             var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
             var result = _engine.Apply(mode, detection);
             if (result.Success)
@@ -133,6 +148,7 @@ public sealed class RouteController
             Publish(Status with
             {
                 Mode = Settings.Mode,
+                IsHealing = _healing,
                 Adapters = detection,
                 ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
@@ -170,6 +186,7 @@ public sealed class RouteController
                 // Inside the gate: a refresh already queued must still see the old overrides,
                 // so Status.Adapters below is the pair we are replacing, not the new one.
                 var previous = Status.Adapters;
+                ResetHealing();
                 SaveOverrides();
                 var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
                 foreach (var old in new[] { previous.Phone, previous.Lan })
@@ -194,6 +211,54 @@ public sealed class RouteController
         }
 
         await RefreshAsync(measureLatency: true, ct);
+    }
+
+    /// While healing, the backup adapter gets the preferred metric; the saved mode never changes.
+    RoutingMode EffectiveMode(RoutingMode mode) => !_healing ? mode : mode switch
+    {
+        RoutingMode.Phone => RoutingMode.Lan,
+        RoutingMode.Lan => RoutingMode.Phone,
+        _ => mode,
+    };
+
+    void ResetHealing()
+    {
+        _healing = false;
+        _healCount = 0;
+    }
+
+    void UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
+    {
+        var (preferred, backup, preferredMs, backupMs) = mode switch
+        {
+            RoutingMode.Phone => (adapters.Phone, adapters.Lan, phoneMs, lanMs),
+            RoutingMode.Lan => (adapters.Lan, adapters.Phone, lanMs, phoneMs),
+            _ => ((AdapterInfo?)null, (AdapterInfo?)null, (int?)null, (int?)null),
+        };
+
+        if (!canModify || preferred is null || backup is null)
+        {
+            if (_healing) _log("Auto-heal ended: preferred or backup adapter unavailable");
+            ResetHealing();
+            return;
+        }
+        if (!measured) return;
+
+        if (!_healing)
+        {
+            _healCount = preferredMs is null && backupMs is not null ? _healCount + 1 : 0;
+            if (_healCount < HealAfterFailedChecks) return;
+            _healing = true;
+            _healCount = 0;
+            _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
+        }
+        else
+        {
+            _healCount = preferredMs is not null ? _healCount + 1 : 0;
+            if (_healCount < RecoverAfterGoodChecks) return;
+            ResetHealing();
+            _log($"Auto-heal ended: {preferred.Name} has internet again");
+        }
     }
 
     async Task<(int?, int?)> MeasureAsync(DetectionResult adapters, CancellationToken ct)

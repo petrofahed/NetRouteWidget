@@ -159,4 +159,13 @@ public class StatusPresenterTests
         Assert.Equal(InternetPath.Other, NetworkStatus.ResolvePath(40, adapters));
         Assert.Equal(InternetPath.None, NetworkStatus.ResolvePath(null, adapters));
     }
+
+    [Fact]
+    public void Healing_header_explains_the_phone_has_no_internet()
+    {
+        var view = StatusPresenter.Present(Status(path: InternetPath.Lan) with { IsHealing = true });
+
+        Assert.Equal("Internet via LAN (phone has no internet)", view.Header);
+        Assert.True(view.TrayBadge);
+    }
 }

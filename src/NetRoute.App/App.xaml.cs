@@ -10,7 +10,7 @@ namespace NetRoute.App;
 public partial class App : Application
 {
     static readonly TimeSpan VisiblePoll = TimeSpan.FromSeconds(5);
-    static readonly TimeSpan HiddenPoll = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan HiddenPoll = TimeSpan.FromSeconds(10);
 
     readonly SingleInstance _instance = new();
     readonly StartupTask _startupTask = new();

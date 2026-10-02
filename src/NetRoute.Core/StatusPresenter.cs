@@ -52,15 +52,15 @@ public static class StatusPresenter
         {
             InternetPath.None => "No internet",
             InternetPath.Other => "Internet via other adapter",
-            InternetPath.Phone when s.IsFallback => $"Internet via PHONE ({Reason(s.Adapters.Lan, "LAN")})",
-            InternetPath.Lan when s.IsFallback => $"Internet via LAN ({Reason(s.Adapters.Phone, "phone")})",
+            InternetPath.Phone when s.IsFallback => $"Internet via PHONE ({Reason(s.Adapters.Lan, "LAN", s.IsHealing)})",
+            InternetPath.Lan when s.IsFallback => $"Internet via LAN ({Reason(s.Adapters.Phone, "phone", s.IsHealing)})",
             InternetPath.Phone => "Internet via PHONE",
             _ => "Internet via LAN",
         };
     }
 
-    static string Reason(AdapterInfo? preferred, string name) =>
-        preferred is null ? $"{name} offline" : $"{name} not routing";
+    static string Reason(AdapterInfo? preferred, string name, bool healing) =>
+        preferred is null ? $"{name} offline" : healing ? $"{name} has no internet" : $"{name} not routing";
 
     static string? NoteText(NetworkStatus s) =>
         s.Ipv6Path != InternetPath.None && s.ActivePath != InternetPath.None && s.Ipv6Path != s.ActivePath

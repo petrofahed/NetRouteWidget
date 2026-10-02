@@ -229,4 +229,148 @@ public class RouteControllerTests
             "Old LAN adapter (index 10) must be reset to automatic by SetOverridesAsync");
         Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(12, IpFamily.IPv4));
     }
+
+    async Task RefreshTimes(RouteController controller, int times)
+    {
+        for (var i = 0; i < times; i++) await controller.RefreshAsync(measureLatency: true);
+    }
+
+    [Fact]
+    public async Task Phone_without_internet_heals_to_lan_after_three_failed_checks()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+
+        await RefreshTimes(controller, 2);
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+
+        _routes.BestV4 = 10; // Windows follows the swapped metrics
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal(RoutingMode.Phone, controller.Status.Mode);
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Empty(_saved);
+        Assert.Equal("Phone lost internet — internet via LAN", _toasts.Last());
+    }
+
+    [Fact]
+    public async Task Healing_returns_to_phone_after_three_good_checks()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        _routes.BestV4 = 10;
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+
+        _probe.BySource["192.168.42.11"] = 38;
+        await RefreshTimes(controller, 2);
+        Assert.True(controller.Status.IsHealing);
+
+        _routes.BestV4 = 31;
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal("Phone back — internet via Phone", _toasts.Last());
+    }
+
+    [Fact]
+    public async Task No_heal_when_the_backup_has_no_internet_either()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        _probe.BySource["192.168.86.42"] = null;
+
+        await RefreshTimes(controller, 5);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task A_good_check_resets_the_failure_count()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+
+        foreach (var phoneMs in new int?[] { null, null, 38, null, null })
+        {
+            _probe.BySource["192.168.42.11"] = phoneMs;
+            await controller.RefreshAsync(measureLatency: true);
+        }
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Lan_mode_heals_to_phone()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+
+        await RefreshTimes(controller, 3);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal(RoutingMode.Lan, controller.Settings.Mode);
+    }
+
+    [Fact]
+    public async Task Auto_mode_and_read_only_never_heal()
+    {
+        var auto = Create(new AppSettings { Mode = RoutingMode.Auto });
+        await auto.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(auto, 5);
+        Assert.False(auto.Status.IsHealing);
+        Assert.All(_metrics.State.Values, s => Assert.True(s.UseAutomatic));
+
+        var readOnly = Create(canModify: false);
+        await RefreshTimes(readOnly, 5);
+        Assert.False(readOnly.Status.IsHealing);
+        Assert.DoesNotContain(_metrics.SetCalls, c => c.Metric is not null);
+    }
+
+    [Fact]
+    public async Task User_mode_change_cancels_healing()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+
+        await controller.SetModeAsync(RoutingMode.Phone);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Healing_ends_when_the_backup_disappears()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 10);
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
 }
