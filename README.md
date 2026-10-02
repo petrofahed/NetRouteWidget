@@ -22,6 +22,22 @@ The widget only changes **interface metrics**, Windows' priority numbers for eac
 
 It never deletes routes, so the other connection always remains a working fallback. LAN-subnet traffic always uses the LAN, because Windows has a direct route for it.
 
+## Smart routing (v2)
+
+Keep data-hungry traffic off 4G while the PC uses the phone:
+
+- **Built-in items, all on by default** (each has its own toggle):
+  - System updates: Windows Update, Microsoft Store
+  - Cloud sync: OneDrive, Google Drive, Dropbox, iCloud
+  - Video & social: YouTube, Facebook, Instagram
+  - Game launchers: Steam, Epic, Battle.net, Xbox
+- **Your own rules:** add any app (`.exe`) or website (subdomains are included).
+- **How it works:** matching traffic goes through the LAN. If the LAN is down it **waits**, and a popup offers "Use phone until LAN is back".
+- **What it saves:** the card and the ⚙ page show how much was kept off 4G today.
+- **Speed test:** ⚡ on the card measures both connections (about 5 MB of mobile data).
+
+Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights and is only active in Phone or Auto mode. Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
+
 ## Install
 
 Requires the .NET 10 Desktop Runtime. Run from an **administrator** PowerShell in the repo folder:
@@ -39,7 +55,7 @@ The install goes under *Program Files* on purpose. That folder is writable only 
 
 **Easiest:** double-click `Restore-Network.cmd` next to the exe (it is also in `tools/`). It:
 
-- stops the widget;
+- stops the widget and the Smart routing helper (sing-box);
 - gives every adapter back to Windows' automatic priority;
 - sets the widget to Auto mode;
 - offers to remove the startup task.

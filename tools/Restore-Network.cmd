@@ -30,6 +30,8 @@ exit /b 0
 :admin
 echo Stopping NetRoute Widget...
 taskkill /IM NetRouteWidget.exe /F >nul 2>&1
+echo Stopping sing-box (Smart routing)...
+taskkill /IM sing-box.exe /F >nul 2>&1
 
 echo Restoring automatic interface metrics...
 echo Note: this resets ALL adapters with a manual metric, including ones not set by NetRoute Widget.
@@ -53,4 +55,5 @@ exit /b 0
 echo Dry run - nothing will be changed.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = @(Get-NetIPInterface | Where-Object AutomaticMetric -eq 'Disabled'); if ($list.Count -eq 0) { Write-Host '  nothing to restore' } else { $list | ForEach-Object { Write-Host ('  would restore ' + $_.InterfaceAlias + ' (' + $_.AddressFamily + ', metric ' + $_.InterfaceMetric + ')') } }; Write-Host ('  settings file: ' + (Join-Path $env:APPDATA 'NetRouteWidget\settings.json'))"
 schtasks /Query /TN NetRouteWidget >nul 2>&1 && (echo   startup task: present) || (echo   startup task: not present)
+tasklist /FI "IMAGENAME eq sing-box.exe" 2>nul | find /I "sing-box.exe" >nul && (echo   sing-box: running) || (echo   sing-box: not running)
 exit /b 0
