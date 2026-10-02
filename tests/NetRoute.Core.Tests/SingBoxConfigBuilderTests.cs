@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace NetRoute.Core.Tests;
 
@@ -50,7 +51,8 @@ public class SingBoxConfigBuilderTests
         // youtube: domains only -> index 3; onedrive: process -> 4, domains -> 5
         Assert.Equal(new Dictionary<int, string> { [3] = "youtube", [4] = "onedrive", [5] = "onedrive" }, config.RuleIndexToEntryId);
         Assert.Equal("lan-only", (string)rules[4]!["outbound"]!);
-        Assert.Equal("OneDrive.exe", (string)rules[4]!["process_name"]![0]!);
+        Assert.Equal(@"(?i)\\OneDrive\.exe$", (string)rules[4]!["process_path_regex"]![0]!);
+        Assert.Null(rules[4]!["process_name"]); // process_name is an exact, case-sensitive match
         Assert.Null(rules[4]!["domain_suffix"]); // never AND a process with domains
         Assert.Equal("onedrive.live.com", (string)rules[5]!["domain_suffix"]![0]!);
     }
@@ -105,5 +107,47 @@ public class SingBoxConfigBuilderTests
 
         Assert.Empty(config.RuleIndexToEntryId);
         Assert.Equal(3, Parse(config)["route"]!["rules"]!.AsArray().Count);
+    }
+
+    [Fact]
+    public void Process_rules_use_one_escaped_case_insensitive_path_regex_per_process()
+    {
+        var rules = new RuleSet([new RuleEntry("app", "My App", ["My App.exe", "qbittorrent.exe"], [])]);
+
+        var config = SingBoxConfigBuilder.Build(Input() with { Rules = rules });
+
+        var rule = Parse(config)["route"]!["rules"]![3]!;
+        var regexes = rule["process_path_regex"]!.AsArray().Select(n => (string)n!).ToList();
+        Assert.Equal(2, regexes.Count);
+        Assert.Equal(@"(?i)\\My\ App\.exe$", regexes[0]); // dot and space are escaped
+        Assert.Equal(new Dictionary<int, string> { [3] = "app" }, config.RuleIndexToEntryId);
+
+        // The regex must behave as intended (sing-box uses Go RE2; this subset means the same there).
+        Assert.Matches(regexes[0], @"C:\Tools\MY APP.EXE");
+        Assert.Matches(regexes[0], @"C:\Tools\my app.exe");
+        Assert.DoesNotMatch(regexes[0], @"C:\Tools\xMy App.exe");   // must start at a path separator
+        Assert.DoesNotMatch(regexes[0], @"C:\Tools\My AppXexe");    // the dot is literal
+        Assert.DoesNotMatch(regexes[0], @"C:\Tools\My App.exe.bak"); // must end the path
+        Assert.Matches(regexes[1], @"D:\torrents\QBitTorrent.EXE");
+    }
+
+    [Fact]
+    public void Process_path_regex_survives_json_round_trip()
+    {
+        const string name = "weird+name (1).exe";
+
+        var config = SingBoxConfigBuilder.Build(Input() with { Rules = new RuleSet([new RuleEntry("w", "W", [name], [])]) });
+
+        var parsed = (string)Parse(config)["route"]!["rules"]![3]!["process_path_regex"]![0]!;
+        Assert.Equal(SingBoxConfigBuilder.ProcessPathRegex(name), parsed);
+        Assert.Matches(parsed, @"C:\x\WEIRD+NAME (1).EXE");
+    }
+
+    [Fact]
+    public void Dns_resolves_ipv4_only_so_nothing_goes_to_ipv6_addresses_that_would_bypass_the_ipv4_tun()
+    {
+        var root = Parse(SingBoxConfigBuilder.Build(Input()));
+
+        Assert.Equal("ipv4_only", (string)root["dns"]!["strategy"]!);
     }
 }

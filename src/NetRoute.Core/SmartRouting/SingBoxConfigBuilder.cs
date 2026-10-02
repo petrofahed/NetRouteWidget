@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 
 namespace NetRoute.Core;
@@ -29,6 +30,11 @@ public static class SingBoxConfigBuilder
 
     static readonly string[] RouterLocalSuffixes = ["lan", "local", "home", "home.arpa", "internal"];
 
+    /// sing-box's process_name is an exact, case-sensitive match on the file name, but Windows file names are not
+    /// case-sensitive (and users type "Steam.exe" for steam.exe). A path regex ending in the escaped name, with a
+    /// leading separator so "xfoo.exe" does not match "foo.exe", is the case-insensitive form. Go RE2 syntax.
+    public static string ProcessPathRegex(string name) => $@"(?i)\\{Regex.Escape(name)}$";
+
     public static SingBoxConfig Build(SingBoxConfigInput input)
     {
         var rules = new JsonArray
@@ -40,11 +46,11 @@ public static class SingBoxConfigBuilder
         var ruleMap = new Dictionary<int, string>();
         foreach (var entry in input.Rules.Entries)
         {
-            // sing-box ANDs process_name with domain fields inside one rule, so they get separate rules.
+            // sing-box ANDs process fields with domain fields inside one rule, so they get separate rules.
             if (entry.Processes.Count > 0)
             {
                 ruleMap[rules.Count] = entry.Id;
-                rules.Add(new JsonObject { ["process_name"] = Strings(entry.Processes), ["outbound"] = LanOnlyTag });
+                rules.Add(new JsonObject { ["process_path_regex"] = Strings(entry.Processes.Select(ProcessPathRegex)), ["outbound"] = LanOnlyTag });
             }
             if (entry.Domains.Count > 0)
             {
@@ -67,7 +73,8 @@ public static class SingBoxConfigBuilder
         var root = new JsonObject
         {
             ["log"] = new JsonObject { ["level"] = "debug", ["timestamp"] = true },
-            ["dns"] = new JsonObject { ["servers"] = dnsServers, ["rules"] = dnsRules, ["final"] = "remote" },
+            // ipv4_only: the TUN only captures IPv4, so an AAAA answer would send traffic around it (and around the rules).
+            ["dns"] = new JsonObject { ["servers"] = dnsServers, ["rules"] = dnsRules, ["final"] = "remote", ["strategy"] = "ipv4_only" },
             ["inbounds"] = new JsonArray
             {
                 new JsonObject

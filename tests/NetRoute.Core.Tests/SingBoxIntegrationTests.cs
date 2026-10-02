@@ -56,6 +56,69 @@ public partial class SingBoxIntegrationTests
     }
 
     [Fact]
+    public void Config_with_process_rules_passes_sing_box_check()
+    {
+        var rules = new RuleSet([new RuleEntry("app", "My App", ["My App.exe", "qbittorrent.exe"], ["example.com"])]);
+        var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
+            rules, "Ethernet 5", "Ethernet", "192.168.86.1", RouteExit.Phone, false, 41234, "s3cret"));
+        var path = Path.Combine(Path.GetTempPath(), $"netroute-check-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, config.Json);
+        try
+        {
+            var (exit, output) = RunSingBox("check", "-c", path);
+            Assert.True(exit == 0, output);
+        }
+        finally { File.Delete(path); }
+    }
+
+    /// The rule uses THIS test process's file name in the WRONG case: sing-box's process_name would not match it,
+    /// the case-insensitive path regex must. Loopback proxy only, no TUN; the target is an unrouted TEST-NET address
+    /// and the "lan" outbound is bound to a missing adapter, so nothing leaves the machine.
+    [Fact]
+    public async Task Process_path_regex_matches_the_process_name_in_the_wrong_case()
+    {
+        var proxyPort = NetRoute.Core.Windows.FreePort.Next();
+        var apiPort = NetRoute.Core.Windows.FreePort.Next();
+        var wrongCase = Path.GetFileName(Environment.ProcessPath!).ToUpperInvariant();
+        Assert.NotEqual(Path.GetFileName(Environment.ProcessPath!), wrongCase); // otherwise the test proves nothing
+        var regex = System.Text.Json.JsonSerializer.Serialize(SingBoxConfigBuilder.ProcessPathRegex(wrongCase));
+        var config = $$"""
+            { "log": { "level": "debug", "timestamp": true },
+              "inbounds": [ { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": {{proxyPort}} } ],
+              "outbounds": [
+                { "type": "direct", "tag": "phone" },
+                { "type": "direct", "tag": "lan", "bind_interface": "NoSuchAdapter" },
+                { "type": "selector", "tag": "lan-only", "outbounds": ["lan", "phone"], "default": "lan" },
+                { "type": "selector", "tag": "default", "outbounds": ["phone", "lan"], "default": "phone" } ],
+              "route": { "rules": [ { "action": "sniff" }, { "process_path_regex": [{{regex}}], "outbound": "lan-only" } ], "final": "default" },
+              "experimental": { "clash_api": { "external_controller": "127.0.0.1:{{apiPort}}", "secret": "itest" } } }
+            """;
+        var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
+        var events = new System.Collections.Concurrent.ConcurrentQueue<SingBoxLogEvent>();
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        host.LineReceived += l => { lines.Enqueue(l); if (SingBoxLogParser.Parse(l) is { } e) events.Enqueue(e); };
+        using var api = new NetRoute.Core.Windows.SingBoxApi(apiPort, "itest");
+
+        await host.StartAsync(config);
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => api.GetConnectionsAsync().Result is not null, TimeSpan.FromSeconds(10)), "API never came up");
+            using var client = new HttpClient(new HttpClientHandler { Proxy = new System.Net.WebProxy($"http://127.0.0.1:{proxyPort}"), UseProxy = true })
+                { Timeout = TimeSpan.FromSeconds(10) };
+
+            await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("http://192.0.2.1:81/")); // lan-only -> missing adapter
+
+            Assert.True(SpinWait.SpinUntil(() => events.OfType<RuleMatched>().Any(m => m.Outbound == "lan-only"), TimeSpan.FromSeconds(10)),
+                "the process rule never matched; sing-box said: " + string.Join(" | ", lines));
+            Assert.Equal(1, events.OfType<RuleMatched>().First(m => m.Outbound == "lan-only").RuleIndex);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task Host_api_and_parser_work_end_to_end_through_a_local_proxy()
     {
         var proxyPort = NetRoute.Core.Windows.FreePort.Next();
