@@ -15,4 +15,5 @@ public sealed record AdapterInfo(
     bool IsUp,
     bool HasGateway,
     string? IPv4,
-    string Mac);
+    string Mac,
+    string? DnsServer = null);

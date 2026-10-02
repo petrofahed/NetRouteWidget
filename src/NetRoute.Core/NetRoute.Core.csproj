@@ -10,4 +10,8 @@
     <InternalsVisibleTo Include="NetRoute.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="rules\builtin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

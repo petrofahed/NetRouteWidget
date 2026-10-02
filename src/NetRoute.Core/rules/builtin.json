@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "groups": [
+    { "id": "updates", "name": "System updates", "items": [
+      { "id": "windows-update", "name": "Windows Update & Delivery Optimization",
+        "domains": ["windowsupdate.com", "update.microsoft.com", "delivery.mp.microsoft.com", "dl.delivery.mp.microsoft.com",
+                    "download.windowsupdate.com", "tlu.dl.delivery.mp.microsoft.com", "do.dsp.mp.microsoft.com"] },
+      { "id": "microsoft-store", "name": "Microsoft Store",
+        "domains": ["storeedgefd.dsx.mp.microsoft.com", "displaycatalog.mp.microsoft.com", "store-images.s-microsoft.com"] } ] },
+    { "id": "sync", "name": "Cloud sync", "items": [
+      { "id": "onedrive", "name": "OneDrive",
+        "processes": ["OneDrive.exe", "OneDrive.Sync.Service.exe"],
+        "domains": ["onedrive.live.com", "storage.live.com", "onedrive.com", "1drv.ms"] },
+      { "id": "google-drive", "name": "Google Drive", "processes": ["GoogleDriveFS.exe"] },
+      { "id": "dropbox", "name": "Dropbox", "processes": ["Dropbox.exe"] },
+      { "id": "icloud", "name": "iCloud", "processes": ["iCloudDrive.exe", "iCloudServices.exe", "iCloudPhotos.exe"] } ] },
+    { "id": "video", "name": "Video & social", "items": [
+      { "id": "youtube", "name": "YouTube",
+        "domains": ["youtube.com", "googlevideo.com", "ytimg.com", "youtu.be", "youtube-nocookie.com"] },
+      { "id": "facebook", "name": "Facebook",
+        "domains": ["facebook.com", "fbcdn.net", "facebook.net", "fb.com", "fbsbx.com"] },
+      { "id": "instagram", "name": "Instagram", "domains": ["instagram.com", "cdninstagram.com"] } ] },
+    { "id": "games", "name": "Game launchers", "items": [
+      { "id": "steam", "name": "Steam", "processes": ["steam.exe"], "domains": ["steamcontent.com", "steamstatic.com"] },
+      { "id": "epic", "name": "Epic Games", "processes": ["EpicGamesLauncher.exe"],
+        "domains": ["epicgames-download1.akamaized.net"] },
+      { "id": "battlenet", "name": "Battle.net", "processes": ["Battle.net.exe", "Agent.exe"],
+        "domains": ["blzddist1-a.akamaihd.net", "blizzard.com"] },
+      { "id": "xbox", "name": "Xbox / Microsoft gaming", "processes": ["XboxPcApp.exe", "gamingservices.exe"],
+        "domains": ["assets1.xboxlive.com"] } ] }
+  ]
+}
