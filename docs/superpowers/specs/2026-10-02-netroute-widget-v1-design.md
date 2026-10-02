@@ -1,7 +1,7 @@
 # NetRoute Widget v1 — Design
 
 **Date:** 2026-10-02
-**Status:** Approved in brainstorming, pending written-spec review
+**Status:** Implemented (v1)
 
 ## Goal
 
@@ -45,6 +45,19 @@ Local traffic already works regardless of the default route, because Windows has
 - Up/down state of each adapter, its IPv4 address, and its latency (TCP-connect probe sourced from that adapter's address).
 - A fallback state: mode is Phone, but the phone is offline and internet is going via the LAN (or the reverse in LAN mode).
 
+### Break-glass protections (added 2026-10-02)
+
+- **Auto-heal.** In Phone or LAN mode (elevated only), if the preferred adapter's latency probe fails on 3 consecutive checks while the backup adapter answers, the widget temporarily applies the opposite metrics, so the backup is preferred. The saved mode is unchanged.
+  - The card header reads "Internet via LAN (phone has no internet)", and the toast reads "Phone lost internet — internet via LAN".
+  - The preferred adapter keeps being probed. After 3 consecutive good checks the original metrics come back, with the toast "Phone back — internet via Phone".
+  - Healing ends immediately when the user changes the mode or the adapters, or when the backup adapter disappears.
+  - Repeated heals soon after recovering double the good checks needed before switching back (up to 48); a calm period of 60 checks resets it.
+  - Auto mode never heals.
+- **Restore script.** `Restore-Network.cmd` (in `tools/`, shipped next to the exe) self-elevates, stops the widget, sets every interface with a manual metric back to automatic, sets the saved mode to Auto, and optionally removes the startup task.
+  - `/check` is a dry run that changes nothing.
+  - It works without the app.
+  - It resets *all* manually set metrics, including ones the widget did not set.
+
 ## Architecture
 
 Approach: **one elevated WPF app** (.NET 10). The routing logic lives in a separate class library so it can later move into a Windows service (v3) without a rewrite.
@@ -72,7 +85,7 @@ NetRouteWidget.sln
 - **RoutingEngine**: `Apply(Mode)` sets interface metrics through the IP Helper API (`GetIpInterfaceEntry` / `SetIpInterfaceEntry`; `UseAutomaticMetric` for Auto), then reads them back to verify. It returns a result with the metrics actually applied, or an error with the reason.
 - **Network monitoring** (implemented as a `Debouncer` plus a `RouteController` in Core, driven by the app):
   - listens to .NET's `NetworkChange.NetworkAddressChanged` / `NetworkAvailabilityChanged` and debounces bursts (about 1.5 s quiet period) into a single refresh;
-  - also runs a poll refresh every 5 s while the card is visible and every 30 s while it is hidden, so a missed event heals itself;
+  - also runs a poll refresh every 5 s while the card is visible and every 10 s while it is hidden, so a missed event heals itself;
   - determines the active internet interface with `GetBestInterfaceEx` for an IPv4 target (1.1.1.1) **and** an IPv6 target (2606:4700:4700::1111). If IPv6 resolves to a different adapter than IPv4 (e.g. only the LAN has an IPv6 default route), the card shows a warning note, because metrics can only choose between routes that exist;
   - measures per-adapter latency with a TCP connect to 1.1.1.1:443 from a socket bound to each adapter's IPv4 address (2 s timeout). Windows' strong-host model sends it out of that adapter. TCP is used because some networks drop ICMP.
 - **Settings**: JSON at `%AppData%\NetRouteWidget\settings.json` holding the mode, adapter overrides, card position, card visibility and start-with-Windows. A missing or corrupt file means defaults are used and the file is rewritten.

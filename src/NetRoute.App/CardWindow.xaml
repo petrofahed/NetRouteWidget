@@ -1,0 +1,125 @@
+<Window x:Class="NetRoute.App.CardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NetRoute Widget" Width="290" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
+        FontFamily="Segoe UI" FontSize="12">
+    <Window.Resources>
+        <Style x:Key="IconButton" TargetType="Button">
+            <Setter Property="Width" Value="22" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Margin" Value="2,0,0,0" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonBackground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ModeButton" TargetType="ToggleButton">
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="Padding" Value="0,6" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="Background" Value="{DynamicResource ButtonBackground}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Bd" CornerRadius="6" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Accent}" />
+                                <Setter Property="Foreground" Value="White" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="Primary" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="Secondary" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </Window.Resources>
+
+    <Border CornerRadius="10" Padding="12,10" BorderThickness="1"
+            Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
+        <StackPanel>
+            <DockPanel Background="Transparent" MouseLeftButtonDown="OnDrag">
+                <Button DockPanel.Dock="Right" Content="✕" Style="{StaticResource IconButton}" Click="OnHide" ToolTip="Hide to tray" />
+                <Button x:Name="MenuButton" DockPanel.Dock="Right" Content="⋮" Style="{StaticResource IconButton}" Click="OnMenu" ToolTip="Options">
+                    <Button.ContextMenu>
+                        <ContextMenu x:Name="OptionsMenu">
+                            <MenuItem x:Name="StartWithWindowsItem" Header="Start with Windows" IsCheckable="True" Click="OnStartWithWindows" />
+                            <MenuItem Header="Choose adapters…" Click="OnChooseAdapters" />
+                            <MenuItem Header="Open network settings" Click="OnOpenNetworkSettings" />
+                            <Separator />
+                            <MenuItem Header="Quit" Click="OnQuit" />
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <TextBlock x:Name="Header" FontSize="13" FontWeight="SemiBold" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+            <TextBlock x:Name="Note" Visibility="Collapsed" Margin="0,2,0,0" TextWrapping="Wrap" Foreground="{DynamicResource Warning}" />
+
+            <Border Height="1" Margin="0,8" Background="{DynamicResource CardBorder}" />
+
+            <Grid Background="Transparent" MouseLeftButtonDown="OnDrag">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="52" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="22" />
+                    <RowDefinition Height="22" />
+                </Grid.RowDefinitions>
+                <Ellipse x:Name="PhoneDot" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                <TextBlock x:Name="PhoneLabel" Grid.Column="1" Style="{StaticResource Primary}" />
+                <TextBlock x:Name="PhoneAddress" Grid.Column="2" Style="{StaticResource Secondary}" />
+                <TextBlock x:Name="PhoneLatency" Grid.Column="3" Style="{StaticResource Secondary}" />
+                <Ellipse x:Name="LanDot" Grid.Row="1" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                <TextBlock x:Name="LanLabel" Grid.Row="1" Grid.Column="1" Style="{StaticResource Primary}" />
+                <TextBlock x:Name="LanAddress" Grid.Row="1" Grid.Column="2" Style="{StaticResource Secondary}" />
+                <TextBlock x:Name="LanLatency" Grid.Row="1" Grid.Column="3" Style="{StaticResource Secondary}" />
+            </Grid>
+
+            <Border Height="1" Margin="0,8" Background="{DynamicResource CardBorder}" />
+
+            <UniformGrid Columns="3">
+                <ToggleButton x:Name="PhoneButton" Content="Phone" Tag="Phone" Style="{StaticResource ModeButton}" Click="OnMode" />
+                <ToggleButton x:Name="LanButton" Content="LAN" Tag="Lan" Style="{StaticResource ModeButton}" Click="OnMode" />
+                <ToggleButton x:Name="AutoButton" Content="Auto" Tag="Auto" Style="{StaticResource ModeButton}" Click="OnMode" />
+            </UniformGrid>
+
+            <TextBlock x:Name="AdminHint" Visibility="Collapsed" Margin="0,8,0,0" HorizontalAlignment="Center">
+                <Hyperlink Click="OnRestartAsAdmin" Foreground="{DynamicResource Warning}">Read-only — restart as admin</Hyperlink>
+            </TextBlock>
+        </StackPanel>
+    </Border>
+</Window>

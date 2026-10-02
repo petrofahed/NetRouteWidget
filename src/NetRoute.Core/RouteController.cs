@@ -1,0 +1,346 @@
+using System.Net;
+
+namespace NetRoute.Core;
+
+/// Orchestrates detect → apply metrics → resolve path → publish status.
+/// Work is serialised by a gate, so it is safe to call from timers, network events and the UI.
+/// Events are raised on the calling thread; UI subscribers must marshal to their dispatcher.
+public sealed class RouteController
+{
+    public static readonly IPAddress ProbeTargetV4 = IPAddress.Parse("1.1.1.1");
+    public static readonly IPAddress ProbeTargetV6 = IPAddress.Parse("2606:4700:4700::1111");
+
+    readonly IAdapterSource _adapters;
+    readonly IRouteQuery _routes;
+    readonly ILatencyProbe _probe;
+    readonly RoutingEngine _engine;
+    readonly Action<AppSettings> _persist;
+    readonly Action<string> _log;
+    readonly SemaphoreSlim _gate = new(1, 1);
+    readonly Lock _settingsLock = new();
+    AppSettings _settings;
+    bool _hasRefreshed;
+    bool _userChangePending;
+
+    /// Consecutive failed checks of the preferred adapter (while the backup answers) before healing.
+    public const int HealAfterFailedChecks = 3;
+
+    /// Consecutive good checks of the preferred adapter before healing ends.
+    public const int RecoverAfterGoodChecks = 3;
+
+    /// Upper limit for the good checks needed before healing ends, however often healing repeats.
+    public const int MaxRecoverAfterGoodChecks = 48;
+
+    /// Measured checks without healing, after a heal ended, that return the backoff to the base rule.
+    public const int CalmChecksToResetBackoff = 60;
+
+    // Heal state is read and written only while holding _gate.
+    bool _healing;
+    int _healCount;
+    int _recoverThreshold = RecoverAfterGoodChecks;
+    int _checksSinceHealEnded;
+    bool _hadHeal;
+    bool _healSticky;
+
+    /// Good checks of the preferred adapter that end healing now; grows while healing keeps repeating.
+    internal int RecoverThreshold => _recoverThreshold;
+
+    public RouteController(
+        IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
+        AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log)
+    {
+        _adapters = adapters;
+        _routes = routes;
+        _probe = probe;
+        _engine = new RoutingEngine(metrics);
+        _settings = settings;
+        _persist = persist;
+        _log = log;
+        Status = NetworkStatus.Initial(settings.Mode, canModify);
+    }
+
+    public NetworkStatus Status { get; private set; }
+
+    public AppSettings Settings
+    {
+        get { lock (_settingsLock) return _settings; }
+    }
+
+    public event Action<NetworkStatus>? StatusChanged;
+
+    /// Raised for internet-path changes the user did not cause (unplug, replug, lost route).
+    public event Action<string>? AutoSwitched;
+
+    public void UpdateSettings(Func<AppSettings, AppSettings> change)
+    {
+        AppSettings updated;
+        lock (_settingsLock) updated = _settings = change(_settings);
+        _persist(updated);
+    }
+
+    public async Task RefreshAsync(bool measureLatency, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var before = Status;
+            var mode = Settings.Mode;
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
+
+            var (phoneMs, lanMs) = measureLatency
+                ? await MeasureAsync(detection, ct)
+                : (detection.Phone is null ? null : before.PhoneLatencyMs, detection.Lan is null ? null : before.LanLatencyMs);
+
+            var stickyHealStarted = UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
+            var effective = EffectiveMode(mode);
+
+            string? error = null;
+            if (before.CanModify && !_engine.IsInSync(effective, detection))
+            {
+                _log($"Metrics differ from {effective} metrics; applying");
+                var result = _engine.Apply(effective, detection);
+                if (!result.Success)
+                {
+                    error = result.Error;
+                    _log($"Apply {effective} failed: {result.Error}");
+                }
+            }
+
+            var after = before with
+            {
+                Mode = mode,
+                IsHealing = _healing,
+                IsHealSticky = _healSticky,
+                Adapters = detection,
+                ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
+                Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
+                PhoneLatencyMs = phoneMs,
+                LanLatencyMs = lanMs,
+                Error = error,
+            };
+
+            // Right after a user mode change the route table may settle a moment later:
+            // that move to the preferred adapter is the user's doing, not worth a toast.
+            var settlingAfterUserChange = _userChangePending && !after.IsFallback;
+            _userChangePending = false;
+            // A heal turning sticky gets its own toast in place of the path-change one: one toast, not two.
+            var toast = stickyHealStarted ? StatusPresenter.StickyHealToast(mode)
+                : _hasRefreshed && !settlingAfterUserChange ? StatusPresenter.ToastFor(before, after)
+                : null;
+            Publish(after, toast);
+            _hasRefreshed = true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log($"Refresh failed: {ex}");
+            Publish(Status with { Error = $"Refresh failed: {ex.Message}" }, toast: null);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<ApplyResult> SetModeAsync(RoutingMode mode, CancellationToken ct = default)
+    {
+        if (!Status.CanModify)
+            return new ApplyResult(false, "Administrator rights are needed to change routing");
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            ResetHealing();
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
+            var result = _engine.Apply(mode, detection);
+            if (result.Success)
+            {
+                UpdateSettings(s => s with { Mode = mode });
+                _log($"Mode set to {mode}");
+            }
+            else
+            {
+                _log($"Mode {mode} failed: {result.Error}");
+            }
+
+            _userChangePending = true;
+            Publish(Status with
+            {
+                Mode = Settings.Mode,
+                IsHealing = _healing,
+                IsHealSticky = _healSticky,
+                Adapters = detection,
+                ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
+                Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
+                Error = result.Error,
+            }, toast: null);
+            return result;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log($"Mode {mode} failed: {ex}");
+            Publish(Status with { Error = ex.Message }, toast: null);
+            return new ApplyResult(false, ex.Message);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// Saves the user's adapter choice. An adapter that stops being phone/LAN is reset to the
+    /// automatic metric so a stale preferred metric cannot keep winning.
+    public async Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default)
+    {
+        void SaveOverrides()
+        {
+            UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac });
+            _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}");
+        }
+
+        if (Status.CanModify)
+        {
+            await _gate.WaitAsync(ct);
+            try
+            {
+                // Inside the gate: a refresh already queued must still see the old overrides,
+                // so Status.Adapters below is the pair we are replacing, not the new one.
+                var previous = Status.Adapters;
+                ResetHealing();
+                SaveOverrides();
+                var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
+                foreach (var old in new[] { previous.Phone, previous.Lan })
+                {
+                    if (old is null || old.Index == next.Phone?.Index || old.Index == next.Lan?.Index) continue;
+                    var reset = _engine.Reset(old);
+                    _log(reset.Success ? $"Reset {old.Name} to automatic metric" : $"Reset {old.Name} failed: {reset.Error}");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log($"Override reset failed: {ex}");
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        else
+        {
+            SaveOverrides();
+        }
+
+        await RefreshAsync(measureLatency: true, ct);
+    }
+
+    /// While healing, the backup adapter gets the preferred metric; the saved mode never changes.
+    RoutingMode EffectiveMode(RoutingMode mode) => !_healing ? mode : mode switch
+    {
+        RoutingMode.Phone => RoutingMode.Lan,
+        RoutingMode.Lan => RoutingMode.Phone,
+        _ => mode,
+    };
+
+    /// Drops all heal state, including the backoff: an explicit user action or scope loss starts fresh.
+    void ResetHealing()
+    {
+        _healing = false;
+        _healCount = 0;
+        _recoverThreshold = RecoverAfterGoodChecks;
+        _checksSinceHealEnded = 0;
+        _hadHeal = false;
+        _healSticky = false;
+    }
+
+    /// Returns true when this check started a sticky heal.
+    bool UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
+    {
+        var (preferred, backup, preferredMs, backupMs) = mode switch
+        {
+            RoutingMode.Phone => (adapters.Phone, adapters.Lan, phoneMs, lanMs),
+            RoutingMode.Lan => (adapters.Lan, adapters.Phone, lanMs, phoneMs),
+            _ => ((AdapterInfo?)null, (AdapterInfo?)null, (int?)null, (int?)null),
+        };
+
+        if (!canModify || preferred is null || backup is null)
+        {
+            if (_healing) _log("Auto-heal ended: preferred or backup adapter unavailable");
+            ResetHealing();
+            return false;
+        }
+        // No IPv4 yet (e.g. DHCP pending after a replug): nothing was measured, so it is no evidence either way.
+        if (!measured || preferred.IPv4 is null) return false;
+
+        if (!_healing)
+        {
+            if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
+            {
+                _checksSinceHealEnded++;
+                if (_checksSinceHealEnded == CalmChecksToResetBackoff) _recoverThreshold = RecoverAfterGoodChecks;
+            }
+
+            _healCount = preferredMs is null && backupMs is not null ? _healCount + 1 : 0;
+            if (_healCount < HealAfterFailedChecks) return false;
+            _healing = true;
+            _healCount = 0;
+            if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
+            {
+                if (_recoverThreshold == MaxRecoverAfterGoodChecks)
+                {
+                    // Switching back keeps failing even after the longest wait: stop cycling until the user retries.
+                    _healSticky = true;
+                    _log($"Auto-heal: {preferred.Name} keeps losing internet; staying on {backup.Name} until the user retries");
+                }
+                else
+                {
+                    _recoverThreshold = Math.Min(_recoverThreshold * 2, MaxRecoverAfterGoodChecks);
+                    _log($"Auto-heal: repeated failure; waiting for {_recoverThreshold} good checks before switching back");
+                }
+            }
+            _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
+            return _healSticky;
+        }
+        else if (backupMs is null && preferredMs is not null)
+        {
+            // The backup itself died while the preferred adapter answers: do not wait for the threshold.
+            EndHeal();
+            _log($"Auto-heal ended: {backup.Name} has no internet but {preferred.Name} answers");
+        }
+        else if (!_healSticky) // a sticky heal ends only through the rule above or ResetHealing
+        {
+            _healCount = preferredMs is not null ? _healCount + 1 : 0;
+            if (_healCount < _recoverThreshold) return false;
+            EndHeal();
+            _log($"Auto-heal ended: {preferred.Name} has internet again");
+        }
+        return false;
+    }
+
+    /// A heal that ends on its own keeps the backoff, so the next heal soon after waits longer.
+    void EndHeal()
+    {
+        _healing = false;
+        _healCount = 0;
+        _hadHeal = true;
+        _checksSinceHealEnded = 0;
+        _healSticky = false;
+    }
+
+    async Task<(int?, int?)> MeasureAsync(DetectionResult adapters, CancellationToken ct)
+    {
+        var phone = Probe(adapters.Phone, ct);
+        var lan = Probe(adapters.Lan, ct);
+        return (await phone, await lan);
+    }
+
+    Task<int?> Probe(AdapterInfo? adapter, CancellationToken ct) =>
+        adapter?.IPv4 is { } ip ? _probe.MeasureAsync(IPAddress.Parse(ip), ct) : Task.FromResult<int?>(null);
+
+    void Publish(NetworkStatus status, string? toast)
+    {
+        Status = status;
+        StatusChanged?.Invoke(status);
+        if (toast is null) return;
+        _log($"Auto-switch: {toast}");
+        AutoSwitched?.Invoke(toast);
+    }
+}
