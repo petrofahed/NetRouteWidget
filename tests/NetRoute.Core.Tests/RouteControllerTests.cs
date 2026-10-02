@@ -198,4 +198,44 @@ public class RouteControllerTests
         await controller.RefreshAsync(measureLatency: false);
         Assert.Null(controller.Status.PhoneLatencyMs);
     }
+
+    [Fact]
+    public async Task SetOverrides_serializes_reset_against_concurrent_refreshes()
+    {
+        // Setup: two LAN adapters with initial override pointing to index 10
+        _adapters.Adapters.Add(TestAdapters.Lan(index: 12, mac: "AA-BB-CC-00-00-12"));
+        _metrics.Add(12);
+        var blockingProbe = new BlockingLatencyProbe();
+        blockingProbe.SetLatency("192.168.42.11", 38);
+        blockingProbe.SetLatency("192.168.86.42", 12);
+        var controller = new RouteController(_adapters, _metrics, _routes, blockingProbe,
+            new AppSettings { LanOverrideMac = "AA-BB-CC-00-00-10" }, canModify: true, _saved.Add, _ => { });
+
+        // First refresh establishes the baseline with index 10 as LAN with metric 50
+        var refresh1Task = controller.RefreshAsync(measureLatency: true);
+        await Task.Delay(50); // Let it enter the blocking probe
+
+        // Start SetOverridesAsync to change to index 12 (will queue waiting for gate held by refresh1)
+        var overridesTask = controller.SetOverridesAsync(new AdapterOverrides(null, "AA-BB-CC-00-00-12"));
+        await Task.Delay(50); // Let it queue on the gate
+
+        // Start a second refresh that will queue behind SetOverridesAsync
+        var refresh2Task = controller.RefreshAsync(measureLatency: true);
+        await Task.Delay(50);
+
+        // Release the blocking probe, allowing all three operations to proceed in order:
+        // refresh1 finishes, SetOverridesAsync resets index 10 and applies index 12, refresh2 completes
+        blockingProbe.SetResult();
+        await Task.WhenAll(refresh1Task, overridesTask, refresh2Task);
+
+        // Verify the old LAN adapter (index 10) was reset to automatic
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic,
+            "Old LAN adapter (index 10) should be reset to automatic metric");
+        // Verify the new LAN adapter (index 12) has the preferred metric
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(12, IpFamily.IPv4));
+        // Verify the controller reports the new adapter
+        Assert.Equal(12, controller.Status.Adapters.Lan?.Index);
+        // Verify the settings were persisted
+        Assert.Equal("AA-BB-CC-00-00-12", _saved.Last().LanOverrideMac);
+    }
 }

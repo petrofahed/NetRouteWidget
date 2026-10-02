@@ -53,3 +53,19 @@ sealed class FakeLatencyProbe : ILatencyProbe
     public Task<int?> MeasureAsync(IPAddress source, CancellationToken ct) =>
         Task.FromResult(BySource.TryGetValue(source.ToString(), out var ms) ? ms : null);
 }
+
+sealed class BlockingLatencyProbe : ILatencyProbe
+{
+    readonly TaskCompletionSource _gate = new();
+    readonly Dictionary<string, int?> _bySource = new();
+
+    public Task Release() => _gate.Task;
+    public void SetResult() => _gate.TrySetResult();
+    public void SetLatency(string source, int? ms) => _bySource[source] = ms;
+
+    public async Task<int?> MeasureAsync(IPAddress source, CancellationToken ct)
+    {
+        await _gate.Task.ConfigureAwait(false);
+        return _bySource.TryGetValue(source.ToString(), out var ms) ? ms : null;
+    }
+}

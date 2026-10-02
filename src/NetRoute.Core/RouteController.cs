@@ -156,15 +156,14 @@ public sealed class RouteController
     /// automatic metric so a stale preferred metric cannot keep winning.
     public async Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default)
     {
-        UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac });
-        _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}");
-
         if (Status.CanModify)
         {
             await _gate.WaitAsync(ct);
             try
             {
                 var previous = Status.Adapters;
+                UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac });
+                _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}");
                 var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
                 foreach (var old in new[] { previous.Phone, previous.Lan })
                 {
@@ -181,6 +180,11 @@ public sealed class RouteController
             {
                 _gate.Release();
             }
+        }
+        else
+        {
+            UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac });
+            _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}");
         }
 
         await RefreshAsync(measureLatency: true, ct);
