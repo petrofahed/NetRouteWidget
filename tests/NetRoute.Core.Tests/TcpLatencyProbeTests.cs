@@ -37,4 +37,28 @@ public class TcpLatencyProbeTests
 
         Assert.Null(await probe.MeasureAsync(IPAddress.Loopback, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Tries_the_next_target_when_the_first_fails()
+    {
+        var gone = new TcpListener(IPAddress.Loopback, 0);
+        gone.Start();
+        var closed = (IPEndPoint)gone.LocalEndpoint;
+        gone.Stop();
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var probe = new TcpLatencyProbe([closed, (IPEndPoint)listener.LocalEndpoint], TimeSpan.FromMilliseconds(500));
+
+            var ms = await probe.MeasureAsync(IPAddress.Loopback, CancellationToken.None);
+
+            Assert.NotNull(ms);
+            Assert.InRange(ms.Value, 1, 400); // the second target's own connect time, not the wait on the first
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
 }
