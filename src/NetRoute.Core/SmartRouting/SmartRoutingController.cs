@@ -27,6 +27,7 @@ public sealed class SmartRoutingController
     static readonly Regex AnsiCodes = new(@"\u001B\[[0-9;]*[A-Za-z]", RegexOptions.Compiled);
     static readonly Regex TimestampPrefix = new(@"^\s*[+-]\d{4}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\.\d+)?\s+", RegexOptions.Compiled);
     static readonly Regex ConnectionId = new(@"\[\d+\s[^\]]*\]\s*", RegexOptions.Compiled);
+    static readonly Regex LevelCounter = new(@"(?<=[A-Z])\[\d{4}\]\s*", RegexOptions.Compiled); // "FATAL[0000] message"
     static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     public static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan WaitWindow = TimeSpan.FromSeconds(30);
@@ -310,7 +311,8 @@ public sealed class SmartRoutingController
             {
                 _runningKey = null;
                 DropApi();
-                var lastError = _recentLines.LastOrDefault(l => l.Contains("FATAL") || l.Contains("ERROR"));
+                // The crash reason is a FATAL line; later ERROR lines are usually just LAN-only dial timeouts from an outage.
+                var lastError = _recentLines.LastOrDefault(l => l.Contains("FATAL")) ?? _recentLines.LastOrDefault(l => l.Contains("ERROR"));
                 RecordCrash($"sing-box exited unexpectedly (code {code}){(lastError is null ? "" : ": " + lastError)}",
                     lastError ?? $"sing-box exited with code {code}");
                 if (Desired().State == SmartState.Running) await StartAsync(default).ConfigureAwait(false);
@@ -499,6 +501,7 @@ public sealed class SmartRoutingController
         var text = AnsiCodes.Replace(raw, "");
         text = TimestampPrefix.Replace(text, "");
         text = ConnectionId.Replace(text, "");
+        text = LevelCounter.Replace(text, " ");
         text = Whitespace.Replace(text, " ").Trim();
         return text.Length <= DetailMaxLength ? text : text[..(DetailMaxLength - 1)] + "…";
     }

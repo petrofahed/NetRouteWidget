@@ -926,4 +926,24 @@ public class SmartRoutingControllerTests
 
         Assert.Null(c.Status.Detail);
     }
+
+    [Fact]
+    public async Task Faulted_detail_prefers_the_fatal_line_over_later_lan_dial_errors()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(lanMs: null), On()); // an outage: the log fills with LAN-only dial timeouts
+        await c.ProcessLineAsync("FATAL[0000] initialize router: parse rule[3]: bad regexp");
+        await c.ProcessLineAsync(FailLanOnly);
+        await c.ProcessLineAsync(FailLanOnly.Replace("[42", "[43"));
+
+        for (var i = 0; i < 3; i++)
+        {
+            _host.Crash();
+            await c.HandleExitAsync(1);
+        }
+
+        Assert.Equal(SmartState.Faulted, c.Status.State);
+        Assert.Equal("FATAL initialize router: parse rule[3]: bad regexp", c.Status.Detail);
+    }
 }
