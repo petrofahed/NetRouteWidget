@@ -45,14 +45,15 @@ public partial class App : Application
 
             var store = new SettingsStore(AppPaths.SettingsFile);
             var loaded = store.Load();
-            if (loaded.Recovered) log.Error("Settings file was unreadable or corrupt; using defaults");
+            if (loaded.Unreadable) log.Error("Settings file could not be read; running on defaults and NOT saving changes this session");
+            else if (loaded.Recovered) log.Error("Settings file was unreadable or corrupt; using defaults");
             var elevated = Elevation.IsElevated();
             _startupEnabled = _startupTask.Exists();
             log.Info($"Starting: elevated={elevated}, mode={loaded.Settings.Mode}, startWithWindows={_startupEnabled}");
 
             var controller = _controller = new RouteController(
                 new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
-                loaded.Settings, elevated, store.Save, log.Info);
+                loaded.Settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info);
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 

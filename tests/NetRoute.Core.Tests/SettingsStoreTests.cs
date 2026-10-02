@@ -49,23 +49,40 @@ public sealed class SettingsStoreTests : IDisposable
         var result = store.Load();
 
         Assert.True(result.Recovered);
+        Assert.False(result.Unreadable);
         Assert.Equal(new AppSettings(), result.Settings);
         Assert.False(store.Load().Recovered);
     }
 
     [Fact]
-    public void Unreadable_file_loads_defaults_and_is_left_alone()
+    public void Unreadable_file_loads_defaults_is_flagged_and_is_left_alone()
     {
         const string content = "{ \"Mode\": \"Lan\" }";
         File.WriteAllText(FilePath, content);
 
         SettingsLoadResult result;
         using (new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
-            result = new SettingsStore(FilePath).Load();
+            result = new SettingsStore(FilePath, retryDelay: TimeSpan.FromMilliseconds(10)).Load();
 
+        Assert.True(result.Unreadable);
         Assert.True(result.Recovered);
         Assert.Equal(new AppSettings(), result.Settings);
         Assert.Equal(content, File.ReadAllText(FilePath));
+    }
+
+    [Fact]
+    public async Task Briefly_locked_file_is_read_after_a_retry()
+    {
+        File.WriteAllText(FilePath, "{ \"Mode\": \"Lan\" }");
+        var lockStream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.None);
+        var release = Task.Delay(100).ContinueWith(_ => lockStream.Dispose());
+
+        var result = new SettingsStore(FilePath, readAttempts: 5, retryDelay: TimeSpan.FromMilliseconds(100)).Load();
+        await release;
+
+        Assert.False(result.Unreadable);
+        Assert.False(result.Recovered);
+        Assert.Equal(RoutingMode.Lan, result.Settings.Mode);
     }
 
     [Fact]

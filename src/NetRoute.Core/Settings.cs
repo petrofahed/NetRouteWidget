@@ -17,10 +17,14 @@ public sealed record AppSettings
     public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac);
 }
 
-public sealed record SettingsLoadResult(AppSettings Settings, bool Recovered);
+/// Unreadable: the file exists but could not be read (locked, access denied). It was left untouched, so the caller
+/// must not save over it this session.
+public sealed record SettingsLoadResult(AppSettings Settings, bool Recovered, bool Unreadable = false);
 
-public sealed class SettingsStore(string path)
+public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? retryDelay = null)
 {
+    readonly TimeSpan _retryDelay = retryDelay ?? TimeSpan.FromMilliseconds(200);
+
     static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
@@ -28,7 +32,8 @@ public sealed class SettingsStore(string path)
     };
 
     /// Missing file: defaults (written). Corrupt file: defaults (rewritten), Recovered = true.
-    /// Unreadable file (locked, access denied): defaults, Recovered = true, file left as it is.
+    /// Unreadable file (locked, access denied): defaults, Recovered = true, Unreadable = true, file left as it is.
+    /// A locked file (IOException) is retried a few times first; access denied is not.
     public SettingsLoadResult Load()
     {
         if (!File.Exists(path))
@@ -40,7 +45,7 @@ public sealed class SettingsStore(string path)
 
         try
         {
-            var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Options)
+            var settings = JsonSerializer.Deserialize<AppSettings>(ReadWithRetry(), Options)
                 ?? throw new JsonException("Settings file is null");
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
             return new(settings, false);
@@ -54,7 +59,16 @@ public sealed class SettingsStore(string path)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new(new AppSettings(), Recovered: true);
+            return new(new AppSettings(), Recovered: true, Unreadable: true);
+        }
+    }
+
+    string ReadWithRetry()
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return File.ReadAllText(path); }
+            catch (IOException) when (attempt < readAttempts) { Thread.Sleep(_retryDelay); }
         }
     }
 
