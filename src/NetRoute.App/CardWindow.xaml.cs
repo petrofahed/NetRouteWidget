@@ -135,6 +135,6 @@ public partial class CardWindow : Window
 
     void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
-        if (e.Category == UserPreferenceCategory.General) Dispatcher.InvokeAsync(() => Theme.Apply(Resources));
+        if (e.Category == UserPreferenceCategory.General) Dispatcher.BeginInvoke(new Action(() => Theme.Apply(Resources)));
     }
 }

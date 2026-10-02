@@ -49,8 +49,8 @@ public partial class App : Application
         var controller = _controller = new RouteController(
             new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
             loaded.Settings, elevated, store.Save, log.Info);
-        controller.StatusChanged += status => Dispatcher.InvokeAsync(() => Render(status));
-        controller.AutoSwitched += message => Dispatcher.InvokeAsync(() => _tray?.Notify(message));
+        controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
+        controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 
         _tray = new TrayIcon();
         _tray.ModeRequested += mode => _ = controller.SetModeAsync(mode);
@@ -68,7 +68,7 @@ public partial class App : Application
         _card.RestartAsAdminRequested += RestartAsAdmin;
         _card.QuitRequested += Quit;
 
-        _instance.ListenForShow(() => Dispatcher.InvokeAsync(ShowCard));
+        _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
 
         _debouncer = new Debouncer(TimeSpan.FromMilliseconds(1500), () => _ = controller.RefreshAsync(measureLatency: true));
         NetworkChange.NetworkAddressChanged += OnNetworkEvent;
@@ -92,6 +92,12 @@ public partial class App : Application
         _log?.Info("Exiting; routing left as-is");
         _instance.Dispose();
         base.OnExit(e);
+    }
+
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        _card?.ForceClose(); // a real close, so OnClosing does not persist CardVisible=false
+        base.OnSessionEnding(e);
     }
 
     void OnNetworkEvent(object? sender, EventArgs e) => _debouncer?.Signal();

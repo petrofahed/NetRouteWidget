@@ -1,4 +1,3 @@
-using System.Threading;
 using System.Windows;
 
 namespace NetRoute.App;
@@ -71,7 +70,7 @@ sealed class SingleInstance : IDisposable
         }
         catch (Exception ex) when (ex is WaitHandleCannotBeOpenedException or UnauthorizedAccessException)
         {
-            MessageBox.Show("NetRoute Widget is already running as administrator. Use its tray icon.",
+            MessageBox.Show("NetRoute Widget is already running. Use its icon in the system tray (next to the clock).",
                 "NetRoute Widget", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
