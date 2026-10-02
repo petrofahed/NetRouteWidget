@@ -34,9 +34,9 @@ Keep data-hungry traffic off 4G while the PC uses the phone:
 - **Your own rules:** add any app (`.exe`) or website (subdomains are included).
 - **How it works:** matching traffic goes through the LAN. If the LAN is down it **waits**, and a popup offers "Use phone until LAN is back".
 - **What it saves:** the card and the ⚙ page show how much was kept off 4G today.
-- **Speed test:** ⚡ on the card measures both connections (about 5 MB of mobile data).
+- **Speed test:** ⏱ on the card measures both connections (about 5 MB of mobile data).
 
-Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights and is only active in Phone or Auto mode. Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
+Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights and runs in Phone and LAN modes and pauses in Auto mode. LAN-only items wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
 
 ## Install
 
@@ -57,10 +57,10 @@ The install goes under *Program Files* on purpose. That folder is writable only 
 
 - stops the widget and the Smart routing helper (sing-box);
 - gives every adapter back to Windows' automatic priority;
-- sets the widget to Auto mode;
+- sets the widget to Auto mode and switches Smart routing off in its saved settings;
 - offers to remove the startup task.
 
-Run `Restore-Network.cmd /check` first to see what it would do without changing anything.
+Run `Restore-Network.cmd /check` first to see what it would do without changing anything (it also reports whether a leftover `NetRoute` adapter is present).
 
 > Note: the restore script resets **all** adapters that have a manual metric, including any you set yourself.
 

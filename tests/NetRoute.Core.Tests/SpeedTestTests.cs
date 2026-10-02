@@ -49,7 +49,7 @@ public class SpeedTestTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         var server = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await AcceptAsync(listener);
             var stream = client.GetStream();
             var buffer = new byte[4096];
             Assert.True(await stream.ReadAsync(buffer) > 0); // request headers (small)
@@ -62,7 +62,7 @@ public class SpeedTestTests
         var mbps = await new HttpSpeedProbe(new Uri($"http://127.0.0.1:{port}/down"), TimeSpan.FromSeconds(10))
             .MeasureMbpsAsync(IPAddress.Loopback, CancellationToken.None);
 
-        await server;
+        await server.WaitAsync(ServerTimeout);
         Assert.NotNull(mbps);
         Assert.True(mbps > 0);
     }
@@ -76,6 +76,27 @@ public class SpeedTestTests
             .MeasureMbpsAsync(IPAddress.Loopback, CancellationToken.None);
 
         Assert.Null(mbps);
+    }
+
+    static readonly TimeSpan ServerTimeout = TimeSpan.FromSeconds(10);
+
+    /// A server task that waits for the probe must fail when the probe never connects, not hang the test run.
+    static async Task<TcpClient> AcceptAsync(TcpListener listener, TimeSpan? timeout = null)
+    {
+        using var cts = new CancellationTokenSource(timeout ?? ServerTimeout);
+        return await listener.AcceptTcpClientAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task Accepting_fails_fast_when_nobody_connects()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AcceptAsync(listener, TimeSpan.FromMilliseconds(300)));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"took {stopwatch.Elapsed}");
     }
 
     static (TcpListener Listener, int Port) Listen()
@@ -105,7 +126,7 @@ public class SpeedTestTests
         using var stop = new CancellationTokenSource();
         var server = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await AcceptAsync(listener);
             var stream = client.GetStream();
             await ReadRequestAsync(stream);
             await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 5000000\r\n\r\n"));
@@ -116,7 +137,7 @@ public class SpeedTestTests
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         double? mbps;
         try { mbps = await ProbeFor(port, 2).MeasureMbpsAsync(IPAddress.Loopback, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)); }
-        finally { stop.Cancel(); await server; }
+        finally { stop.Cancel(); await server.WaitAsync(ServerTimeout); }
 
         Assert.Null(mbps);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(6), $"took {stopwatch.Elapsed}");
@@ -130,7 +151,7 @@ public class SpeedTestTests
         using var stop = new CancellationTokenSource();
         var server = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await AcceptAsync(listener);
             var stream = client.GetStream();
             await ReadRequestAsync(stream);
             await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 50000000\r\n\r\n"));
@@ -142,7 +163,7 @@ public class SpeedTestTests
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         double? mbps;
         try { mbps = await ProbeFor(port, 10).MeasureMbpsAsync(IPAddress.Loopback, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(20)); }
-        finally { stop.Cancel(); await server; }
+        finally { stop.Cancel(); await server.WaitAsync(ServerTimeout); }
 
         Assert.NotNull(mbps);
         Assert.True(mbps > 0);
@@ -175,7 +196,7 @@ public class SpeedTestTests
 
         double? mbps;
         try { mbps = await ProbeFor(port, 5).MeasureMbpsAsync(IPAddress.Loopback, CancellationToken.None); }
-        finally { stop.Cancel(); await server; }
+        finally { stop.Cancel(); await server.WaitAsync(ServerTimeout); }
 
         Assert.Null(mbps);
         Assert.Equal(1, Volatile.Read(ref connections));
@@ -188,7 +209,7 @@ public class SpeedTestTests
         using var _ = listener;
         var server = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await AcceptAsync(listener);
             var stream = client.GetStream();
             await ReadRequestAsync(stream);
             await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n"));
@@ -197,7 +218,7 @@ public class SpeedTestTests
 
         var mbps = await ProbeFor(port, 5).MeasureMbpsAsync(IPAddress.Loopback, CancellationToken.None);
 
-        await server;
+        await server.WaitAsync(ServerTimeout);
         Assert.Null(mbps);
     }
 
@@ -209,7 +230,7 @@ public class SpeedTestTests
         using var stop = new CancellationTokenSource();
         var server = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await AcceptAsync(listener);
             var stream = client.GetStream();
             await ReadRequestAsync(stream);
             await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 5000000\r\n\r\n"));
@@ -223,7 +244,7 @@ public class SpeedTestTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => ProbeFor(port, 30).MeasureMbpsAsync(IPAddress.Loopback, caller.Token).WaitAsync(TimeSpan.FromSeconds(10)));
         }
-        finally { stop.Cancel(); await server; }
+        finally { stop.Cancel(); await server.WaitAsync(ServerTimeout); }
     }
 
     [Fact]
