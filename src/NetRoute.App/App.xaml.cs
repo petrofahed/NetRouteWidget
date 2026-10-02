@@ -28,6 +28,7 @@ public partial class App : Application
     long _lastSavedStatsTotal = -1;
     bool _speedTestRunning;
     bool _smartStopped;
+    SmartRoutingWindow? _smartWindow;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -82,6 +83,7 @@ public partial class App : Application
             _card.RestartAsAdminRequested += RestartAsAdmin;
             _card.QuitRequested += Quit;
             _card.SpeedTestRequested += RunSpeedTest;
+            _card.SmartSettingsRequested += OpenSmartRouting;
 
             _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
 
@@ -291,7 +293,53 @@ public partial class App : Application
         if (_smart is { } smart) _ = smart.ApplyAsync(controller.Status, controller.Settings);
     }
 
-    void RenderSmart(SmartRoutingStatus status) => _card?.RenderSmart(SmartRoutingPresenter.Row(status));
+    void RenderSmart(SmartRoutingStatus status)
+    {
+        _card?.RenderSmart(SmartRoutingPresenter.Row(status));
+        RenderSmartWindow();
+    }
+
+    void RenderSmartWindow()
+    {
+        if (_smartWindow is null || _smart is null || _controller is null) return;
+        _smartWindow.Render(SmartRoutingPage.Build(_catalog, _controller.Settings.SmartRouting, _smart.Status));
+    }
+
+    void OpenSmartRouting()
+    {
+        if (_smart is null || _controller is null)
+        {
+            MessageBox.Show("Smart routing is unavailable (see the log)", "NetRoute Widget",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_smartWindow is not null)
+        {
+            _smartWindow.Activate();
+            return;
+        }
+        var window = _smartWindow = new SmartRoutingWindow();
+        window.MasterToggled += on => ChangeSmart(s => s with { Enabled = on });
+        window.ItemToggled += (id, on) => ChangeSmart(s => s.WithItem(id, on));
+        window.GroupToggled += (groupId, on) => ChangeSmart(s => SmartRoutingPage.WithGroup(_catalog, s, groupId, on));
+        window.UserRuleToggled += (rule, on) => ChangeSmart(s => s.WithUserRule(rule with { Enabled = on }));
+        window.UserRuleRemoved += rule => ChangeSmart(s => s.WithoutUserRule(rule));
+        window.AddRuleRequested += type =>
+        {
+            var dialog = new AddRuleWindow(type) { Owner = window };
+            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => s.WithUserRule(rule));
+        };
+        window.UsePhoneRequested += () => _ = _smart?.UseLanRulesOnPhoneAsync();
+        window.Closed += (_, _) => _smartWindow = null;
+        RenderSmartWindow();
+        window.Show();
+    }
+
+    void ChangeSmart(Func<SmartRoutingSettings, SmartRoutingSettings> change)
+    {
+        UpdateSmart(change);
+        RenderSmartWindow(); // immediate feedback; the controller's StatusChanged re-renders again once applied
+    }
 
     void SaveStatsIfChanged()
     {
