@@ -258,7 +258,7 @@ public partial class App : Application
             var limiter = new LogRateLimiter(20, TimeSpan.FromMinutes(1)); // a LAN outage makes every failed dial an ERROR line
             host.LineReceived += line =>
             {
-                if (!(line.Contains("ERROR") || line.Contains("FATAL") || line.Contains("WARN"))) return;
+                if (!SingBoxLogFilter.IsNoteworthy(line)) return; // not Contains("ERROR"): every DNS answer line says NOERROR
                 if (!limiter.TryAllow(out var suppressed)) return;
                 if (suppressed > 0) log.Info($"sing-box: {suppressed} more error/warning lines suppressed");
                 log.Info("sing-box: " + line);
