@@ -24,7 +24,7 @@ public sealed partial record UserRule(UserRuleType Type, string Value, bool Enab
 
     static string? NormaliseApp(string raw)
     {
-        var name = Path.GetFileName(raw.Trim().Trim('"'));
+        var name = Path.GetFileName(raw.Trim().Trim('"').Trim());
         return name.Length > 4 && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
                && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
             ? name
@@ -34,15 +34,16 @@ public sealed partial record UserRule(UserRuleType Type, string Value, bool Enab
     static string? NormaliseWebsite(string raw)
     {
         var host = Scheme().Replace(raw.Trim().ToLowerInvariant(), "");
-        host = host.Split('/', '?', '#')[0];
+        host = host.Split('/', '?', '#')[0].Trim();
         host = Port().Replace(host, "").TrimStart('*').TrimStart('.');
+        if (host.EndsWith('.')) host = host[..^1];
         if (host.StartsWith("www.")) host = host[4..];
         return Hostname().IsMatch(host) ? host : null;
     }
 
     [GeneratedRegex(@"^[a-z][a-z0-9+.-]*://")] private static partial Regex Scheme();
     [GeneratedRegex(@":\d+$")] private static partial Regex Port();
-    [GeneratedRegex(@"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$")] private static partial Regex Hostname();
+    [GeneratedRegex(@"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}\z")] private static partial Regex Hostname();
 }
 
 public sealed record SmartRoutingSettings
@@ -62,6 +63,11 @@ public sealed record SmartRoutingSettings
 
     public SmartRoutingSettings WithoutUserRule(UserRule rule) =>
         this with { UserRules = [.. UserRules.Where(r => !SameRule(r, rule))] };
+
+    /// False for hand-edited or corrupt content that would crash later (null collections or rules, blank values, unknown rule types).
+    public bool IsValid() =>
+        Items is not null && UserRules is not null
+        && UserRules.All(r => r is not null && !string.IsNullOrWhiteSpace(r.Value) && Enum.IsDefined(r.Type));
 
     static bool SameRule(UserRule a, UserRule b) =>
         a.Type == b.Type && string.Equals(a.Value, b.Value, StringComparison.OrdinalIgnoreCase);

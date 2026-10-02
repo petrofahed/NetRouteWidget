@@ -13,6 +13,9 @@ public sealed class SmartRoutingSettingsTests : IDisposable
     [InlineData(UserRuleType.Website, "  Netflix.com:443/ ", "netflix.com")]
     [InlineData(UserRuleType.App, @"C:\Apps\qbittorrent.exe", "qbittorrent.exe")]
     [InlineData(UserRuleType.App, "\"Steam.EXE\"", "Steam.EXE")]
+    [InlineData(UserRuleType.Website, "example.com\n/x", "example.com")]
+    [InlineData(UserRuleType.Website, "example.com.", "example.com")]
+    [InlineData(UserRuleType.App, "\" foo.exe\"", "foo.exe")]
     public void UserRule_normalises_and_validates(UserRuleType type, string raw, string expected)
     {
         Assert.True(UserRule.TryCreate(type, raw, out var rule, out var error), error);
@@ -71,6 +74,23 @@ public sealed class SmartRoutingSettingsTests : IDisposable
 
         Assert.Equal(settings, store.Load().Settings);
         Assert.Contains("\"App\"", File.ReadAllText(Path.Combine(_dir, "settings.json"))); // enum written as text
+    }
+
+    [Theory]
+    [InlineData("""{"Mode":"Phone","SmartRouting":{"Items":null}}""")]
+    [InlineData("""{"Mode":"Phone","SmartRouting":{"UserRules":null}}""")]
+    [InlineData("""{"Mode":"Phone","SmartRouting":{"UserRules":[null]}}""")]
+    [InlineData("""{"Mode":"Phone","SmartRouting":{"UserRules":[{"Type":"Website"}]}}""")]
+    [InlineData("""{"Mode":"Phone","SmartRouting":{"UserRules":[{"Type":7,"Value":"a.com"}]}}""")]
+    public void Invalid_smart_routing_is_recovered_to_defaults(string json)
+    {
+        var path = Path.Combine(_dir, "settings.json");
+        File.WriteAllText(path, json);
+
+        var loaded = new SettingsStore(path).Load();
+
+        Assert.True(loaded.Recovered);
+        Assert.Equal(new SmartRoutingSettings(), loaded.Settings.SmartRouting);
     }
 
     [Theory]

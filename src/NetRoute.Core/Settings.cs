@@ -50,6 +50,7 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
                 ?? throw new JsonException("Settings file is null");
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
             if (settings.SmartRouting is null) settings = settings with { SmartRouting = new SmartRoutingSettings() };
+            if (!settings.SmartRouting.IsValid()) throw new JsonException("Invalid Smart routing settings");
             return new(settings, false);
         }
         catch (JsonException)
