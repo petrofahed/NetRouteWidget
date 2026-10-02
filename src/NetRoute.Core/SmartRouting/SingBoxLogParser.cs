@@ -14,17 +14,20 @@ public static partial class SingBoxLogParser
         var clean = Ansi().Replace(line, "");
         var m = MatchLine().Match(clean);
         if (m.Success)
-            return new RuleMatched(m.Groups["id"].Value, int.Parse(m.Groups["idx"].Value), m.Groups["out"].Value);
+            return int.TryParse(m.Groups["idx"].Value, out var index)
+                ? new RuleMatched(m.Groups["id"].Value, index, m.Groups["out"].Value)
+                : null;
         var f = FailLine().Match(clean);
         return f.Success ? new DialFailed(f.Groups["id"].Value, f.Groups["out"].Value) : null;
     }
 
     [GeneratedRegex(@"\x1b\[[0-9;]*m")] private static partial Regex Ansi();
     [GeneratedRegex(@"\[(?<id>\d+) [^\]]*\] router: match\[(?<idx>\d+)\] .*=> route\((?<out>[^)]+)\)")] private static partial Regex MatchLine();
-    [GeneratedRegex(@"ERROR \[(?<id>\d+) [^\]]*\] connection: open connection to .* using outbound/\w+\[(?<out>[^\]]+)\]")] private static partial Regex FailLine();
+    [GeneratedRegex(@"ERROR \[(?<id>\d+) [^\]]*\] connection: open connection to \S+ using outbound/\w+\[(?<out>[^\]]+)\]")] private static partial Regex FailLine();
 }
 
 /// Remembers which entry each LAN-only connection matched, and reports entries whose LAN-only dials failed.
+/// Not thread-safe: callers must serialize all calls (the SmartRoutingController does this under its gate).
 public sealed class LanWaitTracker(IReadOnlyDictionary<int, string> ruleIndexToEntryId, TimeProvider? time = null)
 {
     const int MaxTrackedConnections = 4096;

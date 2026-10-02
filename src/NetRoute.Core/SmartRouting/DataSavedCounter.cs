@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace NetRoute.Core;
@@ -9,6 +10,7 @@ public sealed record DailyStats(DateOnly Day, IReadOnlyDictionary<string, long> 
 
 /// Bytes that LAN-only rules kept off 4G today, per entry. Counts connection byte deltas between polls,
 /// only while the phone is the default exit (otherwise that traffic would not have used 4G anyway).
+/// Not thread-safe: callers must serialize all calls (the SmartRoutingController does this under its gate).
 public sealed class DataSavedCounter
 {
     readonly Dictionary<string, long> _lastSeen = new();
@@ -51,9 +53,12 @@ public sealed class DataSavedCounter
         try
         {
             var stored = JsonSerializer.Deserialize<StoredStats>(File.ReadAllText(path));
-            return stored is null ? null : new DailyStats(DateOnly.Parse(stored.Day), stored.BytesByEntry ?? new());
+            if (stored is null
+                || !DateOnly.TryParseExact(stored.Day, DayFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var day))
+                return null;
+            return new DailyStats(day, stored.BytesByEntry ?? new());
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or FormatException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             return null;
         }
@@ -64,9 +69,11 @@ public sealed class DataSavedCounter
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(
-            new StoredStats(stats.Day.ToString("yyyy-MM-dd"), new Dictionary<string, long>(stats.BytesByEntry))));
+            new StoredStats(stats.Day.ToString(DayFormat, CultureInfo.InvariantCulture),new Dictionary<string, long>(stats.BytesByEntry))));
         File.Move(temp, path, overwrite: true);
     }
 
-    sealed record StoredStats(string Day, Dictionary<string, long>? BytesByEntry);
+    const string DayFormat = "yyyy-MM-dd";
+
+    sealed record StoredStats(string? Day,Dictionary<string, long>? BytesByEntry);
 }

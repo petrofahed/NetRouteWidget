@@ -35,6 +35,22 @@ public class SingBoxLogParserTests
     }
 
     [Fact]
+    public void Dial_failure_takes_the_first_outbound_even_if_the_error_text_mentions_another()
+    {
+        const string line = "+0300 2026-10-02 16:50:47 ERROR [42 150ms] connection: open connection to example.com:443 using outbound/selector[lan-only]: dial failed, was using outbound/selector[phone]";
+
+        Assert.Equal(new DialFailed("42", "lan-only"), SingBoxLogParser.Parse(line));
+    }
+
+    [Fact]
+    public void Rule_index_too_large_for_int_is_ignored()
+    {
+        const string line = "+0300 2026-10-02 16:50:47 DEBUG [1 1ms] router: match[99999999999] => route(lan-only)";
+
+        Assert.Null(SingBoxLogParser.Parse(line));
+    }
+
+    [Fact]
     public void Tracker_reports_the_entry_of_a_failed_lan_only_connection()
     {
         var tracker = new LanWaitTracker(new Dictionary<int, string> { [1] = "youtube" });

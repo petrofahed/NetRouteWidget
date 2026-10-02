@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace NetRoute.Core.Tests;
 
 public sealed class DataSavedCounterTests : IDisposable
@@ -76,5 +78,36 @@ public sealed class DataSavedCounterTests : IDisposable
         File.WriteAllText(path, "{ nope");
         Assert.Null(DataSavedCounter.LoadFile(path));
         Assert.Null(DataSavedCounter.LoadFile(Path.Combine(_dir, "missing.json")));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"BytesByEntry\":{}}")]
+    [InlineData("{\"Day\":\"not a date\"}")]
+    public void Valid_but_incomplete_json_loads_as_null(string json)
+    {
+        var path = Path.Combine(_dir, "stats.json");
+        File.WriteAllText(path, json);
+
+        Assert.Null(DataSavedCounter.LoadFile(path));
+    }
+
+    [Fact]
+    public void Stats_file_day_does_not_depend_on_the_current_culture()
+    {
+        var path = Path.Combine(_dir, "stats.json");
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("ar-SA");
+            DataSavedCounter.SaveFile(path, new DailyStats(Day1, new Dictionary<string, long> { ["youtube"] = 7 }));
+
+            Assert.Contains("\"2026-10-02\"", File.ReadAllText(path));
+            Assert.Equal(Day1, DataSavedCounter.LoadFile(path)!.Day);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 }
