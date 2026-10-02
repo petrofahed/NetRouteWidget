@@ -15,6 +15,7 @@ public partial class SmartRoutingWindow : Window
     readonly Dictionary<string, CheckBox> _groupBoxes = new(), _itemBoxes = new(), _ruleBoxes = new();
     readonly Dictionary<string, TextBlock> _groupBytes = new(), _itemBytes = new(), _ruleBytes = new();
     readonly Dictionary<string, Control> _controls = new(); // by Tag, to restore keyboard focus after a rebuild
+    readonly Dictionary<string, bool?> _groupOn = new(); // the model's state per group (null = mixed)
     readonly List<Button> _addButtons = [];
     string? _structureKey;
 
@@ -66,6 +67,7 @@ public partial class SmartRoutingWindow : Window
         _itemBytes.Clear();
         _ruleBoxes.Clear();
         _ruleBytes.Clear();
+        _groupOn.Clear();
         _addButtons.Clear();
         _controls.Clear();
 
@@ -85,6 +87,7 @@ public partial class SmartRoutingWindow : Window
 
         foreach (var group in model.Groups)
         {
+            _groupOn[group.Id] = group.On;
             if (_groupBoxes.TryGetValue(group.Id, out var groupBox)) { groupBox.IsChecked = group.On; groupBox.IsEnabled = model.Enabled; }
             if (_groupBytes.TryGetValue(group.Id, out var groupBytes)) groupBytes.Text = ByteFormat.Human(group.TodayBytes);
             foreach (var item in group.Items)
@@ -105,8 +108,10 @@ public partial class SmartRoutingWindow : Window
     UIElement GroupView(PageGroup group)
     {
         var groupToggle = new CheckBox { IsThreeState = false, VerticalAlignment = VerticalAlignment.Center, Tag = "g:" + group.Id };
-        // After the click WPF has already flipped the box (null or false -> true, true -> false), so its state is the wanted one.
-        groupToggle.Click += (_, _) => GroupToggled?.Invoke(group.Id, groupToggle.IsChecked == true);
+        // Do NOT read groupToggle.IsChecked here: WPF has already flipped it, and its cycle is true->false, false->true, null->false,
+        // so a mixed group would read "off". Decide from the model's state instead; Update then overwrites the box with the new model.
+        groupToggle.Click += (_, _) => GroupToggled?.Invoke(group.Id, SmartRoutingPage.NextGroupState(_groupOn.GetValueOrDefault(group.Id)));
+        _groupOn[group.Id] = group.On;
         _groupBoxes[group.Id] = groupToggle;
         _controls[(string)groupToggle.Tag] = groupToggle;
         var header = new DockPanel();

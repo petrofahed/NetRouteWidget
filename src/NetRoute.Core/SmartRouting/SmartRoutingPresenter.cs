@@ -71,6 +71,9 @@ public static class SmartRoutingPage
             status.Today.Total, groups, rules);
     }
 
+    /// What a click on a group's tick box sets: ON unless the group is fully on (a mixed group goes ON, not off).
+    public static bool NextGroupState(bool? current) => current != true;
+
     public static SmartRoutingSettings WithGroup(
         IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, string groupId, bool on) =>
         catalog.Where(i => i.GroupId == groupId).Aggregate(settings, (s, i) => s.WithItem(i.Id, on));

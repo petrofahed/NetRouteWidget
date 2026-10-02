@@ -102,4 +102,11 @@ public class SmartRoutingPresenterTests
         Assert.False(settings.IsItemOn(Catalog[1]));
         Assert.True(settings.IsItemOn(Catalog[2]));
     }
+
+    [Theory]
+    [InlineData(true, false)]   // fully on: switch the group off
+    [InlineData(false, true)]   // fully off: switch it on
+    [InlineData(null, true)]    // mixed: switch it ON, never off
+    public void Clicking_a_group_turns_it_on_unless_it_is_fully_on(bool? current, bool expected) =>
+        Assert.Equal(expected, SmartRoutingPage.NextGroupState(current));
 }
