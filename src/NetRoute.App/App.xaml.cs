@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Net.NetworkInformation;
 using System.Windows;
 using System.Windows.Threading;
@@ -22,6 +23,10 @@ public partial class App : Application
     Debouncer? _debouncer;
     bool _startupEnabled;
     DateTime _lastPruneDay;
+    SmartRoutingController? _smart;
+    IReadOnlyList<RuleItem> _catalog = [];
+    long _lastSavedStatsTotal = -1;
+    bool _speedTestRunning;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -57,6 +62,26 @@ public partial class App : Application
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 
+            _catalog = RuleCatalog.Load(RuleCatalog.DefaultPath);
+            var orphans = SingBoxHost.KillOrphans(AppPaths.SingBoxExe);
+            if (orphans > 0) log.Info($"Stopped {orphans} leftover sing-box process(es)");
+            var host = new SingBoxHost(AppPaths.SingBoxExe); // config is passed on stdin: nothing is written to a user-writable file
+            host.LineReceived += line =>
+            {
+                if (line.Contains("ERROR") || line.Contains("FATAL") || line.Contains("WARN")) log.Info("sing-box: " + line);
+            };
+            var smart = _smart = new SmartRoutingController(
+                _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next,
+                DataSavedCounter.LoadFile(AppPaths.StatsFile), log.Info);
+            smart.StatusChanged += s => Dispatcher.BeginInvoke(new Action(() => RenderSmart(s)));
+            smart.Notify += m => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(m)));
+            smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() =>
+                _tray?.Notify(SmartRoutingPresenter.WaitingText(names))));
+            controller.ExternalPathResolver = index =>
+                smart.Status.IsActive && index == TunIndex() // TUN looked up by name on every call: its index changes on each sing-box start
+                    ? (smart.Status.DefaultExit == RouteExit.Lan ? InternetPath.Lan : InternetPath.Phone) : null;
+            controller.StatusChanged += status => _ = smart.ApplyAsync(status, controller.Settings);
+
             _tray = new TrayIcon();
             _tray.ModeRequested += mode => _ = controller.SetModeAsync(mode);
             _tray.ToggleCardRequested += ToggleCard;
@@ -73,6 +98,7 @@ public partial class App : Application
             _card.ChooseAdaptersRequested += ChooseAdapters;
             _card.RestartAsAdminRequested += RestartAsAdmin;
             _card.QuitRequested += Quit;
+            _card.SpeedTestRequested += RunSpeedTest;
 
             _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
 
@@ -83,6 +109,8 @@ public partial class App : Application
             {
                 if (DateTime.Today != _lastPruneDay) PruneLogs(); // the widget may run for days
                 await controller.RefreshAsync(measureLatency: true);
+                await smart.PollStatsAsync();
+                SaveStatsIfChanged();
             };
 
             Render(controller.Status);
@@ -90,6 +118,7 @@ public partial class App : Application
             UpdatePollInterval();
             _poll.Start();
             await controller.RefreshAsync(measureLatency: true);
+            _ = smart.ApplyAsync(controller.Status, controller.Settings); // first status exists now: starts Smart routing when it was enabled in settings
         }
         catch (Exception ex)
         {
@@ -113,6 +142,7 @@ public partial class App : Application
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkEvent;
         _poll.Stop();
         _debouncer?.Dispose();
+        StopSmartRouting();
         _tray?.Dispose();
         _log?.Info("Exiting; routing left as-is");
         _instance.Dispose();
@@ -121,6 +151,7 @@ public partial class App : Application
 
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
+        StopSmartRouting();
         _card?.ForceClose(); // a real close, so OnClosing does not persist CardVisible=false
         base.OnSessionEnding(e);
     }
@@ -193,7 +224,67 @@ public partial class App : Application
 
     void Quit()
     {
+        StopSmartRouting();
         _card?.ForceClose();
         Shutdown();
+    }
+
+    static int? TunIndex()
+    {
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.Name != "NetRoute") continue;
+            try { return nic.GetIPProperties().GetIPv4Properties()?.Index; }
+            catch (NetworkInformationException) { return null; }
+        }
+        return null;
+    }
+
+    void UpdateSmart(Func<SmartRoutingSettings, SmartRoutingSettings> change)
+    {
+        _controller!.UpdateSettings(s => s with { SmartRouting = change(s.SmartRouting) });
+        _ = _smart!.ApplyAsync(_controller.Status, _controller.Settings);
+    }
+
+    void RenderSmart(SmartRoutingStatus status) => _card?.RenderSmart(SmartRoutingPresenter.Row(status));
+
+    void SaveStatsIfChanged()
+    {
+        if (_smart is not { } smart || smart.Status.Today.Total == _lastSavedStatsTotal) return;
+        try
+        {
+            DataSavedCounter.SaveFile(AppPaths.StatsFile, smart.Status.Today);
+            _lastSavedStatsTotal = smart.Status.Today.Total;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log?.Error("Saving stats failed", ex);
+        }
+    }
+
+    async void RunSpeedTest()
+    {
+        if (_speedTestRunning || _controller is null) return;
+        _speedTestRunning = true;
+        _card?.ShowSpeed("⚡ Measuring… (about 5 MB of mobile data)");
+        try
+        {
+            var result = await SpeedTest.RunAsync(HttpSpeedProbe.Default(), _controller.Status.Adapters);
+            _card?.ShowSpeed($"{SpeedTest.Describe(result)}  ({DateTime.Now:HH:mm})");
+            _log?.Info("Speed test: " + SpeedTest.Describe(result));
+        }
+        finally
+        {
+            _speedTestRunning = false;
+        }
+    }
+
+    /// Stops sing-box for good at quit (ShutdownAsync latches the controller). The controller awaits with
+    /// ConfigureAwait(false), so waiting here on the UI thread cannot deadlock.
+    void StopSmartRouting()
+    {
+        if (_smart is not { } smart) return;
+        SaveStatsIfChanged();
+        Task.Run(() => smart.ShutdownAsync()).Wait(TimeSpan.FromSeconds(5)); // ShutdownAsync latches: nothing restarts sing-box afterwards
     }
 }

@@ -117,6 +117,17 @@
                 <ToggleButton x:Name="AutoButton" Content="Auto" Tag="Auto" Style="{StaticResource ModeButton}" Click="OnMode" />
             </UniformGrid>
 
+            <Border Height="1" Margin="0,8" Background="{DynamicResource CardBorder}" />
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="⚡" Style="{StaticResource IconButton}" Click="OnSpeedTest"
+                        ToolTip="Speed test of both connections (uses about 5 MB of mobile data)" />
+                <Button DockPanel.Dock="Right" Content="⚙" Style="{StaticResource IconButton}" Click="OnSmartSettings"
+                        ToolTip="Smart routing: choose what stays off 4G" />
+                <TextBlock x:Name="SmartText" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis"
+                           Cursor="Hand" MouseLeftButtonUp="OnSmartTextClick" Text="⚡ Smart routing off" />
+            </DockPanel>
+            <TextBlock x:Name="SpeedText" Visibility="Collapsed" Margin="0,4,0,0" Style="{StaticResource Secondary}" />
+
             <TextBlock x:Name="AdminHint" Visibility="Collapsed" Margin="0,8,0,0" HorizontalAlignment="Center">
                 <Hyperlink Click="OnRestartAsAdmin" Foreground="{DynamicResource Warning}">Read-only — restart as admin</Hyperlink>
             </TextBlock>

@@ -29,6 +29,8 @@ public partial class CardWindow : Window
     public event Action? OpenNetworkSettingsRequested;
     public event Action? RestartAsAdminRequested;
     public event Action? QuitRequested;
+    public event Action? SmartSettingsRequested;
+    public event Action? SpeedTestRequested;
 
     /// Shows the card at its saved spot, or bottom-right when that spot is no longer on screen.
     public void ShowAndPlace(double? savedLeft, double? savedTop)
@@ -62,6 +64,19 @@ public partial class CardWindow : Window
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
+    }
+
+    public void RenderSmart(SmartRow row)
+    {
+        SmartText.Text = row.Text;
+        SmartText.SetResourceReference(TextBlock.ForegroundProperty, row.Tone == SmartTone.Warning ? "Warning" : "TextSecondary");
+        SmartText.Opacity = row.Tone == SmartTone.Muted ? 0.7 : 1.0;
+    }
+
+    public void ShowSpeed(string text)
+    {
+        SpeedText.Text = text;
+        SpeedText.Visibility = Visibility.Visible;
     }
 
     /// Closes for real on app exit; any other close (Alt+F4) just hides to the tray.
@@ -135,6 +150,12 @@ public partial class CardWindow : Window
     void OnRestartAsAdmin(object sender, RoutedEventArgs e) => RestartAsAdminRequested?.Invoke();
 
     void OnQuit(object sender, RoutedEventArgs e) => QuitRequested?.Invoke();
+
+    void OnSmartSettings(object sender, RoutedEventArgs e) => SmartSettingsRequested?.Invoke();
+
+    void OnSmartTextClick(object sender, MouseButtonEventArgs e) => SmartSettingsRequested?.Invoke();
+
+    void OnSpeedTest(object sender, RoutedEventArgs e) => SpeedTestRequested?.Invoke();
 
     void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
