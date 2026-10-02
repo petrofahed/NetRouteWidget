@@ -4,17 +4,18 @@ using NetRoute.Core;
 namespace NetRoute.App;
 
 /// Tray-anchored popup with real buttons (tray balloons can't have buttons).
+/// Sits above the card when it is visible so it never covers it; otherwise bottom-right of the work area.
 public partial class WaitingPopup : Window
 {
-    public WaitingPopup(string text)
+    public WaitingPopup(string text, Bounds? cardBounds = null)
     {
         InitializeComponent();
         Message.Text = text;
         Loaded += (_, _) =>
         {
             var work = SystemParameters.WorkArea;
-            Left = work.Right - ActualWidth - CardPlacement.Margin;
-            Top = work.Bottom - ActualHeight - CardPlacement.Margin;
+            (Left, Top) = CardPlacement.PopupAboveCard(
+                cardBounds, ActualWidth, ActualHeight, new Bounds(work.Left, work.Top, work.Width, work.Height));
         };
     }
 

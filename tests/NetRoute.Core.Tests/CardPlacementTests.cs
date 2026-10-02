@@ -36,4 +36,22 @@ public class CardPlacementTests
 
         Assert.Equal((-1500d, 100d), CardPlacement.Resolve(-1500, 100, 290, 150, twoMonitors, Work));
     }
+
+    // ---- the waiting popup must not cover the card ----
+
+    [Fact]
+    public void Popup_sits_above_the_visible_card_aligned_to_its_left()
+    {
+        var card = new Bounds(1614, 874, 290, 150);
+
+        Assert.Equal((1540d, 874d - 120 - 8), CardPlacement.PopupAboveCard(card, 380, 120, Work)); // clamped: 1614+380 > 1920
+        Assert.Equal((100d, 600d - 120 - 8), CardPlacement.PopupAboveCard(new Bounds(100, 600, 290, 150), 380, 120, Work));
+    }
+
+    [Fact]
+    public void Popup_falls_back_to_bottom_right_when_the_card_is_hidden_or_there_is_no_room_above()
+    {
+        Assert.Equal((1920d - 380 - 16, 1040d - 120 - 16), CardPlacement.PopupAboveCard(null, 380, 120, Work));
+        Assert.Equal((1920d - 380 - 16, 1040d - 120 - 16), CardPlacement.PopupAboveCard(new Bounds(100, 50, 290, 150), 380, 120, Work));
+    }
 }

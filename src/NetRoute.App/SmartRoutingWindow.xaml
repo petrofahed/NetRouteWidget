@@ -7,14 +7,16 @@
         <StackPanel DockPanel.Dock="Top">
             <DockPanel>
                 <CheckBox x:Name="MasterToggle" DockPanel.Dock="Left" VerticalAlignment="Center" Click="OnMaster" />
-                <TextBlock Text="Smart routing — keep data-hungry traffic off 4G (Phone mode)" FontSize="15" FontWeight="SemiBold"
+                <TextBlock Text="Smart routing — keep data-hungry traffic off 4G (Phone and LAN modes)" FontSize="15" FontWeight="SemiBold"
                            Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
             </DockPanel>
             <TextBlock x:Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" />
             <TextBlock x:Name="TotalText" Margin="0,4,0,0" Foreground="Gray" />
             <Button x:Name="UsePhoneButton" Content="Use phone until LAN is back (uses mobile data)" Margin="0,8,0,0"
                     HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" Click="OnUsePhone" />
-            <TextBlock Text="Turned-off items go through the phone like everything else." Margin="0,8,0,4" Foreground="Gray" />
+            <TextBlock Text="Turned-off items go through the phone like everything else." Margin="0,8,0,0" Foreground="Gray" />
+            <TextBlock Text="Changing a rule restarts Smart routing for about a second. Downloads already running may keep their old route until they reconnect."
+                       Margin="0,2,0,4" Foreground="Gray" TextWrapping="Wrap" />
         </StackPanel>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="Body" />

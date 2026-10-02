@@ -139,7 +139,9 @@ public partial class App : Application
 
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
-        StopSmartRouting();
+        // Do NOT stop Smart routing here: the sign-out can still be cancelled by another app, and ShutdownAsync latches
+        // the controller for good. A real logoff ends the process, and the kill-on-close job object ends sing-box with it.
+        SaveStatsIfChanged();
         _card?.ForceClose(); // a real close, so OnClosing does not persist CardVisible=false
         base.OnSessionEnding(e);
     }
@@ -275,7 +277,11 @@ public partial class App : Application
                 return status.IsActive && index == TunIndex() // TUN looked up by name on every call: its index changes on each sing-box start
                     ? (status.DefaultExit == RouteExit.Lan ? InternetPath.Lan : InternetPath.Phone) : null;
             };
-            controller.StatusChanged += status => _ = smart.ApplyAsync(status, controller.Settings);
+            controller.StatusChanged += status =>
+            {
+                RememberLan(controller, status);
+                _ = smart.ApplyAsync(status, controller.Settings);
+            };
             _lastSavedStatsTotal = restored?.Total ?? -1;
             _smart = smart;
         }
@@ -284,6 +290,16 @@ public partial class App : Application
             log.Error("Smart routing could not be set up; continuing without it", ex);
             _smart = null;
         }
+    }
+
+    /// Saves the LAN adapter's name so a later start with the LAN absent (cable out at boot, router rebooting) still
+    /// binds Smart routing's "lan" outbound to it. Written only when the name changes. It is not part of the rule
+    /// fingerprint or the sing-box key, so it never restarts anything.
+    static void RememberLan(RouteController controller, NetworkStatus status)
+    {
+        var name = status.Adapters.Lan?.Name;
+        if (name is null || !controller.Settings.SmartRouting.TryRememberLan(name, out _)) return;
+        controller.UpdateSettings(s => s.SmartRouting.TryRememberLan(name, out var updated) ? s with { SmartRouting = updated } : s);
     }
 
     void UpdateSmart(Func<SmartRoutingSettings, SmartRoutingSettings> change)
@@ -315,7 +331,10 @@ public partial class App : Application
             _waitingPopup.SetText(text);
             return;
         }
-        var popup = _waitingPopup = new WaitingPopup(text);
+        Bounds? cardBounds = _card is { IsVisible: true } card
+            ? new Bounds(card.Left, card.Top, card.ActualWidth, card.ActualHeight)
+            : null;
+        var popup = _waitingPopup = new WaitingPopup(text, cardBounds);
         popup.UsePhoneClicked += () => _ = _smart?.UseLanRulesOnPhoneAsync();
         popup.KeepWaitingClicked += () => _ = _smart?.KeepWaitingAsync();
         popup.Closed += (_, _) => _waitingPopup = null;
