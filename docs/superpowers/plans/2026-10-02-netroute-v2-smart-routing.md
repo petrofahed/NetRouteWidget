@@ -62,6 +62,7 @@
   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01AypeDHU2CKcJxywGQXDkT3
   ```
+- **`<scratch>`** in commands means `F:\Temp\claude\C--Users-petrofahed\f7547ae8-854b-4cab-929e-e8437d2356f3\scratchpad`. While the user runs the installed widget, never build into `src\NetRoute.App\bin\Debug` and never touch the installed copy.
 - **Never** run anything that changes the real machine's network configuration in automated tests. TUN runs only in the manual checklist (Task 14), by the user.
 
 ## Review Focus
