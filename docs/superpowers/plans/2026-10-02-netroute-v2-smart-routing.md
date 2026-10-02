@@ -1465,6 +1465,13 @@ Run: `dotnet test --filter "Category!=Integration"`. Expected: PASS.
 
 ### Task 7: Smart routing controller (state machine)
 
+> **Implemented differently from the code below (review fixes, binding).** The controller code and tests in this task are the starting point. The merged version differs in these ways; later tasks rely on them:
+> - `KeepWaiting()` became `Task KeepWaitingAsync()`. `Task ShutdownAsync()` was added: it latches the controller and stops sing-box, and the App calls it at quit and session end. `StopAsync()` stays for tests.
+> - sing-box keeps running while the LAN adapter is missing (last-known LAN name/DNS), so LAN-only traffic **waits** instead of leaking to 4G. Losing the phone still stops it.
+> - "Use phone" and "keep waiting" are only accepted during a real LAN outage. The popup is raised only after the LAN has been offline for `LanOfflinePopupDelay` (10 s).
+> - Control-API health: after `ApiStartGrace` (30 s) three null polls restart sing-box and count as a crash. All awaits use `ConfigureAwait(false)`, and every entry point logs and publishes instead of throwing.
+> - Both selectors set `interrupt_exist_connections` (Task 4 builder).
+
 **Files:**
 - Create: `src/NetRoute.Core/SmartRouting/SmartRoutingController.cs`, `tests/NetRoute.Core.Tests/SmartFakes.cs`, `tests/NetRoute.Core.Tests/SmartRoutingControllerTests.cs`
 
@@ -2197,6 +2204,8 @@ Run: `dotnet test --filter "Category!=Integration"`. Expected: PASS. Every test 
 ---
 
 ### Task 8: v1 integration (TUN path, adapter filter) and Smart routing presenters
+
+> **Review focus for this task:** the sing-box TUN adapter (`NetRoute`, description `sing-tun`) must never be detected as the phone or LAN. If it were, the controller would oscillate: stop → TUN gone → start → TUN back. Both `AdapterDetector.Detect` and `Candidates` must ignore it, and the test must cover a TUN that is up with a gateway.
 
 **Files:**
 - Modify: `src/NetRoute.Core/RouteController.cs`, `src/NetRoute.Core/AdapterDetector.cs`
@@ -3146,12 +3155,13 @@ Add these members to `App`:
         }
     }
 
-    /// Stops sing-box without blocking the UI thread's synchronization context.
+    /// Stops sing-box for good at quit (ShutdownAsync latches the controller). The controller awaits with
+    /// ConfigureAwait(false), so waiting here on the UI thread cannot deadlock.
     void StopSmartRouting()
     {
         if (_smart is not { } smart) return;
         SaveStatsIfChanged();
-        Task.Run(() => smart.StopAsync()).Wait(TimeSpan.FromSeconds(5));
+        Task.Run(() => smart.ShutdownAsync()).Wait(TimeSpan.FromSeconds(5)); // ShutdownAsync latches: nothing restarts sing-box afterwards
     }
 ```
 
@@ -3504,7 +3514,7 @@ Expected: 0 warnings, all tests pass.
 - Modify: `src/NetRoute.App/App.xaml.cs`
 
 **Interfaces:**
-- Consumes: `SmartRoutingController.WaitingDetected`, `UseLanRulesOnPhoneAsync()`, `KeepWaiting()` and `Status` (Task 7); `SmartRoutingPresenter.WaitingText` (Task 8); `CardPlacement.Margin` (v1)
+- Consumes: `SmartRoutingController.WaitingDetected`, `UseLanRulesOnPhoneAsync()`, `KeepWaitingAsync()` and `Status` (Task 7); `SmartRoutingPresenter.WaitingText` (Task 8); `CardPlacement.Margin` (v1)
 - Produces: `WaitingPopup(string text)`, with events `UsePhoneClicked` and `KeepWaitingClicked`
 
 - [ ] **Step 1: Create the popup**
@@ -3588,7 +3598,7 @@ Add:
         }
         var popup = _waitingPopup = new WaitingPopup(text);
         popup.UsePhoneClicked += () => _ = _smart!.UseLanRulesOnPhoneAsync();
-        popup.KeepWaitingClicked += () => _smart!.KeepWaiting();
+        popup.KeepWaitingClicked += () => _ = _smart!.KeepWaitingAsync();
         popup.Closed += (_, _) => _waitingPopup = null;
         popup.Show();
     }
@@ -3683,6 +3693,10 @@ Confirm it contains `NetRouteWidget.exe`, `sing-box\sing-box.exe`, `sing-box\LIC
 8. **Phone replug:** the adapter is renamed, and sing-box restarts once with the new name (log line "Smart routing: starting sing-box").
 9. **Quit the widget:** no `sing-box.exe` remains (`Get-Process sing-box` finds nothing), and internet works through v1 routing.
 10. **Speed test:** ⚡ shows both speeds.
+11. **Replug stability:** replug the phone 3 times within 5 minutes. Smart routing stays Running, with no Faulted message and no restart storm (each replug restarts sing-box once).
+12. **UDP/QUIC failure line:** with the LAN unplugged, play a YouTube video (it uses QUIC) and check that the sing-box lines for its failures are recognised: the waiting popup must appear even when only UDP connections fail. If not, extend `SingBoxLogParser` with the packet-connection failure format.
+13. **Rule index check:** the sing-box log's `router: match[N]` index equals the position in `route.rules` (the Task 9 integration test pins this; confirm with a live YouTube line).
+14. **Hung sing-box:** end the sing-box process from Task Manager while the widget runs. Internet recovers within seconds (TUN removed, v1 routing), and the widget restarts sing-box.
 
 - [ ] **Step 5: Commit, push and update the PR**
 
