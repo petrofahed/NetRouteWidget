@@ -454,6 +454,21 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task Healing_ends_at_once_when_the_backup_dies_and_the_preferred_answers()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        await HealPhone(controller);
+
+        _probe.BySource["192.168.86.42"] = null;
+        _probe.BySource["192.168.42.11"] = 38;
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
     public async Task User_mode_change_resets_the_backoff()
     {
         var controller = Create();

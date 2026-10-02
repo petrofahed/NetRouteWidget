@@ -280,16 +280,28 @@ public sealed class RouteController
             }
             _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
         }
+        else if (backupMs is null && preferredMs is not null)
+        {
+            // The backup itself died while the preferred adapter answers: do not wait for the threshold.
+            EndHeal();
+            _log($"Auto-heal ended: {backup.Name} has no internet but {preferred.Name} answers");
+        }
         else
         {
             _healCount = preferredMs is not null ? _healCount + 1 : 0;
             if (_healCount < _recoverThreshold) return;
-            _healing = false;
-            _healCount = 0;
-            _hadHeal = true;
-            _checksSinceHealEnded = 0;
+            EndHeal();
             _log($"Auto-heal ended: {preferred.Name} has internet again");
         }
+    }
+
+    /// A heal that ends on its own keeps the backoff, so the next heal soon after waits longer.
+    void EndHeal()
+    {
+        _healing = false;
+        _healCount = 0;
+        _hadHeal = true;
+        _checksSinceHealEnded = 0;
     }
 
     async Task<(int?, int?)> MeasureAsync(DetectionResult adapters, CancellationToken ct)
