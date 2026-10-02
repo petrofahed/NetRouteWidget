@@ -97,4 +97,29 @@ public class AdapterDetectorTests
 
         Assert.Equal(new[] { 10, 18, 31 }, indexes);
     }
+
+    [Fact]
+    public void Smart_routing_tun_adapter_is_ignored()
+    {
+        var tun = new AdapterInfo(97, "NetRoute", "sing-tun", AdapterKind.Ethernet, true, true, "172.19.0.1", "");
+
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan(), tun], AdapterOverrides.None);
+
+        Assert.Equal((31, 10), (result.Phone?.Index, result.Lan?.Index));
+        Assert.DoesNotContain(AdapterDetector.Candidates([tun]), _ => true);
+    }
+
+    [Fact]
+    public void Smart_routing_tun_adapter_never_makes_the_lan_ambiguous()
+    {
+        var tun = new AdapterInfo(97, "NetRoute", "sing-tun", AdapterKind.Ethernet, true, true, "172.19.0.1", "");
+
+        var result = AdapterDetector.Detect([TestAdapters.Lan(), tun], AdapterOverrides.None);
+
+        Assert.Equal(10, result.Lan?.Index);
+        Assert.Equal(DetectionIssue.None, result.LanIssue);
+        Assert.Null(result.Phone);
+        Assert.Equal(DetectionIssue.NotFound, result.PhoneIssue);
+        Assert.Equal([10], AdapterDetector.Candidates([TestAdapters.Lan(), tun]).Select(a => a.Index));
+    }
 }

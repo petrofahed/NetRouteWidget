@@ -561,4 +561,18 @@ public class RouteControllerTests
 
         Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
     }
+
+    [Fact]
+    public async Task Tun_interface_is_reported_as_the_smart_routing_exit()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        controller.ExternalPathResolver = index => index == 97 ? InternetPath.Phone : null;
+
+        _routes.BestV4 = 97; // sing-box TUN became the best route
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(InternetPath.Phone, controller.Status.ActivePath);
+        Assert.Empty(_toasts);
+    }
 }
