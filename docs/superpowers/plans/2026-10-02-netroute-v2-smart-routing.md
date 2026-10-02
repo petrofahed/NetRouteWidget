@@ -3085,7 +3085,8 @@ Inside the startup `try`, right after `controller.AutoSwitched += …`, add:
             smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() =>
                 _tray?.Notify(SmartRoutingPresenter.WaitingText(names))));
             controller.ExternalPathResolver = index =>
-                index == TunIndex() ? (smart.Status.DefaultExit == RouteExit.Lan ? InternetPath.Lan : InternetPath.Phone) : null;
+                smart.Status.IsActive && index == TunIndex() // TUN looked up by name on every call: its index changes on each sing-box start
+                    ? (smart.Status.DefaultExit == RouteExit.Lan ? InternetPath.Lan : InternetPath.Phone) : null;
             controller.StatusChanged += status => _ = smart.ApplyAsync(status, controller.Settings);
 ```
 
