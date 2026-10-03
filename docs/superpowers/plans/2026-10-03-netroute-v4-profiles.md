@@ -61,6 +61,7 @@ src/NetRoute.App/
 README.md, docs/superpowers/specs/...      docs                                                                      (Task 7)
 tools/Make-AppIcon.ps1, Assets/NetRouteWidget.ico, csproj, window Icon=                                  (Task 8)
 UsageExceptions.cs (replaces UsageAssignment), UsageReport, UsageTab/Window/App wiring               (Task 9; run it after Task 6, before Task 7)
+RuleCatalog merge/LoadMerged, AppPaths.UserRulesFile, rules.user.json, Config 'Edit rules file' link   (Task 10; run it after Task 9, before Task 7)
 tests/NetRoute.Core.Tests/
   RuleCatalogExitTests.cs (new)  RuleSetTests.cs  SmartRoutingSettingsTests.cs  UsageAttributionTests.cs
   SingBoxConfigBuilderTests.cs  SmartRoutingControllerTests.cs  SmartRoutingPresenterTests.cs
@@ -1607,6 +1608,259 @@ Render the Usage tab with the harness (own windows only; update its `Program.cs`
 ```bash
 git add -A src tests
 git commit -m "feat(app): right-click a Usage row to send it to / exclude it from the exception list; exception rows carry a tag" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 10: Manage the lists from JSON — a user rules file merged over the built-in catalog
+
+Requested by the user after the plan was approved ("I see some hard-coded lists … can manage all those from json"). The built-in lists already live in `rules/builtin.json` (not in C#), but that file is in the install folder: it is overwritten by every install and awkward to edit. Add a file the user owns, `%AppData%\NetRouteWidget\rules.user.json`, with the same schema, merged over the built-in catalog at startup. Execute this task **after Task 9, before Task 7**.
+
+**Files:**
+- Modify: `src/NetRoute.Core/SmartRouting/RuleCatalog.cs`, `src/NetRoute.App/AppPaths.cs`, `src/NetRoute.App/App.xaml.cs`, `src/NetRoute.App/SmartRoutingWindow.xaml`, `src/NetRoute.App/SmartRoutingWindow.xaml.cs`
+- Test: `tests/NetRoute.Core.Tests/RuleCatalogMergeTests.cs` (new)
+
+**Interfaces:**
+- Consumes: Task 1 `RuleItem.Exit/CarveOut`, `RuleCatalog.Parse`.
+- Produces:
+  - `RuleCatalog.Merge(IReadOnlyList<RuleItem> builtin, IReadOnlyList<RuleItem> user, IReadOnlySet<string> removed) → IReadOnlyList<RuleItem>`;
+  - `RuleCatalog.ParseUser(string json) → UserCatalog` where `sealed record UserCatalog(IReadOnlyList<RuleItem> Items, IReadOnlySet<string> Removed)`;
+  - `RuleCatalog.LoadMerged(string builtinPath, string userPath, Action<string> log) → IReadOnlyList<RuleItem>`;
+  - `AppPaths.UserRulesFile`;
+  - `SmartRoutingWindow.EditRulesFileRequested` (`event Action?`).
+
+**Merge rules** (the user file uses exactly the schema of `builtin.json`: `groups` → `items`, with the same `exit` / `carveOut` / `defaultOn` fields):
+- Items are matched by `id`. A user item whose id exists in the built-in catalog **replaces** it completely (name, group, processes, domains, exit, carveOut, defaultOn) and keeps its position in the list. A user item with a new id is **added** (at the end, in its group; a new group id creates a new group after the built-in ones).
+- `{ "id": "xbox", "remove": true }` **removes** a built-in item (only `id` is required for such an item; naming an unknown id is ignored).
+- A missing user file means no change. A user file that is malformed, has a bad `exit`, a phone carve-out or a duplicate id is **reported to the log and ignored as a whole** (the built-in catalog is used): the user's own file can never stop Smart routing from starting. A broken built-in catalog still fails as before.
+
+- [ ] **Step 1: Write the failing tests** — `tests/NetRoute.Core.Tests/RuleCatalogMergeTests.cs`:
+
+```csharp
+namespace NetRoute.Core.Tests;
+
+public class RuleCatalogMergeTests
+{
+    static readonly IReadOnlyList<RuleItem> Builtin =
+    [
+        new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true),
+        new("steam", "games", "Games", "Steam", ["steam.exe"], [], true),
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], [], true, RouteExit.Phone),
+    ];
+
+    const string UserJson = """
+        {"version":1,"groups":[
+          {"id":"ai","name":"AI","exit":"phone","items":[
+            {"id":"claude","name":"Claude (mine)","processes":["claude.exe","claude-code.exe"],"domains":["claude.ai"]},
+            {"id":"mistral","name":"Mistral","domains":["mistral.ai"]}]},
+          {"id":"mine","name":"My apps","items":[{"id":"nas","name":"NAS sync","processes":["nassync.exe"],"defaultOn":false}]},
+          {"id":"games","name":"Games","items":[{"id":"steam","remove":true},{"id":"not-there","remove":true}]}
+        ]}
+        """;
+
+    static IReadOnlyList<RuleItem> Merged()
+    {
+        var user = RuleCatalog.ParseUser(UserJson);
+        return RuleCatalog.Merge(Builtin, user.Items, user.Removed);
+    }
+
+    [Fact]
+    public void A_user_item_with_a_built_in_id_replaces_it_in_place()
+    {
+        var merged = Merged();
+
+        var claude = merged.Single(i => i.Id == "claude");
+        Assert.Equal("Claude (mine)", claude.Name);
+        Assert.Equal(new[] { "claude.exe", "claude-code.exe" }, claude.Processes);
+        Assert.Equal(RouteExit.Phone, claude.Exit); // the user's group says phone
+        Assert.Equal(1, merged.ToList().FindIndex(i => i.Id == "claude")); // youtube, claude, ... (steam was removed)
+    }
+
+    [Fact]
+    public void New_ids_are_added_and_a_new_group_comes_after_the_built_in_ones()
+    {
+        var merged = Merged();
+
+        Assert.Equal(new[] { "youtube", "claude", "mistral", "nas" }, merged.Select(i => i.Id));
+        var nas = merged.Single(i => i.Id == "nas");
+        Assert.Equal(("mine", "My apps", RouteExit.Lan, false), (nas.GroupId, nas.GroupName, nas.Exit, nas.DefaultOn));
+        Assert.Equal(RouteExit.Phone, merged.Single(i => i.Id == "mistral").Exit);
+    }
+
+    [Fact]
+    public void Remove_deletes_a_built_in_item_and_an_unknown_id_is_ignored()
+    {
+        var merged = Merged();
+
+        Assert.DoesNotContain(merged, i => i.Id == "steam");
+        Assert.DoesNotContain(merged, i => i.Id == "not-there");
+    }
+
+    [Fact]
+    public void An_empty_user_catalog_changes_nothing()
+    {
+        var user = RuleCatalog.ParseUser("""{"version":1,"groups":[]}""");
+
+        Assert.Equal(Builtin, RuleCatalog.Merge(Builtin, user.Items, user.Removed));
+    }
+
+    [Theory]
+    [InlineData("{ not json")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","exit":"wifi","items":[{"id":"x","name":"X"}]}]}""")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X"},{"id":"x","name":"Y"}]}]}""")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","exit":"phone","carveOut":true,"items":[{"id":"x","name":"X"}]}]}""")]
+    public void A_bad_user_file_is_reported_and_ignored_as_a_whole(string userJson)
+    {
+        var dir = Directory.CreateTempSubdirectory("rules-merge-").FullName;
+        try
+        {
+            var builtinPath = Path.Combine(dir, "builtin.json");
+            var userPath = Path.Combine(dir, "rules.user.json");
+            File.WriteAllText(builtinPath, """{"version":1,"groups":[{"id":"v","name":"V","items":[{"id":"youtube","name":"YouTube","domains":["youtube.com"]}]}]}""");
+            File.WriteAllText(userPath, userJson);
+            var logs = new List<string>();
+
+            var items = RuleCatalog.LoadMerged(builtinPath, userPath, logs.Add);
+
+            Assert.Equal(new[] { "youtube" }, items.Select(i => i.Id));
+            Assert.Contains(logs, l => l.Contains("rules.user.json", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_missing_user_file_is_fine_and_a_good_one_is_merged()
+    {
+        var dir = Directory.CreateTempSubdirectory("rules-merge-").FullName;
+        try
+        {
+            var builtinPath = Path.Combine(dir, "builtin.json");
+            var userPath = Path.Combine(dir, "rules.user.json");
+            File.WriteAllText(builtinPath, """{"version":1,"groups":[{"id":"v","name":"V","items":[{"id":"youtube","name":"YouTube","domains":["youtube.com"]}]}]}""");
+            var logs = new List<string>();
+
+            Assert.Single(RuleCatalog.LoadMerged(builtinPath, userPath, logs.Add));
+            Assert.Empty(logs);
+
+            File.WriteAllText(userPath, """{"version":1,"groups":[{"id":"m","name":"Mine","items":[{"id":"nas","name":"NAS","domains":["nas.local"]}]}]}""");
+            Assert.Equal(new[] { "youtube", "nas" }, RuleCatalog.LoadMerged(builtinPath, userPath, logs.Add).Select(i => i.Id));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `dotnet test tests/NetRoute.Core.Tests --filter "FullyQualifiedName~RuleCatalogMergeTests"`
+Expected: build FAIL — `ParseUser`, `Merge`, `LoadMerged`, `UserCatalog` do not exist.
+
+- [ ] **Step 3: Implement the Core.** In `RuleCatalog.cs` generalise `Parse` into a shared reader and add the three members (read the current file first: Task 1 added `ExitOf` / `Flag` and the group/item inheritance — keep that logic):
+
+```csharp
+/// What a user rules file contributes: items to add or replace, and built-in ids to remove.
+public sealed record UserCatalog(IReadOnlyList<RuleItem> Items, IReadOnlySet<string> Removed);
+```
+
+- `Parse(json)` becomes `ReadCatalog(json, allowRemove: false).Items` (unchanged behaviour and errors).
+- `ParseUser(json)` = `ReadCatalog(json, allowRemove: true)`. In that mode an item with `"remove": true` needs only `"id"` (no `name`) and its id goes into `Removed` instead of `Items`; every other item is read exactly like a built-in item (same `exit` / `carveOut` / `defaultOn` inheritance and the same `InvalidDataException` for a bad exit, a phone carve-out, a duplicate id among the user's own items).
+- Merge and load:
+
+```csharp
+    /// Built-in items first, in their order; a user item with the same id replaces the built-in one in place; new ids follow
+    /// (a new group after the built-in ones); removed ids are dropped.
+    public static IReadOnlyList<RuleItem> Merge(IReadOnlyList<RuleItem> builtin, IReadOnlyList<RuleItem> user, IReadOnlySet<string> removed)
+    {
+        var replacements = user.ToDictionary(i => i.Id);
+        var result = new List<RuleItem>();
+        foreach (var item in builtin)
+        {
+            if (removed.Contains(item.Id)) continue;
+            result.Add(replacements.TryGetValue(item.Id, out var mine) ? mine : item);
+        }
+        var known = builtin.Select(i => i.Id).ToHashSet();
+        result.AddRange(user.Where(i => !known.Contains(i.Id) && !removed.Contains(i.Id)));
+        return result;
+    }
+
+    /// The built-in catalog merged with the user's file. A missing user file changes nothing; a bad one is reported through
+    /// log and ignored as a whole, so the user's own file can never stop Smart routing from starting.
+    public static IReadOnlyList<RuleItem> LoadMerged(string builtinPath, string userPath, Action<string> log)
+    {
+        var builtin = Load(builtinPath);
+        if (!File.Exists(userPath)) return builtin;
+        try
+        {
+            var user = ParseUser(File.ReadAllText(userPath));
+            return Merge(builtin, user.Items, user.Removed);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            log($"rules.user.json ignored ({ex.Message}); using the built-in rules only");
+            return builtin;
+        }
+    }
+```
+
+- [ ] **Step 4: Run to verify the Core passes**
+
+Run: `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"` — Expected: all green, 0 warnings.
+
+- [ ] **Step 5: App wiring and the "Edit rules file…" link.**
+
+`src/NetRoute.App/AppPaths.cs`: add `public static readonly string UserRulesFile = Path.Combine(Root, "rules.user.json");`.
+`src/NetRoute.App/App.xaml.cs`: where the catalog is loaded (`_catalog = RuleCatalog.Load(RuleCatalog.DefaultPath);` inside `SetUpSmartRouting`) use `RuleCatalog.LoadMerged(RuleCatalog.DefaultPath, AppPaths.UserRulesFile, log.Info)` (keep the existing try/catch for a broken built-in catalog). In `OpenSmartRouting` wire:
+
+```csharp
+        window.EditRulesFileRequested += () => OpenRulesFile();
+```
+and add
+
+```csharp
+    /// Opens the user's rules file in the default editor, creating a small template first. Changes apply after a restart.
+    void OpenRulesFile()
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.UserRulesFile))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(AppPaths.UserRulesFile)!);
+                File.WriteAllText(AppPaths.UserRulesFile,
+                    "{\n  \"version\": 1,\n  \"groups\": [\n    { \"id\": \"my-apps\", \"name\": \"My apps\", \"exit\": \"phone\", \"items\": [] }\n  ]\n}\n");
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo(AppPaths.UserRulesFile) { UseShellExecute = true });
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                Process.Start(new ProcessStartInfo("notepad.exe", $"\"{AppPaths.UserRulesFile}\"") { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            _log?.Error("Could not open the rules file", ex);
+        }
+    }
+```
+
+`SmartRoutingWindow.xaml`: in the Config tab's bottom `StackPanel` (above "Clear usage history…") add `<TextBlock Margin="0,6,0,0"><Hyperlink Click="OnEditRulesFile">Edit rules file… (restart to apply)</Hyperlink></TextBlock>`; `SmartRoutingWindow.xaml.cs`: `public event Action? EditRulesFileRequested;` and `void OnEditRulesFile(object sender, RoutedEventArgs e) => EditRulesFileRequested?.Invoke();`.
+
+- [ ] **Step 6: Build, test, render.**
+
+Run: `dotnet build src/NetRoute.App -c Release -o "<scratch>\nrw-v4-build"` — Expected: 0 warnings, 0 errors. `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"` — all green, 0 warnings. Render the Config tab with the harness (own windows only) and confirm the link is visible and themed in dark and light. **Do not click it or launch the widget.** List what you could not verify (opening the real editor, the restart round trip).
+
+- [ ] **Step 7: Docs and commit.** README: a short "Editing the lists" section — the built-in lists are in `rules\builtin.json` (overwritten by installs); your own changes go in `%AppData%\NetRouteWidget\rules.user.json`, same format, merged by item `id` (replace, add, `"remove": true`), a broken file is ignored with a log line, restart to apply, and the Config tab's "Edit rules file…" link creates a template and opens it. Spec: add the same paragraph under "Data model".
+
+```bash
+git add -A src tests README.md docs
+git commit -m "feat: manage the lists from JSON — rules.user.json merged over the built-in catalog" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
