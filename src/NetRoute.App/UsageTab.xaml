@@ -4,6 +4,11 @@
     <DockPanel Margin="4,12,4,0">
         <StackPanel DockPanel.Dock="Top">
             <StackPanel x:Name="RangeBar" Orientation="Horizontal" />
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0"> <!-- its own line: next to the range buttons it does not fit at the minimum window width -->
+                <TextBlock Text="Filter:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondary}" />
+                <TextBox x:Name="FilterBox" Width="200" VerticalContentAlignment="Center" Padding="4,3"
+                         ToolTip="Type part of an application or site name, for example youtube. Esc clears it." />
+            </StackPanel>
             <TextBlock x:Name="StatusText" Margin="6,8,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
         </StackPanel>
         <TextBlock x:Name="Banner" DockPanel.Dock="Top" Margin="0,8,0,0" TextWrapping="Wrap"

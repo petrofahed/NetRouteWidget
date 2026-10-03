@@ -22,8 +22,8 @@ public class UsageReportTests
         s with { Rates = rates.ToDictionary(r => r.Key, r => r.Rate) };
 
     static UsageReportModel Build(UsageSnapshot usage, int range = 7, SmartRoutingSettings? settings = null,
-                                  bool canAssign = true, UsageSort? sort = null) =>
-        UsageReport.Build(usage, Today, range, Catalog, settings ?? new SmartRoutingSettings(), canAssign, sort ?? UsageSort.Default);
+                                  bool canAssign = true, UsageSort? sort = null, string? filter = null) =>
+        UsageReport.Build(usage, Today, range, Catalog, settings ?? new SmartRoutingSettings(), canAssign, sort ?? UsageSort.Default, filter);
 
     [Theory]
     [InlineData(1, 1)]
@@ -224,6 +224,83 @@ public class UsageReportTests
     public void Range_labels()
     {
         Assert.Equal(new[] { "Today", "3 days", "7 days", "15 days", "30 days" }, UsageReport.Ranges.Select(UsageReport.RangeLabel));
+    }
+
+    // ---- filter ----
+
+    static UsageSnapshot FilterRows() => Snap(
+        500,
+        (Today, "youtube", 10, 1000, 1000), (Today, "app:chrome.exe", 20, 2000, 0), (Today, "app:steam.exe", 40, 4000, 4000));
+
+    [Theory]
+    [InlineData("YOUTUBE")]
+    [InlineData("youtu")]
+    [InlineData("Tube")]
+    public void A_filter_matches_the_display_name_ignoring_case(string filter)
+    {
+        var row = Assert.Single(Build(FilterRows(), filter: filter).Rows);
+
+        Assert.Equal("youtube", row.Key);
+    }
+
+    [Fact]
+    public void A_filter_matches_the_row_key_even_when_the_name_differs()
+    {
+        // "app:" is only in the key; the display name is just the program name.
+        var model = Build(FilterRows(), filter: "APP:chrome");
+
+        Assert.Equal("app:chrome.exe", Assert.Single(model.Rows).Key);
+    }
+
+    [Fact]
+    public void A_filter_is_trimmed()
+    {
+        Assert.Equal("youtube", Assert.Single(Build(FilterRows(), filter: "  youtube 	").Rows).Key);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_filter_is_no_filter(string? filter)
+    {
+        var model = Build(FilterRows(), filter: filter);
+
+        Assert.Equal(3, model.Rows.Count);
+        Assert.False(model.Filtered);
+    }
+
+    [Fact]
+    public void Filtered_totals_sum_only_the_shown_rows_but_kept_off_and_adapter_stay_whole_period()
+    {
+        var model = Build(FilterRows(), filter: "app:");
+
+        Assert.True(model.Filtered);
+        Assert.Equal(2, model.Rows.Count);
+        Assert.Equal(60, model.PhoneTotal);
+        Assert.Equal(6000, model.LanTotal);
+        Assert.Equal(5000, model.KeptOff);
+        Assert.Equal(500, model.PhoneAdapterTotal);
+    }
+
+    [Fact]
+    public void A_filter_that_matches_nothing_gives_no_rows_and_zero_totals_but_is_still_filtered()
+    {
+        var model = Build(FilterRows(), filter: "zzz");
+
+        Assert.Empty(model.Rows);
+        Assert.True(model.Filtered);
+        Assert.Equal(0, model.PhoneTotal + model.LanTotal);
+        Assert.Equal(5000, model.KeptOff);
+    }
+
+    [Fact]
+    public void A_row_with_only_a_live_rate_is_filtered_by_the_same_rule()
+    {
+        var usage = WithRates(FilterRows(), ("app:vlc.exe", new UsageRate(RouteExit.Phone, 1000)));
+
+        Assert.Equal("app:vlc.exe", Assert.Single(Build(usage, filter: "VLC").Rows).Key);
+        Assert.DoesNotContain(Build(usage, filter: "steam").Rows, r => r.Key == "app:vlc.exe");
     }
 
     // ---- row order ----

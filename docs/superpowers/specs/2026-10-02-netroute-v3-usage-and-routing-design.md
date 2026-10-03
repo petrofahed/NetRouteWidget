@@ -58,6 +58,7 @@ Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Sma
   - application: add a user App rule (**+ App**) and enable it for the LAN, or disable it to go back to the phone.
 - **Phone** and **LAN** columns show bytes (download + upload) for the selected date range. The exit is the connection's actual exit in sing-box: the phone or the LAN adapter.
 - **Now** shows the current rate and exit for rows that moved data in the last few seconds ("↕ 1.4 MB/s · phone"), otherwise "idle".
+- **Filter:** a "Filter:" box under the range buttons narrows the list by name (case-insensitive "contains" on the display name or the row key); the Total row then sums only the shown rows and reads "Total (filtered)", while "Kept off 4G" and the adapter total stay whole-period. It is per-session, not saved.
 - **Sorting:** click any column header. The default sort is Phone, largest first, so the biggest consumers of mobile data are on top.
 - **Date ranges:** Today (since local midnight), 3, 7, 15 and 30 days (today plus the previous days). The choice is remembered.
 - **Footer:** totals per column and "kept off 4G in this period".

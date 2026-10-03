@@ -22,6 +22,7 @@ public partial class App : Application
     readonly DispatcherTimer _usageSave = new() { Interval = UsageSaveInterval };
     bool _usagePolling;
     UsageSort _usageSort = UsageSort.Default;
+    string _usageFilter = ""; // the Usage tab's filter box; per session, a new window starts empty
     int _renderSeq;
     bool _renderRunning, _renderAgain;
     FileLog? _log;
@@ -430,7 +431,7 @@ public partial class App : Application
                 if (seq != _renderSeq || _smartWindow != window) continue;
                 var canAssign = settings.Enabled && (status.State is SmartState.Running or SmartState.Starting);
                 var report = UsageReport.Build(
-                    usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort);
+                    usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter);
                 window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text, recording: status.State == SmartState.Running);
             }
             while (_renderAgain);
@@ -460,6 +461,7 @@ public partial class App : Application
             return;
         }
         var window = _smartWindow = new SmartRoutingWindow();
+        _usageFilter = ""; // the new window's filter box is empty
         window.MasterToggled += on => ChangeSmart(s => s with { Enabled = on });
         window.ItemToggled += (id, on) => ChangeSmart(s => s.WithItem(id, on));
         window.GroupToggled += (groupId, on) => ChangeSmart(s => SmartRoutingPage.WithGroup(_catalog, s, groupId, on));
@@ -480,6 +482,11 @@ public partial class App : Application
         {
             _usageSort = sort;
             RenderSmartWindow();
+        };
+        window.UsageFilterChanged += text =>
+        {
+            _usageFilter = text;
+            RenderSmartWindow(); // no ApplyAsync: a filter change must never touch sing-box
         };
         window.ClearUsageRequested += async () =>
         {

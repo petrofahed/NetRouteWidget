@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using NetRoute.Core;
 
@@ -17,7 +18,7 @@ public partial class UsageTab : UserControl
     readonly Dictionary<int, ToggleButton> _rangeButtons = new();
     readonly Dictionary<UsageSortColumn, Button> _headers = new();
     readonly Dictionary<string, RowView> _rows = new();
-    readonly TextBlock _totalPhone = new(), _totalLan = new();
+    readonly TextBlock _totalLabel = new(), _totalPhone = new(), _totalLan = new();
     List<string> _order = [];
     UsageSort _sort = UsageSort.Default;
     bool _forceReorder;
@@ -30,10 +31,19 @@ public partial class UsageTab : UserControl
         BuildTotals();
         RowScroll.ScrollChanged += (_, _) => MatchScrollBarWidth();
         RowScroll.SizeChanged += (_, _) => MatchScrollBarWidth();
+        FilterBox.TextChanged += (_, _) => FilterChanged?.Invoke(FilterBox.Text);
+        FilterBox.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Escape || FilterBox.Text.Length == 0) return;
+            FilterBox.Clear(); // raises TextChanged, which tells the app
+            e.Handled = true;
+        };
     }
 
     public event Action<int>? RangeChanged;
     public event Action<UsageSort>? SortChanged;
+    /// The filter text as typed (untrimmed). The filter is per-session UI state and the box is never written by Render.
+    public event Action<string>? FilterChanged;
 
     public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording)
     {
@@ -49,6 +59,9 @@ public partial class UsageTab : UserControl
             banner.Add($"Recording since {since.ToString("d MMM yyyy", CultureInfo.CurrentCulture)}.");
         Banner.Text = string.Join("\n", banner);
         Banner.Visibility = banner.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        EmptyText.Text = model.Filtered
+            ? $"No rows match “{FilterBox.Text.Trim()}”."
+            : "No usage recorded in this period yet.";
         EmptyText.Visibility = model.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         var byKey = model.Rows.ToDictionary(r => r.Key);
@@ -82,6 +95,7 @@ public partial class UsageTab : UserControl
             _order = next.ToList();
         }
 
+        _totalLabel.Text = model.Filtered ? "Total (filtered)" : "Total";
         _totalPhone.Text = ByteFormat.Human(model.PhoneTotal);
         _totalLan.Text = ByteFormat.Human(model.LanTotal);
         KeptText.Text = $"Kept off 4G in this period: {(model.KeptOffIsLowerBound ? "at least " : "")}{ByteFormat.Human(model.KeptOff)}";
@@ -171,13 +185,15 @@ public partial class UsageTab : UserControl
     void BuildTotals()
     {
         DefineColumns(TotalGrid);
-        var label = new TextBlock { Text = "Total", FontWeight = FontWeights.SemiBold, Margin = new Thickness(6, 0, 0, 0) };
+        _totalLabel.Text = "Total";
+        _totalLabel.FontWeight = FontWeights.SemiBold;
+        _totalLabel.Margin = new Thickness(6, 0, 0, 0);
         _totalPhone.HorizontalAlignment = _totalLan.HorizontalAlignment = HorizontalAlignment.Right;
         _totalPhone.Margin = _totalLan.Margin = new Thickness(0, 0, 6, 0);
         _totalPhone.FontWeight = _totalLan.FontWeight = FontWeights.SemiBold;
         Grid.SetColumn(_totalPhone, 1);
         Grid.SetColumn(_totalLan, 2);
-        TotalGrid.Children.Add(label);
+        TotalGrid.Children.Add(_totalLabel);
         TotalGrid.Children.Add(_totalPhone);
         TotalGrid.Children.Add(_totalLan);
     }

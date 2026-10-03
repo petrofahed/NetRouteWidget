@@ -44,6 +44,7 @@ The ⚙ window has two tabs, **Usage** and **Config**. Config is the Smart routi
 
 - **Measured through Smart routing,** so history only grows while it is running. Traffic to your home devices and anything while Smart routing is off is not counted.
 - **Phone and LAN columns** per application or site, for **Today, 3, 7, 15 or 30 days** (click a column header to sort; the default is Phone, largest first). **Now** shows the current rate and which connection is carrying it.
+- **Filter box:** type part of a name (for example `youtube`) to narrow the list and its totals to the matching applications and sites; Esc clears it.
 - **The Usage tab only shows the numbers.** To keep an application or site off 4G (or let it use the phone again), change its rule on the Config tab.
 - **Unattributed:** connections that open and close between two one-second checks cannot be tied to an application, so they appear in an **Unattributed** row and the column totals stay right. The footer also shows the **exact phone adapter total** from Windows, to compare with the Phone column.
 - **Stored in `%AppData%\NetRouteWidget\usage.json`** for 35 days: only application names and byte totals, never URLs. **Clear usage history…** (Config tab) deletes it. The "kept off 4G" figure comes from this file too.

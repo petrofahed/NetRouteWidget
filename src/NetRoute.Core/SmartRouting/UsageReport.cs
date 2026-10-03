@@ -17,9 +17,10 @@ public sealed record UsageReportRow(
 
 /// RecordingSince: set only when the earliest recorded day is later than the first day of the range.
 /// KeptOffIsLowerBound: a day in the range has a gap (sing-box stopped or restarted), so "kept off 4G" is "at least" that much.
+/// Filtered: a name filter was applied; Rows and the Phone/Lan totals then cover only the matching rows (KeptOff and the adapter total stay whole-period).
 public sealed record UsageReportModel(
     int RangeDays, IReadOnlyList<UsageReportRow> Rows, long PhoneTotal, long LanTotal, long KeptOff,
-    bool KeptOffIsLowerBound, long PhoneAdapterTotal, DateOnly? RecordingSince);
+    bool KeptOffIsLowerBound, long PhoneAdapterTotal, DateOnly? RecordingSince, bool Filtered = false);
 
 /// Pure model for the Usage tab.
 public static class UsageReport
@@ -36,11 +37,12 @@ public static class UsageReport
 
     public static UsageReportModel Build(
         UsageSnapshot usage, DateOnly today, int rangeDays, IReadOnlyList<RuleItem> catalog,
-        SmartRoutingSettings settings, bool canAssign, UsageSort sort)
+        SmartRoutingSettings settings, bool canAssign, UsageSort sort, string? filter = null)
     {
         var range = NormalizeRange(rangeDays);
         var first = today.AddDays(-(range - 1));
         var attribution = UsageAttribution.Build(catalog, settings);
+        var needle = filter?.Trim() ?? "";
 
         var sums = new Dictionary<string, UsageRow>();
         long adapter = 0;
@@ -59,9 +61,13 @@ public static class UsageReport
         {
             var rate = usage.Rates.GetValueOrDefault(key);
             if (sum.Total == 0 && rate is null) continue;
+            var name = attribution.DisplayName(key);
+            if (needle.Length > 0
+                && !name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                && !key.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
             var assignment = UsageAssignment.Describe(catalog, settings, key);
             rows.Add(new UsageReportRow(
-                key, attribution.DisplayName(key), assignment.Via, canAssign && assignment.CanChange,
+                key, name, assignment.Via, canAssign && assignment.CanChange,
                 sum.Phone.Total, sum.Lan.Total, rate));
         }
 
@@ -69,7 +75,7 @@ public static class UsageReport
         DateOnly? since = recorded.Count > 0 && recorded[0] > first ? recorded[0] : null;
         return new UsageReportModel(
             range, Sort(rows, sort).ToList(), rows.Sum(r => r.PhoneBytes), rows.Sum(r => r.LanBytes),
-            sums.Values.Sum(r => r.Kept), gap, adapter, since);
+            sums.Values.Sum(r => r.Kept), gap, adapter, since, needle.Length > 0);
     }
 
     static IEnumerable<UsageReportRow> Sort(List<UsageReportRow> rows, UsageSort sort)
