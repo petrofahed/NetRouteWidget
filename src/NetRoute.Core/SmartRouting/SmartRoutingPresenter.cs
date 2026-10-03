@@ -44,35 +44,54 @@ public static class SmartRoutingPresenter
         $"{string.Join(", ", names)} {(names.Count == 1 ? "is" : "are")} waiting — the LAN is offline.";
 }
 
-public sealed record PageItem(string Id, string Name, bool On, long TodayBytes);
+public sealed record PageItem(string Id, string Name, bool On, long TodayBytes, RouteExit Exit = RouteExit.Lan, bool CarveOut = false);
 
 public sealed record PageGroup(string Id, string Name, bool? On, long TodayBytes, IReadOnlyList<PageItem> Items);
 
 public sealed record PageUserRule(UserRule Rule, long TodayBytes);
 
+/// EditingProfile: which profile's list the page shows (Phone = "Phone + exceptions", Lan = "LAN + exceptions").
+/// ActiveProfile: the profile Smart routing is running (the routing mode).
 public sealed record PageModel(
     bool Enabled, SmartRow Status, bool CanUsePhone, long TotalToday,
-    IReadOnlyList<PageGroup> Groups, IReadOnlyList<PageUserRule> UserRules);
+    IReadOnlyList<PageGroup> Groups, IReadOnlyList<PageUserRule> UserRules,
+    RouteExit EditingProfile = RouteExit.Phone, RouteExit ActiveProfile = RouteExit.Phone);
 
 /// Pure model for the management page.
 public static class SmartRoutingPage
 {
-    public static PageModel Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, SmartRoutingStatus status)
+    public static PageModel Build(
+        IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, SmartRoutingStatus status, RouteExit editing = RouteExit.Phone)
     {
         long Bytes(string id) => status.Today.BytesByEntry.GetValueOrDefault(id);
 
-        var groups = catalog.GroupBy(i => (i.GroupId, i.GroupName)).Select(g =>
+        // The Phone view edits the LAN exceptions; the LAN view edits the phone exceptions. Carve-outs (update items) belong to both.
+        var visible = editing == RouteExit.Phone
+            ? catalog.Where(i => i.Exit == RouteExit.Lan)
+            : catalog.Where(i => i.Exit == RouteExit.Phone || i.CarveOut);
+        var groups = visible.GroupBy(i => (i.GroupId, i.GroupName)).Select(g =>
         {
-            var items = g.Select(i => new PageItem(i.Id, i.Name, settings.IsItemOn(i), Bytes(i.Id))).ToList();
+            var items = g.Select(i => new PageItem(i.Id, i.Name, settings.IsItemOn(i), Bytes(i.Id), i.Exit, i.CarveOut)).ToList();
             bool? on = items.All(i => i.On) ? true : items.Any(i => i.On) ? null : false;
             return new PageGroup(g.Key.GroupId, g.Key.GroupName, on, items.Sum(i => i.TodayBytes), items);
         }).ToList();
-        var rules = settings.UserRules.Select(r => new PageUserRule(r, Bytes(UsageAttribution.RowKeyOf(r)))).ToList();
+        var userRules = editing == RouteExit.Phone ? settings.UserRules : settings.PhoneUserRules;
+        var rules = userRules.Select(r => new PageUserRule(r, Bytes(UsageAttribution.RowKeyOf(r)))).ToList();
 
         return new PageModel(
             settings.Enabled, SmartRoutingPresenter.Row(status),
             CanUsePhone: status.State == SmartState.Running && !status.LanOnline && !status.LanRulesOnPhone,
-            status.Today.Total, groups, rules);
+            status.Today.Total, groups, rules, editing, status.Profile);
+    }
+
+    /// The dimmed text at the right of an item row. The Phone view shows what the item kept off 4G today, or where it goes
+    /// when switched off; the LAN view says where the item goes. A switched-off carve-out falls to its app's phone rule.
+    public static string ItemCaption(PageItem item, RouteExit editing)
+    {
+        if (editing == RouteExit.Phone)
+            return item.On ? ByteFormat.Human(item.TodayBytes) : "→ via phone";
+        if (item.CarveOut) return item.On ? "→ LAN" : "→ via phone";
+        return item.On ? "→ phone" : "→ via LAN";
     }
 
     /// What a click on a group's tick box sets: ON unless the group is fully on (a mixed group goes ON, not off).

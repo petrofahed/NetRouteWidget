@@ -156,4 +156,87 @@ public class SmartRoutingPresenterTests
     [InlineData(null, true)]    // mixed: switch it ON, never off
     public void Clicking_a_group_turns_it_on_unless_it_is_fully_on(bool? current, bool expected) =>
         Assert.Equal(expected, SmartRoutingPage.NextGroupState(current));
+
+    static readonly IReadOnlyList<RuleItem> V4Catalog =
+    [
+        new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true),
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], [], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    static SmartRoutingStatus StatusFor(RouteExit profile, Dictionary<string, long>? kept = null) =>
+        new(SmartState.Running, null, profile, false, true, [], 3, new DailyStats(new DateOnly(2026, 10, 3), kept ?? new()), Profile: profile);
+
+    [Fact]
+    public void The_phone_view_lists_the_lan_items_and_carve_outs_with_the_lan_rules()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new UserRule(UserRuleType.App, "a.exe")],
+            PhoneUserRules = [new UserRule(UserRuleType.App, "b.exe")],
+        };
+
+        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Phone), RouteExit.Phone);
+
+        Assert.Equal(new[] { "youtube", "vscode-updates" }, page.Groups.SelectMany(g => g.Items).Select(i => i.Id));
+        Assert.Equal(new[] { "a.exe" }, page.UserRules.Select(r => r.Rule.Value));
+        Assert.Equal(RouteExit.Phone, page.EditingProfile);
+        Assert.Equal(RouteExit.Phone, page.ActiveProfile);
+    }
+
+    [Fact]
+    public void The_lan_view_lists_the_phone_items_and_carve_outs_with_the_phone_rules()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new UserRule(UserRuleType.App, "a.exe")],
+            PhoneUserRules = [new UserRule(UserRuleType.App, "b.exe")],
+        };
+
+        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Phone), RouteExit.Lan);
+
+        Assert.Equal(new[] { "claude", "vscode-updates" }, page.Groups.SelectMany(g => g.Items).Select(i => i.Id));
+        Assert.Equal(new[] { "b.exe" }, page.UserRules.Select(r => r.Rule.Value));
+        Assert.Equal(RouteExit.Lan, page.EditingProfile);
+        Assert.Equal(RouteExit.Phone, page.ActiveProfile); // editing the other list does not change the active profile
+    }
+
+    [Fact]
+    public void A_phone_rule_shows_its_usage_row_bytes()
+    {
+        var settings = new SmartRoutingSettings { PhoneUserRules = [new UserRule(UserRuleType.App, "B.exe")] };
+
+        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Lan, new() { ["app:b.exe"] = 700 }), RouteExit.Lan);
+
+        Assert.Equal(700, Assert.Single(page.UserRules).TodayBytes);
+    }
+
+    [Fact]
+    public void Group_toggles_work_on_the_carve_out_group_from_either_view()
+    {
+        var s = SmartRoutingPage.WithGroup(V4Catalog, new SmartRoutingSettings(), "upd", on: false);
+
+        Assert.False(s.IsItemOn(V4Catalog.Single(i => i.Id == "vscode-updates")));
+    }
+
+    [Theory]
+    [InlineData(RouteExit.Phone, RouteExit.Lan, false, true, "→ via phone")]  // Phone view, LAN item switched off
+    [InlineData(RouteExit.Lan, RouteExit.Phone, false, true, "→ via LAN")]    // LAN view, phone item switched off
+    [InlineData(RouteExit.Lan, RouteExit.Phone, false, false, "→ phone")]     // LAN view, phone item on
+    [InlineData(RouteExit.Lan, RouteExit.Lan, true, false, "→ LAN")]          // LAN view, carve-out on
+    [InlineData(RouteExit.Lan, RouteExit.Lan, true, true, "→ via phone")]     // LAN view, carve-out off: its app's phone rule catches it
+    public void Item_captions_say_where_the_item_goes(RouteExit editing, RouteExit exit, bool carveOut, bool off, string expected)
+    {
+        var item = new PageItem("x", "X", On: !off, TodayBytes: 0, exit, carveOut);
+
+        Assert.Equal(expected, SmartRoutingPage.ItemCaption(item, editing));
+    }
+
+    [Fact]
+    public void A_phone_view_item_that_is_on_shows_its_bytes()
+    {
+        var item = new PageItem("youtube", "YouTube", On: true, TodayBytes: 2048);
+
+        Assert.Equal("2 KB", SmartRoutingPage.ItemCaption(item, RouteExit.Phone));
+    }
 }
