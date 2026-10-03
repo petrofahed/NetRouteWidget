@@ -117,10 +117,8 @@ public sealed class UsageCounter
             Add(rows, UsageAttribution.UnattributedKey, RouteExit.Lan, Spread(split.Lan, unseenUp, unseenDown),
                 kept: poll.PhoneIsDefault ? split.Lan : 0);
         }
-        else
-        {
-            _lastUp = _lastDown = null;
-        }
+        // A poll without totals skips the reconciliation but keeps the baseline: only ResetBaselines (a real restart)
+        // clears it, otherwise the next poll with totals would book sing-box's whole lifetime total as unattributed.
 
         RebuildRates(poll.Now);
     }
@@ -236,7 +234,13 @@ public sealed class UsageCounter
         var rates = new Dictionary<string, UsageRate>();
         foreach (var (key, queue) in _recent.ToList())
         {
-            while (queue.Count > 0 && now - queue.Peek().At >= RateWindow) queue.Dequeue();
+            // Samples stamped after "now" come from a clock that has since stepped back: they are stale too.
+            if (queue.Any(e => e.At > now || now - e.At >= RateWindow))
+            {
+                var fresh = queue.Where(e => e.At <= now && now - e.At < RateWindow).ToList();
+                queue.Clear();
+                foreach (var e in fresh) queue.Enqueue(e);
+            }
             if (queue.Count == 0)
             {
                 _recent.Remove(key);

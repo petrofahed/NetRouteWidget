@@ -287,6 +287,32 @@ public class UsageCounterTests
     }
 
     [Fact]
+    public void A_clock_that_steps_back_drops_the_rate_samples_from_its_future()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0.AddDays(1), [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+        Assert.True(counter.Snapshot().Rates.ContainsKey("app:a.exe"));
+
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+
+        Assert.Empty(counter.Snapshot().Rates);
+    }
+
+    [Fact]
+    public void A_poll_without_totals_keeps_the_totals_baseline()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 1000, process: "a.exe")]), Attr);
+
+        counter.Update(new UsagePoll([Conn("1", 0, 1000, process: "a.exe")], null, null, null, true, T0.AddSeconds(1)), Attr);
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 1500, process: "a.exe")]), Attr);
+
+        var rows = counter.Snapshot().Days[D0].Rows;
+        Assert.DoesNotContain(UsageAttribution.UnattributedKey, rows.Keys);
+        Assert.Equal(1500, rows["app:a.exe"].Total);
+    }
+
+    [Fact]
     public void A_gap_is_recorded_on_the_day_and_survives_a_snapshot_round_trip()
     {
         var counter = new UsageCounter(null, D0);
