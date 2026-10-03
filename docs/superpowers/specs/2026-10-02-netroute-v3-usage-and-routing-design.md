@@ -1,7 +1,7 @@
 # NetRoute Widget v3: Usage & routing page — Design
 
 **Date:** 2026-10-02
-**Status:** Design agreed in chat (two tabs: Usage and Config; usage + assignment on one page). Accuracy rules added after a live measurement. Build plan next.
+**Status:** Implemented on branch feat/v2-smart-routing; waiting for the user's on-machine verification.
 **Builds on:** `2026-10-02-netroute-v2-smart-routing-design.md` (Smart routing, sing-box, the management window). Implementation starts after v2's live verification and its fix rounds.
 
 ## Goal
@@ -97,8 +97,8 @@ sing-box's Clash API lists only the connections that are **open right now**; it 
    - `unseen = totalDelta - sum(per-connection deltas seen)` is the traffic of connections that were missed.
    - The **phone** share is taken from Windows' own byte counters for the phone adapter (exact, per exit): `unseenPhone = max(0, phoneAdapterDelta - attributedPhoneDelta)`; the rest of `unseen` is `unseenLan`. Protocol framing makes the adapter counters a few percent larger than sing-box's payload counts, and that difference lands in the same row.
    - Unseen bytes go to a visible row **"Unattributed (short connections)"** with its own Phone and LAN values, so the column totals are correct instead of silently low. They are never assigned to a guessed application.
-3. **Exact footer.** The page also shows **"Phone adapter total today (exact, from Windows)"**, so the user can compare it with the per-application sum.
-4. **Kept off 4G** (card row and page) uses the same data: LAN bytes of rows assigned to the LAN while the default exit was the phone, plus the LAN part of the unattributed bytes that arrived while the phone was the default exit. It is labelled "at least" only when sing-box was restarted or unreachable during the period.
+3. **Exact footer.** The page also shows **"Phone adapter total in this period (exact, from Windows)"** (it follows the selected range, so it can be compared with the Phone column).
+4. **Kept off 4G** (card row and page) uses the same data: LAN bytes of rows assigned to the LAN while the default exit was the phone, plus the LAN part of the unattributed bytes that arrived while the phone was the default exit. It is labelled "at least" when a day in the range has `gaps > 0`.
 5. **Now** (the live rate) is computed from the 1 s deltas.
 
 The remaining limitation: an application's own short connections that were missed are counted under "Unattributed", not under the application. The page says so, and the totals stay right.
@@ -106,9 +106,9 @@ The remaining limitation: an application's own short connections that were misse
 ### Storage
 
 - `%AppData%\NetRouteWidget\usage.json`, written atomically (temp file, then move), at most every 30 s while it changes and at exit.
-- Structure: `{ "version": 1, "days": { "2026-10-02": { "<row key>": { "phone": { "up": n, "down": n }, "lan": { "up": n, "down": n } } } } }`. The day key is culture-invariant `yyyy-MM-dd` (local date).
+- Structure: `{ "version": 1, "days": { "2026-10-02": { "rows": { "<row key>": { "phone": { "up": n, "down": n }, "lan": { "up": n, "down": n }, "kept": n } }, "phoneAdapter": n, "gaps": n } } }`. `kept` is the part of a row's LAN bytes that LAN-only rules kept off 4G; `phoneAdapter` is the day's bytes on the phone adapter as counted by Windows; `gaps` counts the times sing-box stopped or restarted that day (the bytes just before each stop were not recorded). The day key is culture-invariant `yyyy-MM-dd` (local date).
 - **Row key:** `app:<exe lower case>` for applications, the item id for domain rules, `other` for unknown. A row's key does not change when the user assigns or unassigns it, so history stays continuous.
-- **Retention:** 35 days, pruned at load and at day rollover. At most 500 rows per day; beyond that, the smallest rows fold into "Other".
+- **Retention:** 35 days, pruned at load and at day rollover. At most 500 application/item rows per day plus the two special rows (`other`, `unattributed`); while counting, a new row beyond the cap goes into `other`; on load, the smallest rows beyond the cap fold into `other`.
 - A missing, locked or corrupt file starts empty. A corrupt file is renamed to `usage.json.bad` once, and an unreadable (locked) file is left untouched and not overwritten for the session (same rule as `settings.json`).
 - Privacy: only application names, item names and byte totals are stored, never URLs or full host lists.
 
@@ -122,7 +122,7 @@ The remaining limitation: an application's own short connections that were misse
 - **`IAdapterCounters`** (Windows implementation reads `NetworkInterface` statistics for the phone adapter by index; a fake in tests).
 - **`UsageStore`**: load/save/prune of `usage.json` (atomic, invariant culture, corrupt/locked handling).
 - **`UsageReport`**: `Build(snapshot, today, rangeDays, rules, settings, sort) → rows + totals`. It merges the assignment state and display names, and sorts.
-- **`SmartRoutingController`**: gains the faster poll, owns the `UsageCounter`, and exposes `UsageSnapshot GetUsage()` (copy, taken under the gate). No new threads.
+- **`SmartRoutingController`**: gains the faster poll, owns the `UsageCounter`, and exposes `UsageSnapshot GetUsage()` (copy, taken under the gate). No new threads. `DataSavedCounter` and `stats.json` are replaced (the old file is ignored, not migrated). `ApiFailureLimit` became 10 because the poll now runs once a second.
 - **Settings**: `SmartRouting.UsageRangeDays` (remembered range, default 7).
 - **Assignment helper** `UsageAssignment.Set(settings, row, goesViaLan) → settings`, implementing the per-row rules above (item switch, user App rule create/enable/disable). Pure, with tests.
 
