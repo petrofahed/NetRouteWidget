@@ -1,0 +1,26 @@
+<UserControl x:Class="NetRoute.App.UsageTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <DockPanel Margin="4,12,4,0">
+        <DockPanel DockPanel.Dock="Top">
+            <StackPanel x:Name="RangeBar" DockPanel.Dock="Left" Orientation="Horizontal" />
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="12,0,0,0" TextAlignment="Right"
+                       Foreground="{DynamicResource TextSecondary}" TextTrimming="CharacterEllipsis" />
+        </DockPanel>
+        <TextBlock x:Name="Banner" DockPanel.Dock="Top" Margin="0,8,0,0" TextWrapping="Wrap"
+                   Foreground="{DynamicResource Warning}" Visibility="Collapsed" />
+        <Grid x:Name="HeaderGrid" DockPanel.Dock="Top" Margin="0,12,0,0" />
+        <TextBlock x:Name="EmptyText" DockPanel.Dock="Top" Margin="6,12,0,0" Text="No usage recorded in this period yet."
+                   Foreground="{DynamicResource TextSecondary}" Visibility="Collapsed" />
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <Grid x:Name="TotalGrid" />
+            <TextBlock x:Name="KeptText" Margin="6,8,0,0" />
+            <TextBlock x:Name="AdapterText" Margin="6,2,0,0" Foreground="{DynamicResource TextSecondary}" />
+            <TextBlock Margin="6,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                       Text="Numbers are what Smart routing saw. Short connections it missed are shown as “Unattributed”, so the totals stay right." />
+        </StackPanel>
+        <ScrollViewer x:Name="RowScroll" VerticalScrollBarVisibility="Visible">
+            <StackPanel x:Name="Rows" />
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

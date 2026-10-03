@@ -7,7 +7,7 @@ using NetRoute.Core;
 
 namespace NetRoute.App;
 
-/// Management page. Rebuilt from a PageModel only when its structure changes; otherwise updated in place.
+/// Management window: a Usage tab and a Config tab (the page below). The Config tab is rebuilt from a PageModel only when its structure changes; otherwise updated in place.
 /// Keeps which groups are expanded.
 public partial class SmartRoutingWindow : Window
 {
@@ -23,6 +23,9 @@ public partial class SmartRoutingWindow : Window
     {
         InitializeComponent();
         Theme.Track(this);
+        Usage.RangeChanged += days => UsageRangeChanged?.Invoke(days);
+        Usage.SortChanged += sort => UsageSortChanged?.Invoke(sort);
+        Usage.AssignmentRequested += (key, toLan) => AssignmentRequested?.Invoke(key, toLan);
     }
 
     public event Action<bool>? MasterToggled;
@@ -32,6 +35,21 @@ public partial class SmartRoutingWindow : Window
     public event Action<UserRule>? UserRuleRemoved;
     public event Action<UserRuleType>? AddRuleRequested;
     public event Action? UsePhoneRequested;
+    public event Action<int>? UsageRangeChanged;
+    public event Action<UsageSort>? UsageSortChanged;
+    public event Action<string, bool>? AssignmentRequested;
+    public event Action? ClearUsageRequested;
+
+    /// Updates the Usage tab in place; safe to call every second.
+    public void RenderUsage(UsageReportModel model, UsageSort sort, string statusText, bool recording) =>
+        Usage.Render(model, sort, statusText, recording);
+
+    void OnClearUsage(object sender, RoutedEventArgs e)
+    {
+        var answer = MessageBox.Show(this, "Delete all recorded usage? This cannot be undone.", "NetRoute — Clear usage history",
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+        if (answer == MessageBoxResult.Yes) ClearUsageRequested?.Invoke();
+    }
 
     /// Rebuilds the controls only when the structure (groups, items, user rules) changed; otherwise updates them in place,
     /// so the frequent stats publishes do not steal keyboard focus or swallow an in-flight click.
