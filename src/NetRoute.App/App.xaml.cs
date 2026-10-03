@@ -525,11 +525,8 @@ public partial class App : Application
             _usageFilter = text;
             RenderSmartWindow(); // no ApplyAsync: a filter change must never touch sing-box
         };
-        window.UsageExceptionToggleRequested += key =>
-        {
-            var profile = _smart?.Status.Profile ?? RouteExit.Phone;
-            ChangeSmart(s => UsageExceptions.Toggle(_catalog, s, profile, key));
-        };
+        window.UsageExceptionRequested += (key, renderedProfile, on) =>
+            ChangeSmart(s => UsageExceptions.Set(_catalog, s, renderedProfile, key, on)); // what the menu showed, not the live status
         window.EditRulesFileRequested += () => OpenRulesFile();
         window.ClearUsageRequested += async () =>
         {
@@ -563,11 +560,11 @@ public partial class App : Application
             }
             try
             {
-                Process.Start(new ProcessStartInfo(AppPaths.UserRulesFile) { UseShellExecute = true });
+                using var _ = Process.Start(new ProcessStartInfo(AppPaths.UserRulesFile) { UseShellExecute = true });
             }
             catch (System.ComponentModel.Win32Exception)
             {
-                Process.Start(new ProcessStartInfo("notepad.exe", $"\"{AppPaths.UserRulesFile}\"") { UseShellExecute = true });
+                using var _ = Process.Start(new ProcessStartInfo("notepad.exe", $"\"{AppPaths.UserRulesFile}\"") { UseShellExecute = true });
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)

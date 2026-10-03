@@ -48,12 +48,16 @@ public partial class UsageTab : UserControl
     public event Action<UsageSort>? SortChanged;
     /// The filter text as typed (untrimmed). The filter is per-session UI state and the box is never written by Render.
     public event Action<string>? FilterChanged;
-    /// The row key whose context-menu item was clicked: add it to / remove it from the active profile's exception list.
-    public event Action<string>? ExceptionToggleRequested;
+    /// A row's context-menu item was clicked: (row key, the profile the menu was rendered for, true = send to the exception
+    /// list / false = exclude from it). The state is the one the menu DISPLAYED, never re-read at click time.
+    public event Action<string, RouteExit, bool>? ExceptionRequested;
+
+    RouteExit _renderedProfile = RouteExit.Phone;
 
     public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording)
     {
         _sort = sort;
+        _renderedProfile = model.Profile;
         StatusText.Text = statusText;
         StatusText.ToolTip = statusText;
         foreach (var (days, button) in _rangeButtons) button.IsChecked = days == model.RangeDays;
@@ -80,7 +84,7 @@ public partial class UsageTab : UserControl
         {
             if (!_rows.TryGetValue(row.Key, out var view))
             {
-                view = _rows[row.Key] = new RowView(row.Key, key => ExceptionToggleRequested?.Invoke(key));
+                view = _rows[row.Key] = new RowView(row.Key, (key, on) => ExceptionRequested?.Invoke(key, _renderedProfile, on));
                 Rows.Children.Add(view.Root);
             }
             view.Apply(row);
@@ -250,8 +254,9 @@ public partial class UsageTab : UserControl
         readonly MenuItem _menuItem = new();
         readonly TextBlock _phone = Number(), _lan = Number(), _nowPhone = Number(), _nowLan = Number();
         bool _hovered;
+        bool _sendOn; // what the menu item does: true = send to the exception list, false = exclude (the displayed state)
 
-        public RowView(string key, Action<string> toggle)
+        public RowView(string key, Action<string, bool> request)
         {
             DefineColumns(_grid);
             _root.Child = _grid;
@@ -266,7 +271,7 @@ public partial class UsageTab : UserControl
             nameCell.Children.Add(_tag); // docked first so the long name is trimmed before the tag
             nameCell.Children.Add(_name);
             Place(nameCell, 0);
-            _menuItem.Click += (_, _) => toggle(key);
+            _menuItem.Click += (_, _) => request(key, _sendOn);
             var menu = new ContextMenu();
             menu.Items.Add(_menuItem);
             menu.Opened += (_, _) => { MenuOpen = true; UpdateHover(); };
@@ -297,6 +302,7 @@ public partial class UsageTab : UserControl
             var tag = UsageReport.TagText(row.Exception);
             _tagText.Text = tag ?? "";
             _tag.Visibility = tag is null ? Visibility.Collapsed : Visibility.Visible;
+            _sendOn = !row.Exception.InException;
             _menuItem.Header = UsageReport.MenuText(row.Exception);
             _menuItem.IsEnabled = row.CanChange;
             _phone.Text = ByteFormat.Human(row.PhoneBytes);

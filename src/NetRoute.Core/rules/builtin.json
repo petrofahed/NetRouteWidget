@@ -27,8 +27,7 @@
       { "id": "battlenet", "name": "Battle.net", "processes": ["Battle.net.exe", "Agent.exe"],
         "domains": ["blzddist1-a.akamaihd.net", "blizzard.com"] },
       { "id": "xbox", "name": "Xbox / Microsoft gaming", "processes": ["XboxPcApp.exe", "gamingservices.exe"],
-        "domains": ["assets1.xboxlive.com"] } ] }
-    ,
+        "domains": ["assets1.xboxlive.com"] } ] },
     { "id": "ai-tools", "name": "AI tools", "exit": "phone", "items": [
       { "id": "claude", "name": "Claude / Claude Code",
         "processes": ["claude.exe"], "domains": ["claude.ai", "anthropic.com"] },

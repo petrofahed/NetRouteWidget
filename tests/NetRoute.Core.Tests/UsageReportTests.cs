@@ -207,6 +207,8 @@ public class UsageReportTests
 
         Assert.False(Build(usage, settings: settings).Rows.Single().Exception.InException);
         Assert.True(Build(usage, settings: settings, profile: RouteExit.Lan).Rows.Single().Exception.InException);
+        Assert.Equal(RouteExit.Phone, Build(usage, settings: settings).Profile);
+        Assert.Equal(RouteExit.Lan, Build(usage, settings: settings, profile: RouteExit.Lan).Profile);
     }
 
     [Fact]

@@ -107,8 +107,11 @@ public class RuleSetTests
         var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
 
         // The update domain (LAN) is matched before the code.exe rule (phone), so a VS Code update never rides the phone.
-        Assert.Equal(new[] { "vscode-updates", "claude", "vscode", "phone-user:website:example.com" }, set.Entries.Select(e => e.Id));
-        Assert.Equal(new[] { RouteExit.Lan, RouteExit.Phone, RouteExit.Phone, RouteExit.Phone }, set.Entries.Select(e => e.Exit));
+        // The LAN list stays active after the phone entries: those downloads wait for the LAN instead of healing onto 4G.
+        Assert.Equal(new[] { "vscode-updates", "claude", "vscode", "phone-user:website:example.com", "youtube", "user:app:ignored.exe" },
+            set.Entries.Select(e => e.Id));
+        Assert.Equal(new[] { RouteExit.Lan, RouteExit.Phone, RouteExit.Phone, RouteExit.Phone, RouteExit.Lan, RouteExit.Lan },
+            set.Entries.Select(e => e.Exit));
         Assert.True(set.Entries[0].CarveOut);
     }
 
@@ -122,7 +125,20 @@ public class RuleSetTests
 
         var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
 
-        Assert.Equal(new[] { "vscode" }, set.Entries.Select(e => e.Id));
+        Assert.Equal(new[] { "vscode", "youtube" }, set.Entries.Select(e => e.Id));
+    }
+
+    [Fact]
+    public void The_lan_profile_leaves_out_lan_items_and_rules_that_are_switched_off()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new UserRule(UserRuleType.App, "off.exe", Enabled: false)],
+        }.WithItem("youtube", false);
+
+        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+
+        Assert.DoesNotContain(set.Entries, e => e.Id == "youtube" || e.Id == "user:app:off.exe");
     }
 
     [Fact]

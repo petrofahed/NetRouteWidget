@@ -27,7 +27,7 @@ public partial class SmartRoutingWindow : Window
         Usage.RangeChanged += days => UsageRangeChanged?.Invoke(days);
         Usage.SortChanged += sort => UsageSortChanged?.Invoke(sort);
         Usage.FilterChanged += text => UsageFilterChanged?.Invoke(text);
-        Usage.ExceptionToggleRequested += key => UsageExceptionToggleRequested?.Invoke(key);
+        Usage.ExceptionRequested += (key, profile, on) => UsageExceptionRequested?.Invoke(key, profile, on);
     }
 
     public event Action<bool>? MasterToggled;
@@ -43,8 +43,9 @@ public partial class SmartRoutingWindow : Window
     public event Action<int>? UsageRangeChanged;
     public event Action<UsageSort>? UsageSortChanged;
     public event Action<string>? UsageFilterChanged;
-    /// Right-click menu on a Usage row: send the row to / exclude it from the active profile's exception list (the row key).
-    public event Action<string>? UsageExceptionToggleRequested;
+    /// Right-click menu on a Usage row: (row key, the profile the row was rendered for, true = send to / false = exclude from
+    /// that profile's exception list).
+    public event Action<string, RouteExit, bool>? UsageExceptionRequested;
     public event Action? ClearUsageRequested;
     /// "Edit rules file…" link: open the user rules file (rules.user.json) in the default editor.
     public event Action? EditRulesFileRequested;
@@ -127,7 +128,7 @@ public partial class SmartRoutingWindow : Window
             ? "Everything else goes through the LAN. These go through the phone."
             : $"Kept off 4G today: {ByteFormat.Human(model.TotalToday)}";
         HintText.Text = lanView
-            ? "Turned-off items go through the LAN like everything else (a turned-off update item falls back to its app's phone rule)."
+            ? "Turned-off items go through the LAN like everything else. Your LAN list (the Phone + exceptions view) stays active in this profile too: those downloads wait for the LAN instead of falling onto 4G."
             : "Turned-off items go through the phone like everything else.";
         UsePhoneButton.Visibility = model.CanUsePhone ? Visibility.Visible : Visibility.Collapsed;
 

@@ -904,7 +904,7 @@ public class SmartRoutingControllerTests
     [Fact]
     public async Task Lan_only_waiting_still_works_in_lan_mode()
     {
-        // The LAN-only traffic in the LAN profile is the carve-out (rule index 3, matched before the phone entries).
+        // The carve-out is entry 0 of the LAN profile (rule index 3).
         var c = Create(catalog: V4Catalog);
         await c.ApplyAsync(Net(RoutingMode.Lan), On());
         await c.ApplyAsync(Net(RoutingMode.Lan, lanMs: null), On());
@@ -914,6 +914,22 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Equal(new[] { "VS Code updates" }, Assert.Single(_popups));
+        Assert.Empty(_api.Selects); // nothing was moved to the phone
+    }
+
+    [Fact]
+    public async Task A_lan_list_item_waits_for_the_lan_in_the_lan_profile()
+    {
+        // LAN profile entries: vscode-updates (3), claude (4), youtube (6; claude has a process and a domain rule): the LAN list is active after the phone entries.
+        var c = Create(catalog: V4Catalog);
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+        await c.ApplyAsync(Net(RoutingMode.Lan, lanMs: null), On());
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+
+        await c.ProcessLineAsync("+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[6] domain_suffix=youtube.com => route(lan-only)");
+        await c.ProcessLineAsync(FailLanOnly);
+
+        Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
         Assert.Empty(_api.Selects); // nothing was moved to the phone
     }
 
@@ -1242,8 +1258,10 @@ public class SmartRoutingControllerTests
         var json = _host.Starts[^1];
         Assert.Contains("claude.ai", json);
         Assert.Contains("update.code.visualstudio.com", json); // the carve-out is active in both profiles
-        Assert.DoesNotContain("youtube.com", json);            // a LAN exception is pointless when everything is LAN
+        // The LAN list stays active (after the phone rule): those downloads wait for the LAN instead of riding 4G.
+        Assert.True(json.IndexOf("claude.ai", StringComparison.Ordinal) < json.IndexOf("youtube.com", StringComparison.Ordinal));
         Assert.Equal(RouteExit.Lan, c.Status.Profile);
+        Assert.Equal(3, c.Status.RuleCount);
         Assert.Equal(SmartState.Running, c.Status.State);
     }
 
@@ -1279,9 +1297,9 @@ public class SmartRoutingControllerTests
     [Theory]
     [InlineData(RoutingMode.Phone, false, 1)] // Phone profile runs the LAN list: a phone-list edit is inactive
     [InlineData(RoutingMode.Phone, true, 2)]  // ... and a LAN-list edit restarts sing-box
-    [InlineData(RoutingMode.Lan, false, 2)]   // LAN profile runs the phone list: a phone-list edit restarts
-    [InlineData(RoutingMode.Lan, true, 1)]    // ... and a LAN-list edit is inactive
-    public async Task Only_a_rule_edit_in_the_list_the_active_profile_runs_restarts_sing_box(RoutingMode mode, bool editLanList, int starts)
+    [InlineData(RoutingMode.Lan, false, 2)]   // LAN profile runs the phone list (and the LAN list): a phone-list edit restarts
+    [InlineData(RoutingMode.Lan, true, 2)]    // ... and so does a LAN-list edit: the LAN list stays active in the LAN profile
+    public async Task Only_a_rule_edit_in_a_list_the_active_profile_runs_restarts_sing_box(RoutingMode mode, bool editLanList, int starts)
     {
         var c = Create(catalog: V4Catalog);
         var settings = On();

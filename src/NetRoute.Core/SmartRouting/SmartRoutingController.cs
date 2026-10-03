@@ -426,7 +426,8 @@ public sealed class SmartRoutingController
         if (net.Mode == RoutingMode.Auto) return (SmartState.Unavailable, "Paused in Auto mode"); // the widget steps aside
         // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT, and neither
         // does never having seen it: LAN-only traffic has to wait for it, so sing-box runs against the last-known
-        // (or saved, or placeholder) LAN adapter name. LAN mode keeps running too, so LAN-only items still wait there.
+        // (or saved, or placeholder) LAN adapter name. In the LAN profile the LAN list stays active too (it is not an
+        // exception of that profile), so LAN-only items still wait for the LAN instead of falling onto the phone.
         if (net.Adapters.Phone is null) return (SmartState.Unavailable, NeedsBothMessage);
         return (SmartState.Running, null);
     }

@@ -8,7 +8,8 @@ public sealed record RuleEntry(
 
 /// The rules active right now. In the Phone profile: the LAN items switched on plus the enabled LAN user rules (traffic
 /// that must stay off 4G). In the LAN profile: the carve-outs (update items, LAN), then the phone items switched on and
-/// the enabled phone user rules (traffic that must use the phone).
+/// the enabled phone user rules (traffic that must use the phone), then the LAN list too (LAN items and LAN user rules) so
+/// those downloads wait for the LAN (lan-only) instead of healing onto 4G when the LAN is unplugged.
 public sealed record RuleSet(IReadOnlyList<RuleEntry> Entries)
 {
     /// The Phone profile ("Phone + exceptions"), which is what Smart routing was before profiles existed.
@@ -22,8 +23,12 @@ public sealed record RuleSet(IReadOnlyList<RuleEntry> Entries)
         if (profileDefault == RouteExit.Phone)
             return Create(on.Where(i => i.Exit == RouteExit.Lan), settings.UserRules.Where(r => r.Enabled), []);
 
-        var items = on.Where(i => i.CarveOut).Concat(on.Where(i => i.Exit == RouteExit.Phone && !i.CarveOut));
-        return Create(items, [], settings.PhoneUserRules.Where(r => r.Enabled));
+        // Explicit phone entries come first and win over the LAN list for the same connection.
+        var phoneFirst = on.Where(i => i.CarveOut).Concat(on.Where(i => i.Exit == RouteExit.Phone && !i.CarveOut));
+        var entries = Create(phoneFirst, [], settings.PhoneUserRules.Where(r => r.Enabled)).Entries.ToList();
+        var lan = Create(on.Where(i => i.Exit == RouteExit.Lan && !i.CarveOut), settings.UserRules.Where(r => r.Enabled), []);
+        entries.AddRange(lan.Entries);
+        return new RuleSet(entries);
     }
 
     /// Every built-in item and every user rule of both lists, switched on or off. Usage uses it so that traffic of a

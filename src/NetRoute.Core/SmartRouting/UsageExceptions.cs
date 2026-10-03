@@ -13,8 +13,12 @@ public static class UsageExceptions
         var destination = profile == RouteExit.Phone ? RouteExit.Lan : RouteExit.Phone;
         if (catalog.FirstOrDefault(i => i.Id == key) is { } item)
         {
-            var inList = Belongs(item, profile);
-            return new(inList && settings.IsItemOn(item), inList, item.Exit);
+            if (Belongs(item, profile)) return new(settings.IsItemOn(item), true, item.Exit);
+            // A built-in item of the other list claims this row's traffic, but the user may have a rule for the same app in
+            // the active list (it really routes there): that rule is what the menu acts on.
+            return ClaimedRule(item, ListFor(settings, profile)) is { } claimed
+                ? new(claimed.Enabled, true, destination)
+                : new(false, false, item.Exit);
         }
         var list = ListFor(settings, profile);
         if (AppExe(key) is { } exe) return new(FindApp(list, exe)?.Enabled == true, true, destination);
@@ -22,24 +26,32 @@ public static class UsageExceptions
         return new(false, false, destination);
     }
 
-    /// The settings with the row switched to the other state; unchanged for a row that cannot be changed from here.
-    public static SmartRoutingSettings Toggle(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string key)
+    /// The settings with the row switched to "on" (in the exceptions of the profile) or off. Unchanged when the row cannot
+    /// be changed from here or is already in that state. The caller passes the state the menu DISPLAYED, so a click never
+    /// flips what changed on screen in the meantime.
+    public static SmartRoutingSettings Set(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string key, bool on)
     {
         var state = Describe(catalog, settings, profile, key);
-        if (!state.CanChange) return settings;
-        var turnOn = !state.InException;
+        if (!state.CanChange || state.InException == on) return settings;
 
-        if (catalog.FirstOrDefault(i => i.Id == key) is { } item) return settings.WithItem(item.Id, turnOn);
         var list = ListFor(settings, profile);
+        if (catalog.FirstOrDefault(i => i.Id == key) is { } item)
+        {
+            if (Belongs(item, profile)) return settings.WithItem(item.Id, on);
+            return ClaimedRule(item, list) is { } claimed ? With(settings, profile, claimed with { Enabled = on }) : settings;
+        }
         if (AppExe(key) is { } exe)
         {
-            if (FindApp(list, exe) is { } rule) return With(settings, profile, rule with { Enabled = turnOn });
-            return turnOn && UserRule.TryCreate(UserRuleType.App, exe, out var created, out _)
+            if (FindApp(list, exe) is { } rule) return With(settings, profile, rule with { Enabled = on });
+            return on && UserRule.TryCreate(UserRuleType.App, exe, out var created, out _)
                 ? With(settings, profile, created!)
                 : settings;
         }
-        return FindWebsite(list, key) is { } site ? With(settings, profile, site with { Enabled = turnOn }) : settings;
+        return FindWebsite(list, key) is { } site ? With(settings, profile, site with { Enabled = on }) : settings;
     }
+
+    static UserRule? ClaimedRule(RuleItem item, IReadOnlyList<UserRule> list) =>
+        list.FirstOrDefault(r => r.Type == UserRuleType.App && item.Processes.Any(p => string.Equals(p, r.Value, StringComparison.OrdinalIgnoreCase)));
 
     /// The Phone profile's exceptions are the LAN items; the LAN profile's are the phone items plus the carve-outs.
     static bool Belongs(RuleItem item, RouteExit profile) =>

@@ -20,10 +20,12 @@ public sealed record UsageReportRow(
 
 /// RecordingSince: set only when the earliest recorded day is later than the first day of the range.
 /// KeptOffIsLowerBound: a day in the range has a gap (sing-box stopped or restarted), so "kept off 4G" is "at least" that much.
+/// Profile: the profile the rows' exception state was computed for (the menu acts on exactly that list).
 /// Filtered: a name filter was applied; Rows and the Phone/Lan totals then cover only the matching rows (KeptOff and the adapter total stay whole-period).
 public sealed record UsageReportModel(
     int RangeDays, IReadOnlyList<UsageReportRow> Rows, long PhoneTotal, long LanTotal, long KeptOff,
-    bool KeptOffIsLowerBound, long PhoneAdapterTotal, DateOnly? RecordingSince, bool Filtered = false);
+    bool KeptOffIsLowerBound, long PhoneAdapterTotal, DateOnly? RecordingSince, bool Filtered = false,
+    RouteExit Profile = RouteExit.Phone);
 
 /// Pure model for the Usage tab.
 public static class UsageReport
@@ -90,7 +92,7 @@ public static class UsageReport
         DateOnly? since = recorded.Count > 0 && recorded[0] > first ? recorded[0] : null;
         return new UsageReportModel(
             range, Sort(rows, sort).ToList(), rows.Sum(r => r.PhoneBytes), rows.Sum(r => r.LanBytes),
-            sums.Values.Sum(r => r.Kept), gap, adapter, since, needle.Length > 0);
+            sums.Values.Sum(r => r.Kept), gap, adapter, since, needle.Length > 0, profile);
     }
 
     static IEnumerable<UsageReportRow> Sort(List<UsageReportRow> rows, UsageSort sort)
