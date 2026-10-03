@@ -19,6 +19,11 @@ public class SingBoxConfigBuilderTests
     static JsonNode Outbound(JsonNode root, string tag) =>
         root["outbounds"]!.AsArray().Single(o => (string)o!["tag"]! == tag)!;
 
+    static SingBoxConfig BuildWith(params RuleEntry[] entries) =>
+        SingBoxConfigBuilder.Build(new SingBoxConfigInput(new RuleSet(entries), "Ethernet 5", "Ethernet", null, RouteExit.Lan, false, 41234, "s3cret"));
+
+    static JsonArray RouteRules(SingBoxConfig c) => Parse(c)["route"]!["rules"]!.AsArray();
+
     [Fact]
     public void Outbounds_bind_adapters_and_selectors_default_per_state()
     {
@@ -149,5 +154,36 @@ public class SingBoxConfigBuilderTests
         var root = Parse(SingBoxConfigBuilder.Build(Input()));
 
         Assert.Equal("ipv4_only", (string)root["dns"]!["strategy"]!);
+    }
+
+    [Fact]
+    public void A_phone_exit_entry_routes_to_the_phone_outbound_and_a_lan_entry_to_lan_only()
+    {
+        var config = BuildWith(
+            new RuleEntry("claude", "Claude", ["claude.exe"], ["claude.ai"], RouteExit.Phone),
+            new RuleEntry("youtube", "YouTube", [], ["youtube.com"], RouteExit.Lan));
+
+        var rules = RouteRules(config).Where(r => r!["outbound"] is not null && (string)r["outbound"]! is "phone" or "lan-only").ToList();
+
+        // claude: one process rule + one domain rule (both phone); youtube: one domain rule (lan-only)
+        Assert.Equal(new[] { "phone", "phone", "lan-only" }, rules.Select(r => (string)r!["outbound"]!));
+    }
+
+    [Fact]
+    public void A_carve_out_rule_precedes_the_phone_rules()
+    {
+        var config = BuildWith(
+            new RuleEntry("vscode-updates", "VS Code updates", [], ["update.code.visualstudio.com"], RouteExit.Lan, CarveOut: true),
+            new RuleEntry("vscode", "VS Code", ["Code.exe"], [], RouteExit.Phone));
+
+        var rules = RouteRules(config);
+        var update = rules.Select((r, i) => (r, i)).Single(x => x.r!["domain_suffix"]?.AsArray().Any(d => (string)d! == "update.code.visualstudio.com") == true);
+        var process = rules.Select((r, i) => (r, i)).Single(x => x.r!["process_path_regex"] is not null);
+
+        Assert.True(update.i < process.i);
+        Assert.Equal("lan-only", (string)update.r!["outbound"]!);
+        Assert.Equal("phone", (string)process.r!["outbound"]!);
+        Assert.Equal("vscode-updates", config.RuleIndexToEntryId[update.i]);
+        Assert.Equal("vscode", config.RuleIndexToEntryId[process.i]);
     }
 }

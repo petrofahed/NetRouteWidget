@@ -46,16 +46,18 @@ public static class SingBoxConfigBuilder
         var ruleMap = new Dictionary<int, string>();
         foreach (var entry in input.Rules.Entries)
         {
+            // A LAN entry goes through the LAN-only selector (it can wait for the LAN); a phone entry goes straight to the phone.
+            var outbound = entry.Exit == RouteExit.Phone ? PhoneTag : LanOnlyTag;
             // sing-box ANDs process fields with domain fields inside one rule, so they get separate rules.
             if (entry.Processes.Count > 0)
             {
                 ruleMap[rules.Count] = entry.Id;
-                rules.Add(new JsonObject { ["process_path_regex"] = Strings(entry.Processes.Select(ProcessPathRegex)), ["outbound"] = LanOnlyTag });
+                rules.Add(new JsonObject { ["process_path_regex"] = Strings(entry.Processes.Select(ProcessPathRegex)), ["outbound"] = outbound });
             }
             if (entry.Domains.Count > 0)
             {
                 ruleMap[rules.Count] = entry.Id;
-                rules.Add(new JsonObject { ["domain_suffix"] = Strings(entry.Domains), ["outbound"] = LanOnlyTag });
+                rules.Add(new JsonObject { ["domain_suffix"] = Strings(entry.Domains), ["outbound"] = outbound });
             }
         }
 
