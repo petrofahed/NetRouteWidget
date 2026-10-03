@@ -26,6 +26,7 @@ public partial class SmartRoutingWindow : Window
         Usage.RangeChanged += days => UsageRangeChanged?.Invoke(days);
         Usage.SortChanged += sort => UsageSortChanged?.Invoke(sort);
         Usage.FilterChanged += text => UsageFilterChanged?.Invoke(text);
+        Usage.ExceptionToggleRequested += key => UsageExceptionToggleRequested?.Invoke(key);
     }
 
     public event Action<bool>? MasterToggled;
@@ -39,6 +40,8 @@ public partial class SmartRoutingWindow : Window
     public event Action<int>? UsageRangeChanged;
     public event Action<UsageSort>? UsageSortChanged;
     public event Action<string>? UsageFilterChanged;
+    /// Right-click menu on a Usage row: send the row to / exclude it from the active profile's exception list (the row key).
+    public event Action<string>? UsageExceptionToggleRequested;
     public event Action? ClearUsageRequested;
 
     /// Updates the Usage tab in place; safe to call every second.

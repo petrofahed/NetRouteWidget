@@ -8,9 +8,10 @@ using NetRoute.Core;
 
 namespace NetRoute.App;
 
-/// The Usage tab, a read-only view of Phone and LAN use (rules are changed on the Config tab). Updated in place and keyed by
-/// row key: a refresh once a second never rebuilds the list or steals focus. Rows only change places when the mouse and the
-/// keyboard focus are away from the list, or right after the user clicked a column header.
+/// The Usage tab, a view of Phone and LAN use. The only edit is the right-click menu on a row (send it to / exclude it from the
+/// active profile's exception list); rules are otherwise changed on the Config tab. Updated in place and keyed by row key: a
+/// refresh once a second never rebuilds the list or steals focus. Rows only change places when the mouse and the keyboard focus
+/// are away from the list and no row menu is open, or right after the user clicked a column header.
 public partial class UsageTab : UserControl
 {
     const double ByteWidth = 84, NowWidth = 96;
@@ -44,6 +45,8 @@ public partial class UsageTab : UserControl
     public event Action<UsageSort>? SortChanged;
     /// The filter text as typed (untrimmed). The filter is per-session UI state and the box is never written by Render.
     public event Action<string>? FilterChanged;
+    /// The row key whose context-menu item was clicked: add it to / remove it from the active profile's exception list.
+    public event Action<string>? ExceptionToggleRequested;
 
     public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording)
     {
@@ -74,13 +77,13 @@ public partial class UsageTab : UserControl
         {
             if (!_rows.TryGetValue(row.Key, out var view))
             {
-                view = _rows[row.Key] = new RowView();
+                view = _rows[row.Key] = new RowView(row.Key, key => ExceptionToggleRequested?.Invoke(key));
                 Rows.Children.Add(view.Root);
             }
             view.Apply(row);
         }
 
-        var freeze = !_forceReorder && (RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin);
+        var freeze = !_forceReorder && (RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin || _rows.Values.Any(r => r.MenuOpen));
         _forceReorder = false;
         var next = UsageRowOrder.Next(_order, model.Rows.Select(r => r.Key).ToList(), freeze);
         if (!next.SequenceEqual(_order))
@@ -224,15 +227,35 @@ public partial class UsageTab : UserControl
     {
         readonly Grid _grid = new() { Background = Brushes.Transparent }; // transparent: the whole row is hit-testable, so the list counts as "under the mouse"
         readonly TextBlock _name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 0, 0, 0) };
+        readonly TextBlock _tagText = new() { FontSize = 11 };
+        readonly Border _tag = new()
+        {
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0, 5, 0),
+            Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
+        };
+        readonly MenuItem _menuItem = new();
         readonly TextBlock _phone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _lan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _nowPhone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _nowLan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
 
-        public RowView()
+        public RowView(string key, Action<string> toggle)
         {
             DefineColumns(_grid);
-            Place(_name, 0);
+            _tagText.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
+            _tag.SetResourceReference(Border.BorderBrushProperty, "Accent");
+            _tag.Child = _tagText;
+            DockPanel.SetDock(_tag, Dock.Right);
+            var nameCell = new DockPanel();
+            nameCell.Children.Add(_tag); // docked first so the long name is trimmed before the tag
+            nameCell.Children.Add(_name);
+            Place(nameCell, 0);
+            _menuItem.Click += (_, _) => toggle(key);
+            var menu = new ContextMenu();
+            menu.Items.Add(_menuItem);
+            menu.Opened += (_, _) => MenuOpen = true;
+            menu.Closed += (_, _) => MenuOpen = false;
+            _grid.ContextMenu = menu;
             Place(_phone, 1);
             Place(_lan, 2);
             Place(_nowPhone, 3);
@@ -241,10 +264,18 @@ public partial class UsageTab : UserControl
 
         public UIElement Root => _grid;
 
+        /// True while this row's context menu is showing: the list must not reorder under it.
+        public bool MenuOpen { get; private set; }
+
         public void Apply(UsageReportRow row)
         {
             _name.Text = row.Name;
             _name.ToolTip = row.Name;
+            var tag = UsageReport.TagText(row.Exception);
+            _tagText.Text = tag ?? "";
+            _tag.Visibility = tag is null ? Visibility.Collapsed : Visibility.Visible;
+            _menuItem.Header = UsageReport.MenuText(row.Exception);
+            _menuItem.IsEnabled = row.CanChange;
             _phone.Text = ByteFormat.Human(row.PhoneBytes);
             _lan.Text = ByteFormat.Human(row.LanBytes);
             ApplyRate(_nowPhone, row.Now?.PhoneBytesPerSecond ?? 0);

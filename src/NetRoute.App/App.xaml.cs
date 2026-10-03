@@ -456,7 +456,7 @@ public partial class App : Application
                 if (seq != _renderSeq || _smartWindow != window) continue;
                 var canAssign = settings.Enabled && (status.State is SmartState.Running or SmartState.Starting);
                 var report = UsageReport.Build(
-                    usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter);
+                    usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter, status.Profile);
                 window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text, recording: status.State == SmartState.Running);
             }
             while (_renderAgain);
@@ -523,6 +523,11 @@ public partial class App : Application
         {
             _usageFilter = text;
             RenderSmartWindow(); // no ApplyAsync: a filter change must never touch sing-box
+        };
+        window.UsageExceptionToggleRequested += key =>
+        {
+            var profile = _smart?.Status.Profile ?? RouteExit.Phone;
+            ChangeSmart(s => UsageExceptions.Toggle(_catalog, s, profile, key));
         };
         window.ClearUsageRequested += async () =>
         {

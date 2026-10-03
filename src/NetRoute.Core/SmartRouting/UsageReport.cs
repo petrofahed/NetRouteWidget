@@ -13,7 +13,10 @@ public readonly record struct UsageSort(UsageSortColumn Column, bool Descending)
 }
 
 public sealed record UsageReportRow(
-    string Key, string Name, GoesVia Via, bool CanChange, long PhoneBytes, long LanBytes, UsageRate? Now);
+    string Key, string Name, ExceptionState Exception, long PhoneBytes, long LanBytes, UsageRate? Now)
+{
+    public bool CanChange => Exception.CanChange;
+}
 
 /// RecordingSince: set only when the earliest recorded day is later than the first day of the range.
 /// KeptOffIsLowerBound: a day in the range has a gap (sing-box stopped or restarted), so "kept off 4G" is "at least" that much.
@@ -36,9 +39,19 @@ public static class UsageReport
     public static string NowText(long bytesPerSecond) =>
         bytesPerSecond <= 0 ? "–" : $"↕ {ByteFormat.Human(bytesPerSecond)}/s";
 
+    /// The tag shown next to a row that is an exception: where its traffic is routed.
+    public static string? TagText(ExceptionState state) =>
+        state.InException ? Destination(state.Destination) : null;
+
+    public static string MenuText(ExceptionState state) =>
+        state.InException ? "Exclude from exception" : $"Send to exception ({Destination(state.Destination)})";
+
+    static string Destination(RouteExit exit) => exit == RouteExit.Lan ? "→ LAN" : "→ phone";
+
     public static UsageReportModel Build(
         UsageSnapshot usage, DateOnly today, int rangeDays, IReadOnlyList<RuleItem> catalog,
-        SmartRoutingSettings settings, bool canAssign, UsageSort sort, string? filter = null)
+        SmartRoutingSettings settings, bool canAssign, UsageSort sort, string? filter = null,
+        RouteExit profile = RouteExit.Phone)
     {
         var range = NormalizeRange(rangeDays);
         var first = today.AddDays(-(range - 1));
@@ -66,10 +79,9 @@ public static class UsageReport
             if (needle.Length > 0
                 && !name.Contains(needle, StringComparison.OrdinalIgnoreCase)
                 && !key.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
-            var assignment = UsageAssignment.Describe(catalog, settings, key);
-            rows.Add(new UsageReportRow(
-                key, name, assignment.Via, canAssign && assignment.CanChange,
-                sum.Phone.Total, sum.Lan.Total, rate));
+            var exception = UsageExceptions.Describe(catalog, settings, profile, key);
+            if (!canAssign) exception = exception with { CanChange = false };
+            rows.Add(new UsageReportRow(key, name, exception, sum.Phone.Total, sum.Lan.Total, rate));
         }
 
         var recorded = usage.Days.Keys.OrderBy(d => d).ToList();

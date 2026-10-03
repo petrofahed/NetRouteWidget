@@ -22,8 +22,9 @@ public class UsageReportTests
         s with { Rates = rates.ToDictionary(r => r.Key, r => r.Rate) };
 
     static UsageReportModel Build(UsageSnapshot usage, int range = 7, SmartRoutingSettings? settings = null,
-                                  bool canAssign = true, UsageSort? sort = null, string? filter = null) =>
-        UsageReport.Build(usage, Today, range, Catalog, settings ?? new SmartRoutingSettings(), canAssign, sort ?? UsageSort.Default, filter);
+                                  bool canAssign = true, UsageSort? sort = null, string? filter = null,
+                                  RouteExit profile = RouteExit.Phone) =>
+        UsageReport.Build(usage, Today, range, Catalog, settings ?? new SmartRoutingSettings(), canAssign, sort ?? UsageSort.Default, filter, profile);
 
     [Theory]
     [InlineData(1, 1)]
@@ -183,7 +184,7 @@ public class UsageReportTests
     // ---- assignment state ----
 
     [Fact]
-    public void Goes_via_follows_the_settings_and_locks_rows_that_cannot_be_assigned()
+    public void Rows_carry_the_exception_state_of_the_active_profile()
     {
         var usage = Snap(
             (Today, "youtube", 0, 10, 0), (Today, "app:chrome.exe", 10, 0, 0),
@@ -192,10 +193,31 @@ public class UsageReportTests
 
         var rows = Build(usage, settings: settings).Rows.ToDictionary(r => r.Key);
 
-        Assert.Equal((GoesVia.Phone, true), (rows["youtube"].Via, rows["youtube"].CanChange));
-        Assert.Equal((GoesVia.Phone, true), (rows["app:chrome.exe"].Via, rows["app:chrome.exe"].CanChange));
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), rows["youtube"].Exception);     // switched off: not an exception now
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), rows["app:chrome.exe"].Exception);
         Assert.False(rows[UsageAttribution.OtherKey].CanChange);
         Assert.False(rows[UsageAttribution.UnattributedKey].CanChange);
+    }
+
+    [Fact]
+    public void The_profile_selects_which_list_the_rows_are_exceptions_of()
+    {
+        var usage = Snap((Today, "app:chrome.exe", 10, 0, 0));
+        var settings = new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "chrome.exe"));
+
+        Assert.False(Build(usage, settings: settings).Rows.Single().Exception.InException);
+        Assert.True(Build(usage, settings: settings, profile: RouteExit.Lan).Rows.Single().Exception.InException);
+    }
+
+    [Fact]
+    public void Tag_and_menu_texts()
+    {
+        Assert.Equal("→ LAN", UsageReport.TagText(new ExceptionState(true, true, RouteExit.Lan)));
+        Assert.Equal("→ phone", UsageReport.TagText(new ExceptionState(true, true, RouteExit.Phone)));
+        Assert.Null(UsageReport.TagText(new ExceptionState(false, true, RouteExit.Lan)));
+        Assert.Equal("Exclude from exception", UsageReport.MenuText(new ExceptionState(true, true, RouteExit.Lan)));
+        Assert.Equal("Send to exception (→ LAN)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Lan)));
+        Assert.Equal("Send to exception (→ phone)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Phone)));
     }
 
     [Fact]
