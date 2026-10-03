@@ -2,10 +2,12 @@ namespace NetRoute.Core;
 
 /// Which usage row a connection counts under, and what each row is called. A connection counts under exactly one row,
 /// so the totals never double-count:
-///   1. a rule that lists the connection's application (a built-in item such as OneDrive, or a user App rule of either list);
-///   2. otherwise a rule whose domains match the connection's host (YouTube, Facebook, a user Website rule);
-///   3. otherwise the application itself ("app:chrome.exe");
-///   4. otherwise "other".
+///   1. a carve-out item (an update download) whose domains match the host, whichever application fetches it, as sing-box
+///      matches those before the process rules;
+///   2. otherwise a rule that lists the connection's application (a built-in item such as OneDrive, or a user App rule of either list);
+///   3. otherwise a rule whose domains match the connection's host (YouTube, Facebook, a user Website rule);
+///   4. otherwise the application itself ("app:chrome.exe");
+///   5. otherwise "other".
 /// Rules switched off still count, so a row keeps its history when the user moves it to the phone and back. The one
 /// exception is a disabled user App rule: it does not claim its application (so Chrome's YouTube traffic still reaches
 /// the YouTube row); its traffic falls through to the domain rules and then to the same "app:x.exe" row.
@@ -43,6 +45,8 @@ public sealed class UsageAttribution
     public string Resolve(string? processName, string? host)
     {
         var exe = string.IsNullOrWhiteSpace(processName) ? null : processName.Trim();
+        // sing-box matches the carve-out (update) rules before the process rules, so an app's own updater counts under the update row.
+        if (_all.FindByHost(host, carveOutOnly: true) is { } byCarveOut) return KeyOf(byCarveOut);
         if (_all.FindByProcess(exe) is { } byProcess) return KeyOf(byProcess);
         if (_all.FindByHost(host) is { } byHost) return KeyOf(byHost);
         return exe is null ? OtherKey : AppPrefix + exe.ToLowerInvariant();

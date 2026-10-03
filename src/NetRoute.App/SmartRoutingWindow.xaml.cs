@@ -18,6 +18,7 @@ public partial class SmartRoutingWindow : Window
     readonly Dictionary<string, bool?> _groupOn = new(); // the model's state per group (null = mixed)
     readonly List<Button> _addButtons = [];
     string? _structureKey;
+    RouteExit _renderedProfile = RouteExit.Phone; // the profile of the model last rendered: the list the user is looking at
 
     public SmartRoutingWindow()
     {
@@ -32,9 +33,11 @@ public partial class SmartRoutingWindow : Window
     public event Action<bool>? MasterToggled;
     public event Action<string, bool>? ItemToggled;
     public event Action<string, bool>? GroupToggled;
-    public event Action<UserRule, bool>? UserRuleToggled;
-    public event Action<UserRule>? UserRuleRemoved;
-    public event Action<UserRuleType>? AddRuleRequested;
+    /// The three user-rule events carry the profile whose list the screen showed when the user clicked (the model last
+    /// rendered), so an edit lands in the list the user saw even if the App's editing profile has just changed.
+    public event Action<UserRule, bool, RouteExit>? UserRuleToggled;
+    public event Action<UserRule, RouteExit>? UserRuleRemoved;
+    public event Action<UserRuleType, RouteExit>? AddRuleRequested;
     public event Action? UsePhoneRequested;
     public event Action<RouteExit>? EditingProfileChanged;
     public event Action<int>? UsageRangeChanged;
@@ -63,6 +66,7 @@ public partial class SmartRoutingWindow : Window
     /// so the frequent stats publishes do not steal keyboard focus or swallow an in-flight click.
     public void Render(PageModel model)
     {
+        _renderedProfile = model.EditingProfile;
         var key = StructureKey(model);
         if (key != _structureKey)
         {
@@ -191,9 +195,9 @@ public partial class SmartRoutingWindow : Window
         var panel = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
         var header = new DockPanel();
         var addWebsite = new Button { Content = "+ Website…", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(6, 0, 0, 0), Tag = "add:website" };
-        addWebsite.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.Website);
+        addWebsite.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.Website, _renderedProfile);
         var addApp = new Button { Content = "+ App…", Padding = new Thickness(8, 2, 8, 2), Tag = "add:app" };
-        addApp.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.App);
+        addApp.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.App, _renderedProfile);
         _addButtons.Add(addWebsite);
         _addButtons.Add(addApp);
         _controls["add:website"] = addWebsite;
@@ -213,7 +217,7 @@ public partial class SmartRoutingWindow : Window
             var id = UserRule.IdOf(rule.Rule);
             var row = new DockPanel { Margin = new Thickness(28, 2, 0, 2) };
             var remove = new Button { Content = "🗑", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Remove", Tag = "rm:" + id };
-            remove.Click += (_, _) => UserRuleRemoved?.Invoke(rule.Rule);
+            remove.Click += (_, _) => UserRuleRemoved?.Invoke(rule.Rule, _renderedProfile);
             var bytes = Secondary(new TextBlock { VerticalAlignment = VerticalAlignment.Center });
             DockPanel.SetDock(remove, Dock.Right);
             DockPanel.SetDock(bytes, Dock.Right);
@@ -224,7 +228,7 @@ public partial class SmartRoutingWindow : Window
                 Content = $"{(rule.Rule.Type == UserRuleType.App ? "App" : "Website")}: {rule.Rule.Value}",
                 Tag = "r:" + id,
             };
-            toggle.Click += (_, _) => UserRuleToggled?.Invoke(rule.Rule, toggle.IsChecked == true);
+            toggle.Click += (_, _) => UserRuleToggled?.Invoke(rule.Rule, toggle.IsChecked == true, _renderedProfile);
             _ruleBoxes[id] = toggle;
             _ruleBytes[id] = bytes;
             _controls[(string)toggle.Tag] = toggle;

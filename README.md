@@ -58,8 +58,8 @@ Smart routing has two **profiles**, and the card's **Phone** and **LAN** buttons
 The built-in lists are in `rules\builtin.json` next to the app; every install overwrites that file, so do not edit it. Your own changes go in `%AppData%\NetRouteWidget\rules.user.json`, which uses the same format and is merged over the built-in lists by item `id`:
 
 - an item with a built-in `id` **replaces** that item (and keeps its place in the list);
-- an item with a new `id` is **added** (a new group `id` makes a new group after the built-in ones);
-- `{ "id": "xbox", "remove": true }` **removes** a built-in item (naming an unknown `id` does nothing).
+- an item with a new `id` is **added**; it joins an existing built-in group only when BOTH the group `id` and `name` match (otherwise a second header appears), and a new group `id` makes a new group after the built-in ones;
+- `{ "id": "games", "name": "Game launchers", "items": [ { "id": "xbox", "remove": true } ] }` **removes** the built-in item `xbox` (the item sits inside its group, as in the built-in file; naming an unknown `id` does nothing).
 
 A missing file changes nothing. A broken file (bad JSON, a bad `exit`, a duplicate `id`, a phone carve-out) is ignored as a whole, with a line in the log, and the built-in lists are used, so it can never stop Smart routing from starting. Changes apply after you restart the widget. On the Config tab, **Edit rules file…** creates a small template if the file does not exist yet and opens it in your editor.
 

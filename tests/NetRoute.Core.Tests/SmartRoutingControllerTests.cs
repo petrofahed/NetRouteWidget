@@ -1261,7 +1261,7 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
-    public async Task Lan_profile_with_the_lan_unplugged_heals_to_the_phone_and_never_waits()
+    public async Task Lan_profile_with_the_lan_unplugged_heals_to_the_phone_and_raises_no_popup_by_itself()
     {
         var c = Create(catalog: V4Catalog);
 
@@ -1276,16 +1276,24 @@ public class SmartRoutingControllerTests
         Assert.Empty(c.Status.WaitingNames);
     }
 
-    [Fact]
-    public async Task A_rule_edit_in_the_inactive_list_does_not_restart_sing_box()
+    [Theory]
+    [InlineData(RoutingMode.Phone, false, 1)] // Phone profile runs the LAN list: a phone-list edit is inactive
+    [InlineData(RoutingMode.Phone, true, 2)]  // ... and a LAN-list edit restarts sing-box
+    [InlineData(RoutingMode.Lan, false, 2)]   // LAN profile runs the phone list: a phone-list edit restarts
+    [InlineData(RoutingMode.Lan, true, 1)]    // ... and a LAN-list edit is inactive
+    public async Task Only_a_rule_edit_in_the_list_the_active_profile_runs_restarts_sing_box(RoutingMode mode, bool editLanList, int starts)
     {
         var c = Create(catalog: V4Catalog);
         var settings = On();
-        await c.ApplyAsync(Net(RoutingMode.Phone), settings);
+        await c.ApplyAsync(Net(mode), settings);
+        var rule = new UserRule(UserRuleType.App, "x.exe");
 
-        var edited = new AppSettings { SmartRouting = settings.SmartRouting.WithPhoneUserRule(new UserRule(UserRuleType.App, "x.exe")) };
-        await c.ApplyAsync(Net(RoutingMode.Phone), edited);
+        var edited = new AppSettings
+        {
+            SmartRouting = editLanList ? settings.SmartRouting.WithUserRule(rule) : settings.SmartRouting.WithPhoneUserRule(rule),
+        };
+        await c.ApplyAsync(Net(mode), edited);
 
-        Assert.Single(_host.Starts); // the phone list is inactive in the Phone profile
+        Assert.Equal(starts, _host.Starts.Count);
     }
 }

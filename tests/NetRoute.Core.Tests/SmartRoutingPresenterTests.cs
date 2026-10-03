@@ -179,6 +179,7 @@ public class SmartRoutingPresenterTests
         var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Phone), RouteExit.Phone);
 
         Assert.Equal(new[] { "youtube", "vscode-updates" }, page.Groups.SelectMany(g => g.Items).Select(i => i.Id));
+        Assert.Equal(new[] { "video", "upd" }, page.Groups.Select(g => g.Id));
         Assert.Equal(new[] { "a.exe" }, page.UserRules.Select(r => r.Rule.Value));
         Assert.Equal(RouteExit.Phone, page.EditingProfile);
         Assert.Equal(RouteExit.Phone, page.ActiveProfile);
@@ -196,6 +197,7 @@ public class SmartRoutingPresenterTests
         var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Phone), RouteExit.Lan);
 
         Assert.Equal(new[] { "claude", "vscode-updates" }, page.Groups.SelectMany(g => g.Items).Select(i => i.Id));
+        Assert.Equal(new[] { "ai", "upd" }, page.Groups.Select(g => g.Id));
         Assert.Equal(new[] { "b.exe" }, page.UserRules.Select(r => r.Rule.Value));
         Assert.Equal(RouteExit.Lan, page.EditingProfile);
         Assert.Equal(RouteExit.Phone, page.ActiveProfile); // editing the other list does not change the active profile
@@ -221,6 +223,7 @@ public class SmartRoutingPresenterTests
 
     [Theory]
     [InlineData(RouteExit.Phone, RouteExit.Lan, false, true, "→ via phone")]  // Phone view, LAN item switched off
+    [InlineData(RouteExit.Phone, RouteExit.Lan, true, true, "→ via phone")]   // Phone view, carve-out off
     [InlineData(RouteExit.Lan, RouteExit.Phone, false, true, "→ via LAN")]    // LAN view, phone item switched off
     [InlineData(RouteExit.Lan, RouteExit.Phone, false, false, "→ phone")]     // LAN view, phone item on
     [InlineData(RouteExit.Lan, RouteExit.Lan, true, false, "→ LAN")]          // LAN view, carve-out on

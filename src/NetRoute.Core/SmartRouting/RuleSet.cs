@@ -52,10 +52,10 @@ public sealed record RuleSet(IReadOnlyList<RuleEntry> Entries)
         processName is null ? null
             : Entries.FirstOrDefault(e => e.Processes.Any(p => string.Equals(p, processName, StringComparison.OrdinalIgnoreCase)));
 
-    public RuleEntry? FindByHost(string? host)
+    public RuleEntry? FindByHost(string? host, bool carveOutOnly = false)
     {
         if (string.IsNullOrEmpty(host)) return null;
         var h = host.ToLowerInvariant();
-        return Entries.FirstOrDefault(e => e.Domains.Any(d => h == d || h.EndsWith("." + d, StringComparison.Ordinal)));
+        return Entries.FirstOrDefault(e => (!carveOutOnly || e.CarveOut) && e.Domains.Any(d => h == d || h.EndsWith("." + d, StringComparison.Ordinal)));
     }
 }

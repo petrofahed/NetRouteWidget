@@ -44,7 +44,9 @@ public static class UsageReport
         state.InException ? Destination(state.Destination) : null;
 
     public static string MenuText(ExceptionState state) =>
-        state.InException ? "Exclude from exception" : $"Send to exception ({Destination(state.Destination)})";
+        !state.CanChange ? "Can't be an exception here"
+            : state.InException ? "Exclude from exception"
+            : $"Send to exception ({Destination(state.Destination)})";
 
     static string Destination(RouteExit exit) => exit == RouteExit.Lan ? "→ LAN" : "→ phone";
 

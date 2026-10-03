@@ -496,17 +496,18 @@ public partial class App : Application
             _editingProfile = profile;
             RenderSmartWindow();
         };
-        // The editing profile is resolved when the event fires, so a rule always lands in the list the user is looking at.
-        window.UserRuleToggled += (rule, on) => ChangeSmart(s => EditingProfile == RouteExit.Lan
+        // The window passes the profile of the list it was showing when the user clicked (captured before the add dialog
+        // opens), so a rule always lands in the list on screen, not in whatever EditingProfile says by now.
+        window.UserRuleToggled += (rule, on, shown) => ChangeSmart(s => shown == RouteExit.Lan
             ? s.WithPhoneUserRule(rule with { Enabled = on })
             : s.WithUserRule(rule with { Enabled = on }));
-        window.UserRuleRemoved += rule => ChangeSmart(s => EditingProfile == RouteExit.Lan
+        window.UserRuleRemoved += (rule, shown) => ChangeSmart(s => shown == RouteExit.Lan
             ? s.WithoutPhoneUserRule(rule)
             : s.WithoutUserRule(rule));
-        window.AddRuleRequested += type =>
+        window.AddRuleRequested += (type, shown) =>
         {
             var dialog = new AddRuleWindow(type) { Owner = window };
-            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => EditingProfile == RouteExit.Lan ? s.WithPhoneUserRule(rule) : s.WithUserRule(rule));
+            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => shown == RouteExit.Lan ? s.WithPhoneUserRule(rule) : s.WithUserRule(rule));
         };
         window.UsePhoneRequested += () => _ = _smart?.UseLanRulesOnPhoneAsync();
         window.UsageRangeChanged += days =>

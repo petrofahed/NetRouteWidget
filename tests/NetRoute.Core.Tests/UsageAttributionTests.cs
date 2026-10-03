@@ -158,6 +158,33 @@ public class UsageAttributionTests
         Assert.Equal("example.com", attribution.DisplayName("user:website:example.com"));
     }
 
+    // sing-box matches the carve-out (update) rules before the process rules, so the usage must too.
+    static readonly IReadOnlyList<RuleItem> CarveOutCatalog =
+    [
+        new("vscode", "dev", "Dev tools", "VS Code", ["Code.exe"], [], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    [Fact]
+    public void A_carve_out_host_claims_the_connection_before_the_process_rule()
+    {
+        var attribution = UsageAttribution.Build(CarveOutCatalog, new SmartRoutingSettings());
+
+        Assert.Equal("vscode-updates", attribution.Resolve("Code.exe", "update.code.visualstudio.com"));
+        Assert.Equal("vscode-updates", attribution.Resolve("chrome.exe", "update.code.visualstudio.com"));
+        Assert.Equal("vscode", attribution.Resolve("Code.exe", "example.com"));
+    }
+
+    [Fact]
+    public void A_switched_off_carve_out_still_claims_its_traffic()
+    {
+        var settings = new SmartRoutingSettings().WithItem("vscode-updates", false);
+        var attribution = UsageAttribution.Build(CarveOutCatalog, settings);
+
+        Assert.Equal("vscode-updates", attribution.Resolve("Code.exe", "update.code.visualstudio.com"));
+        Assert.Equal("vscode", attribution.Resolve("Code.exe", "example.com"));
+    }
+
     [Fact]
     public void A_disabled_phone_app_rule_does_not_claim_its_application()
     {

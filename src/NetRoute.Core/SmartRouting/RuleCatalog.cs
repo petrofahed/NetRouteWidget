@@ -121,6 +121,17 @@ public static class RuleCatalog
     static string Required(JsonElement e, string name) =>
         e.GetProperty(name).GetString() ?? throw new InvalidDataException($"Rule catalog property '{name}' must be a string");
 
-    static IReadOnlyList<string> Strings(JsonElement e, string name) =>
-        e.TryGetProperty(name, out var arr) ? arr.EnumerateArray().Select(x => x.GetString()!).ToList() : [];
+    /// A missing list is empty; a null, blank or non-string element is rejected (it would otherwise reach the sing-box config as a null string).
+    static IReadOnlyList<string> Strings(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var arr)) return [];
+        var result = new List<string>();
+        foreach (var element in arr.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(element.GetString()))
+                throw new InvalidDataException($"Rule catalog property '{name}' must contain only non-blank strings");
+            result.Add(element.GetString()!);
+        }
+        return result;
+    }
 }

@@ -58,6 +58,57 @@ public class RuleCatalogMergeTests
     }
 
     [Fact]
+    public void An_id_that_is_both_removed_and_replaced_is_removed()
+    {
+        var user = RuleCatalog.ParseUser("""
+            {"version":1,"groups":[{"id":"video","name":"Video","items":[
+              {"id":"youtube","name":"YouTube (mine)","domains":["youtube.com"]},
+              {"id":"youtube","remove":true}]}]}
+            """);
+
+        var merged = RuleCatalog.Merge(Builtin, user.Items, user.Removed);
+
+        Assert.DoesNotContain(merged, i => i.Id == "youtube");
+    }
+
+    [Theory]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X","processes":[null]}]}]}""", "processes")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X","domains":["  "]}]}]}""", "domains")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X","domains":[5]}]}]}""", "domains")]
+    public void A_null_blank_or_non_string_list_element_is_rejected_naming_the_property(string json, string property)
+    {
+        var ex = Assert.Throws<InvalidDataException>(() => RuleCatalog.Parse(json));
+        Assert.Contains(property, ex.Message);
+        Assert.Throws<InvalidDataException>(() => RuleCatalog.ParseUser(json));
+    }
+
+    [Theory]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X","processes":[null]}]}]}""")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X","domains":["  "]}]}]}""")]
+    [InlineData("""{"version":1,"groups":[{"id":"g","name":"G","items":[{"id":"x","name":"X","domains":[5]}]}]}""")]
+    public void A_user_file_with_such_an_element_is_ignored_and_the_built_in_catalog_is_used(string userJson)
+    {
+        var dir = Directory.CreateTempSubdirectory("rules-merge-").FullName;
+        try
+        {
+            var builtinPath = Path.Combine(dir, "builtin.json");
+            var userPath = Path.Combine(dir, "rules.user.json");
+            File.WriteAllText(builtinPath, """{"version":1,"groups":[{"id":"v","name":"V","items":[{"id":"youtube","name":"YouTube","domains":["youtube.com"]}]}]}""");
+            File.WriteAllText(userPath, userJson);
+            var logs = new List<string>();
+
+            var items = RuleCatalog.LoadMerged(builtinPath, userPath, logs.Add);
+
+            Assert.Equal(new[] { "youtube" }, items.Select(i => i.Id));
+            Assert.Contains(logs, l => l.Contains("rules.user.json", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void An_empty_user_catalog_changes_nothing()
     {
         var user = RuleCatalog.ParseUser("""{"version":1,"groups":[]}""");

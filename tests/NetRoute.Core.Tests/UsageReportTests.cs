@@ -218,6 +218,8 @@ public class UsageReportTests
         Assert.Equal("Exclude from exception", UsageReport.MenuText(new ExceptionState(true, true, RouteExit.Lan)));
         Assert.Equal("Send to exception (→ LAN)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Lan)));
         Assert.Equal("Send to exception (→ phone)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Phone)));
+        Assert.Equal("Can't be an exception here", UsageReport.MenuText(new ExceptionState(false, false, RouteExit.Lan)));
+        Assert.Equal("Can't be an exception here", UsageReport.MenuText(new ExceptionState(true, false, RouteExit.Lan)));
     }
 
     [Fact]
