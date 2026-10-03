@@ -60,6 +60,7 @@ src/NetRoute.App/
   App.xaml.cs                              editing profile, edits routed to the right list                           (Task 6)
 README.md, docs/superpowers/specs/...      docs                                                                      (Task 7)
 tools/Make-AppIcon.ps1, Assets/NetRouteWidget.ico, csproj, window Icon=                                  (Task 8)
+UsageExceptions.cs (replaces UsageAssignment), UsageReport, UsageTab/Window/App wiring               (Task 9; run it after Task 6, before Task 7)
 tests/NetRoute.Core.Tests/
   RuleCatalogExitTests.cs (new)  RuleSetTests.cs  SmartRoutingSettingsTests.cs  UsageAttributionTests.cs
   SingBoxConfigBuilderTests.cs  SmartRoutingControllerTests.cs  SmartRoutingPresenterTests.cs
@@ -1188,7 +1189,7 @@ git commit -m "feat(app): Config tab edits either profile's list; edits go to th
 - Modify: `README.md`, `docs/superpowers/specs/2026-10-03-netroute-v4-profiles-design.md`
 - Test: none beyond the final checks.
 
-- [ ] **Step 1: README.** Add a "Profiles" section (3-6 short bullets): the two profiles and that the card's Phone / LAN buttons switch them; what each exception list does; the starting phone list (AI tools, Omantel); the update items that always use the LAN; the Config tab's "Editing:" selector; that switching restarts Smart routing for about a second; and the honest limit that the built-in process names and update domains are best guesses that can be edited through "My rules" or fixed in `rules\builtin.json`.
+- [ ] **Step 1: README.** Add a "Profiles" section (3-6 short bullets): the two profiles and that the card's Phone / LAN buttons switch them; what each exception list does; the starting phone list (AI tools, Omantel); the update items that always use the LAN; the Config tab's "Editing:" selector; the Usage tab's right-click menu ("Send to exception" / "Exclude from exception") and the tag on exception rows; that switching restarts Smart routing for about a second; and the honest limit that the built-in process names and update domains are best guesses that can be edited through "My rules" or fixed in `rules\builtin.json`.
 
 - [ ] **Step 2: Spec.** Set the `**Status:**` line to `Implemented on branch feat/v2-smart-routing; waiting for the user's on-machine verification.`
 
@@ -1298,6 +1299,314 @@ Extract the icon Windows will show for the built exe and read it: in PowerShell 
 ```bash
 git add tools/Make-AppIcon.ps1 src/NetRoute.App
 git commit -m "feat(app): application icon (the tray globe) for the exe, the taskbar button and every window" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9: Right-click a Usage row to send it to / exclude it from the exception list, with a tag on exceptions
+
+Requested by the user after the plan was approved: in the Usage list, right-click a row → **Send to exception**; if the row is already an exception → **Exclude from exception**; and a visible **tag** on every row that is an exception so you can see it is routed. "Exception" always means *the active profile's exception list* (Phone + exceptions: items that go through the LAN; LAN + exceptions: items that go through the phone). Execute this task **after Task 6 and before Task 7**.
+
+**Files:**
+- Create: `src/NetRoute.Core/SmartRouting/UsageExceptions.cs`
+- Delete: `src/NetRoute.Core/SmartRouting/UsageAssignment.cs`, `tests/NetRoute.Core.Tests/UsageAssignmentTests.cs` (the v3 "Goes via" helper, unused by the UI since the column was removed; `UsageExceptions` replaces it)
+- Modify: `src/NetRoute.Core/SmartRouting/UsageReport.cs`, `src/NetRoute.App/UsageTab.xaml.cs`, `src/NetRoute.App/SmartRoutingWindow.xaml.cs`, `src/NetRoute.App/App.xaml.cs`
+- Test: `tests/NetRoute.Core.Tests/UsageExceptionsTests.cs` (new), `tests/NetRoute.Core.Tests/UsageReportTests.cs`
+
+**Interfaces:**
+- Consumes: Task 2 (`PhoneUserRules`, `WithPhoneUserRule`, `RuleItem.Exit/CarveOut`), Task 4 (`SmartRoutingStatus.Profile`).
+- Produces:
+  - `readonly record struct ExceptionState(bool InException, bool CanChange, RouteExit Destination)`;
+  - `UsageExceptions.Describe(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string rowKey) → ExceptionState`;
+  - `UsageExceptions.Toggle(catalog, settings, profile, rowKey) → SmartRoutingSettings` (unchanged settings when `!CanChange`);
+  - `UsageReportRow(string Key, string Name, ExceptionState Exception, long PhoneBytes, long LanBytes, UsageRate? Now)` with `bool CanChange => Exception.CanChange` (replaces the `GoesVia Via, bool CanChange` members);
+  - `UsageReport.Build(usage, today, rangeDays, catalog, settings, canAssign, sort, string? filter = null, RouteExit profile = RouteExit.Phone)`;
+  - `UsageReport.TagText(ExceptionState) → string?` (`"→ LAN"` / `"→ phone"` when `InException`, else null) and `UsageReport.MenuText(ExceptionState) → string`;
+  - `UsageTab.ExceptionToggleRequested` / `SmartRoutingWindow.UsageExceptionToggleRequested` (`event Action<string>?`, the row key).
+
+**Semantics** (profile = the active profile, `RouteExit.Phone` = "Phone + exceptions"):
+- A row that is a **built-in item** belonging to the active list (Phone profile: `Exit == Lan`, carve-outs included; LAN profile: `Exit == Phone` or a carve-out) is an exception while the item is switched on; toggling switches the item on/off (the same switch as the Config tab). `Destination` = the item's `Exit`. An item of the *other* list is not changeable here (`CanChange = false`).
+- A row `app:<exe>` is an exception when the active profile's user-rule list holds an **enabled** App rule for that exe; toggling flips `Enabled` of the existing rule, or creates an enabled rule when there is none (creating fails for a name that is not a valid `.exe`, then `CanChange` is false). `Destination` = the opposite of the profile (Phone profile → LAN; LAN profile → phone).
+- A row `user:website:<host>` is an exception when the active list holds an enabled Website rule for it; toggling flips `Enabled`. A website rule that lives only in the other list is not changeable here.
+- `other` and `unattributed` are never changeable.
+- `canAssign` (Smart routing unavailable/off) disables every row's menu: `Build` ANDs it into `CanChange`.
+
+- [ ] **Step 1: Write the failing tests.**
+
+`tests/NetRoute.Core.Tests/UsageExceptionsTests.cs`:
+
+```csharp
+namespace NetRoute.Core.Tests;
+
+public class UsageExceptionsTests
+{
+    static readonly IReadOnlyList<RuleItem> Catalog =
+    [
+        new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true),                                      // LAN exception
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], [], true, RouteExit.Phone),                            // phone exception
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    [Fact]
+    public void A_lan_item_is_an_exception_of_the_phone_profile_while_switched_on()
+    {
+        var on = new SmartRoutingSettings();
+        var off = on.WithItem("youtube", false);
+
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, on, RouteExit.Phone, "youtube"));
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, off, RouteExit.Phone, "youtube"));
+        Assert.False(UsageExceptions.Toggle(Catalog, on, RouteExit.Phone, "youtube").IsItemOn(Catalog[0]));
+        Assert.True(UsageExceptions.Toggle(Catalog, off, RouteExit.Phone, "youtube").IsItemOn(Catalog[0]));
+    }
+
+    [Fact]
+    public void An_item_of_the_other_list_cannot_be_changed_from_here()
+    {
+        var s = new SmartRoutingSettings();
+
+        Assert.Equal(new ExceptionState(false, false, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, RouteExit.Phone, "claude"));
+        Assert.Equal(new ExceptionState(false, false, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "youtube"));
+        Assert.Equal(s, UsageExceptions.Toggle(Catalog, s, RouteExit.Phone, "claude"));
+    }
+
+    [Fact]
+    public void In_the_lan_profile_phone_items_and_carve_outs_are_the_exceptions()
+    {
+        var s = new SmartRoutingSettings();
+
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "claude"));
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "vscode-updates"));
+        Assert.False(UsageExceptions.Toggle(Catalog, s, RouteExit.Lan, "claude").IsItemOn(Catalog[1]));
+    }
+
+    [Fact]
+    public void An_application_row_creates_then_disables_then_re_enables_a_rule_in_the_active_list()
+    {
+        var s = new SmartRoutingSettings();
+
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Phone, "app:chrome.exe"));
+        var added = UsageExceptions.Toggle(Catalog, s, RouteExit.Phone, "app:chrome.exe");
+        Assert.Equal(new UserRule(UserRuleType.App, "chrome.exe", true), Assert.Single(added.UserRules));
+        Assert.Empty(added.PhoneUserRules);
+        Assert.True(UsageExceptions.Describe(Catalog, added, RouteExit.Phone, "app:chrome.exe").InException);
+
+        var removed = UsageExceptions.Toggle(Catalog, added, RouteExit.Phone, "app:chrome.exe");
+        Assert.False(Assert.Single(removed.UserRules).Enabled); // the rule stays listed on the Config tab, switched off
+        Assert.False(UsageExceptions.Describe(Catalog, removed, RouteExit.Phone, "app:chrome.exe").InException);
+
+        var again = UsageExceptions.Toggle(Catalog, removed, RouteExit.Phone, "app:chrome.exe");
+        Assert.True(Assert.Single(again.UserRules).Enabled);
+    }
+
+    [Fact]
+    public void In_the_lan_profile_an_application_goes_to_the_phone_list()
+    {
+        var added = UsageExceptions.Toggle(Catalog, new SmartRoutingSettings(), RouteExit.Lan, "app:qbittorrent.exe");
+
+        Assert.Empty(added.UserRules);
+        Assert.Equal(new UserRule(UserRuleType.App, "qbittorrent.exe", true), Assert.Single(added.PhoneUserRules));
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, added, RouteExit.Lan, "app:qbittorrent.exe"));
+        // The same app is not an exception of the other profile.
+        Assert.False(UsageExceptions.Describe(Catalog, added, RouteExit.Phone, "app:qbittorrent.exe").InException);
+    }
+
+    [Fact]
+    public void A_website_rule_row_toggles_its_rule_in_the_active_list_only()
+    {
+        var s = new SmartRoutingSettings().WithUserRule(new UserRule(UserRuleType.Website, "dropbox.com"));
+
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Phone, "user:website:dropbox.com"));
+        Assert.False(Assert.Single(UsageExceptions.Toggle(Catalog, s, RouteExit.Phone, "user:website:dropbox.com").UserRules).Enabled);
+        // In the LAN profile that rule belongs to the other list: not changeable here.
+        Assert.False(UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "user:website:dropbox.com").CanChange);
+    }
+
+    [Theory]
+    [InlineData("other")]
+    [InlineData("unattributed")]
+    [InlineData("app:")]
+    [InlineData("app:notanexe")]
+    [InlineData("user:website:not-a-rule.com")]
+    public void Rows_that_cannot_be_an_exception_are_locked_and_never_change_the_settings(string key)
+    {
+        var s = new SmartRoutingSettings();
+
+        Assert.False(UsageExceptions.Describe(Catalog, s, RouteExit.Phone, key).CanChange);
+        Assert.Equal(s, UsageExceptions.Toggle(Catalog, s, RouteExit.Phone, key));
+    }
+}
+```
+
+`tests/NetRoute.Core.Tests/UsageReportTests.cs`: the old `Goes_via_follows_the_settings_and_locks_rows_that_cannot_be_assigned` test (which reads `.Via`) is replaced by the tests below; the `Nothing_can_be_assigned_while_smart_routing_is_unavailable` test keeps its meaning (it reads `.CanChange`, which still exists). Add (the file has `Snap`, `Build(usage, range, settings, canAssign, sort)` helpers; give its `Build` wrapper two more optional parameters `string? filter = null, RouteExit profile = RouteExit.Phone` and pass them through):
+
+```csharp
+    [Fact]
+    public void Rows_carry_the_exception_state_of_the_active_profile()
+    {
+        var usage = Snap(
+            (Today, "youtube", 0, 10, 0), (Today, "app:chrome.exe", 10, 0, 0),
+            (Today, UsageAttribution.OtherKey, 1, 0, 0), (Today, UsageAttribution.UnattributedKey, 1, 0, 0));
+        var settings = new SmartRoutingSettings().WithItem("youtube", false);
+
+        var rows = Build(usage, settings: settings).Rows.ToDictionary(r => r.Key);
+
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), rows["youtube"].Exception);     // switched off: not an exception now
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), rows["app:chrome.exe"].Exception);
+        Assert.False(rows[UsageAttribution.OtherKey].CanChange);
+        Assert.False(rows[UsageAttribution.UnattributedKey].CanChange);
+    }
+
+    [Fact]
+    public void The_profile_selects_which_list_the_rows_are_exceptions_of()
+    {
+        var usage = Snap((Today, "app:chrome.exe", 10, 0, 0));
+        var settings = new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "chrome.exe"));
+
+        Assert.False(Build(usage, settings: settings).Rows.Single().Exception.InException);
+        Assert.True(Build(usage, settings: settings, profile: RouteExit.Lan).Rows.Single().Exception.InException);
+    }
+
+    [Fact]
+    public void Tag_and_menu_texts()
+    {
+        Assert.Equal("→ LAN", UsageReport.TagText(new ExceptionState(true, true, RouteExit.Lan)));
+        Assert.Equal("→ phone", UsageReport.TagText(new ExceptionState(true, true, RouteExit.Phone)));
+        Assert.Null(UsageReport.TagText(new ExceptionState(false, true, RouteExit.Lan)));
+        Assert.Equal("Exclude from exception", UsageReport.MenuText(new ExceptionState(true, true, RouteExit.Lan)));
+        Assert.Equal("Send to exception (→ LAN)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Lan)));
+        Assert.Equal("Send to exception (→ phone)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Phone)));
+    }
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `dotnet test tests/NetRoute.Core.Tests --filter "FullyQualifiedName~UsageExceptionsTests|FullyQualifiedName~UsageReportTests"`
+Expected: build FAIL — `ExceptionState`, `UsageExceptions`, `UsageReportRow.Exception`, `UsageReport.TagText/MenuText` do not exist.
+
+- [ ] **Step 3: Implement the Core.**
+
+`git rm src/NetRoute.Core/SmartRouting/UsageAssignment.cs tests/NetRoute.Core.Tests/UsageAssignmentTests.cs`, then create `src/NetRoute.Core/SmartRouting/UsageExceptions.cs`:
+
+```csharp
+namespace NetRoute.Core;
+
+/// Whether a usage row is an exception of the ACTIVE profile (so a tag is shown), whether the user may add/remove it from
+/// there, and where it goes while it is an exception.
+public readonly record struct ExceptionState(bool InException, bool CanChange, RouteExit Destination);
+
+/// The Usage tab's right-click menu: "Send to exception" / "Exclude from exception". It reads and writes the same switches
+/// and rule lists as the Config tab. profile = the active profile's default exit (Phone = "Phone + exceptions").
+public static class UsageExceptions
+{
+    public static ExceptionState Describe(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string key)
+    {
+        var destination = profile == RouteExit.Phone ? RouteExit.Lan : RouteExit.Phone;
+        if (catalog.FirstOrDefault(i => i.Id == key) is { } item)
+        {
+            var inList = Belongs(item, profile);
+            return new(inList && settings.IsItemOn(item), inList, item.Exit);
+        }
+        var list = ListFor(settings, profile);
+        if (AppExe(key) is { } exe) return new(FindApp(list, exe)?.Enabled == true, true, destination);
+        if (FindWebsite(list, key) is { } site) return new(site.Enabled, true, destination);
+        return new(false, false, destination);
+    }
+
+    /// The settings with the row switched to the other state; unchanged for a row that cannot be changed from here.
+    public static SmartRoutingSettings Toggle(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string key)
+    {
+        var state = Describe(catalog, settings, profile, key);
+        if (!state.CanChange) return settings;
+        var turnOn = !state.InException;
+
+        if (catalog.FirstOrDefault(i => i.Id == key) is { } item) return settings.WithItem(item.Id, turnOn);
+        var list = ListFor(settings, profile);
+        if (AppExe(key) is { } exe)
+        {
+            if (FindApp(list, exe) is { } rule) return With(settings, profile, rule with { Enabled = turnOn });
+            return turnOn && UserRule.TryCreate(UserRuleType.App, exe, out var created, out _)
+                ? With(settings, profile, created!)
+                : settings;
+        }
+        return FindWebsite(list, key) is { } site ? With(settings, profile, site with { Enabled = turnOn }) : settings;
+    }
+
+    /// The Phone profile's exceptions are the LAN items; the LAN profile's are the phone items plus the carve-outs.
+    static bool Belongs(RuleItem item, RouteExit profile) =>
+        profile == RouteExit.Phone ? item.Exit == RouteExit.Lan : item.Exit == RouteExit.Phone || item.CarveOut;
+
+    static IReadOnlyList<UserRule> ListFor(SmartRoutingSettings s, RouteExit profile) =>
+        profile == RouteExit.Phone ? s.UserRules : s.PhoneUserRules;
+
+    static SmartRoutingSettings With(SmartRoutingSettings s, RouteExit profile, UserRule rule) =>
+        profile == RouteExit.Phone ? s.WithUserRule(rule) : s.WithPhoneUserRule(rule);
+
+    /// The exe file name of an "app:" row, or null when the key is not an application row or the name is not a valid exe name.
+    static string? AppExe(string key)
+    {
+        if (!key.StartsWith(UsageAttribution.AppPrefix, StringComparison.Ordinal)) return null;
+        var exe = key[UsageAttribution.AppPrefix.Length..];
+        return UserRule.TryCreate(UserRuleType.App, exe, out _, out _) ? exe : null;
+    }
+
+    static UserRule? FindApp(IReadOnlyList<UserRule> list, string exe) =>
+        list.FirstOrDefault(r => r.Type == UserRuleType.App && string.Equals(r.Value, exe, StringComparison.OrdinalIgnoreCase));
+
+    static UserRule? FindWebsite(IReadOnlyList<UserRule> list, string key) =>
+        list.FirstOrDefault(r => r.Type == UserRuleType.Website && UserRule.IdOf(r) == key);
+}
+```
+
+`src/NetRoute.Core/SmartRouting/UsageReport.cs`:
+- `UsageReportRow`: replace the record with `public sealed record UsageReportRow(string Key, string Name, ExceptionState Exception, long PhoneBytes, long LanBytes, UsageRate? Now) { public bool CanChange => Exception.CanChange; }`.
+- `Build`: keep the existing optional `filter` parameter and add `RouteExit profile = RouteExit.Phone` after it; build each row's state with `var exception = UsageExceptions.Describe(catalog, settings, profile, key); if (!canAssign) exception = exception with { CanChange = false };`; remove the `UsageAssignment.Describe` call and any `GoesVia` use.
+- Add:
+
+```csharp
+    /// The tag shown next to a row that is an exception: where its traffic is routed.
+    public static string? TagText(ExceptionState state) =>
+        state.InException ? Destination(state.Destination) : null;
+
+    public static string MenuText(ExceptionState state) =>
+        state.InException ? "Exclude from exception" : $"Send to exception ({Destination(state.Destination)})";
+
+    static string Destination(RouteExit exit) => exit == RouteExit.Lan ? "→ LAN" : "→ phone";
+```
+
+- [ ] **Step 4: Run to verify the Core passes.**
+
+Run: `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"` — Expected: all green, 0 warnings. (Fix any other test or code that still refers to `UsageAssignment`, `GoesVia` or `UsageReportRow.Via`.)
+
+- [ ] **Step 5: The UI.**
+
+`UsageTab.xaml.cs`:
+- add `public event Action<string>? ExceptionToggleRequested;`.
+- In `RowView`: replace the plain name `TextBlock` cell with a `DockPanel` (column 0) holding the name (fills, trimmed) and, docked right, a small tag chip — a `Border` (`BorderThickness` 1, `CornerRadius` 3, `Padding` 5,0, `Margin` 8,0,0,0, `VerticalAlignment` Center, `Visibility` Collapsed unless the row has a tag) whose `BorderBrush` and inner `TextBlock.Foreground` use the `Accent` theme resource via `SetResourceReference`; the chip's text is `UsageReport.TagText(row.Exception)`. The row `Grid` gets a `ContextMenu` with one `MenuItem` whose `Header` is `UsageReport.MenuText(row.Exception)` and whose `IsEnabled` is `row.CanChange`; clicking it raises the row's `toggle(key)` callback (passed into the `RowView` constructor as the removed `assign` callback was). `Apply(row)` refreshes the tag, header and enabled state (setting an equal value is a no-op).
+- Reordering must not happen under an open menu: `RowView.MenuOpen` (set from the menu's `Opened`/`Closed` events) joins the existing freeze condition in `Render` (`RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin || any MenuOpen`).
+- A right-click must not be swallowed: leave the row `Grid`'s transparent background as it is (hit-testing).
+
+`SmartRoutingWindow.xaml.cs`: forward it — `Usage.ExceptionToggleRequested += key => UsageExceptionToggleRequested?.Invoke(key);` and declare `public event Action<string>? UsageExceptionToggleRequested;`.
+
+`App.xaml.cs`: in `RenderSmartWindowAsync` pass the profile to the report: `UsageReport.Build(usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter, status.Profile)`; in `OpenSmartRouting` wire
+
+```csharp
+        window.UsageExceptionToggleRequested += key =>
+        {
+            var profile = _smart?.Status.Profile ?? RouteExit.Phone;
+            ChangeSmart(s => UsageExceptions.Toggle(_catalog, s, profile, key));
+        };
+```
+
+- [ ] **Step 6: Build, test, render.**
+
+Run: `dotnet build src/NetRoute.App -c Release -o "<scratch>\nrw-v4-build"` — Expected: 0 warnings, 0 errors. `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"` — all green, 0 warnings.
+Render the Usage tab with the harness (own windows only; update its `Program.cs` for the new `UsageReportRow` shape): dark and light, with a few rows tagged "→ LAN" (Phone profile) and, in a second capture, "→ phone" (LAN profile); a long row name next to a tag at the window's minimum width. **Read every PNG**: the tag is readable in both themes, does not push the Phone/LAN columns, the long name truncates before the tag. State plainly what you could not verify (opening the real context menu, the click round trip).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add -A src tests
+git commit -m "feat(app): right-click a Usage row to send it to / exclude it from the exception list; exception rows carry a tag" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
