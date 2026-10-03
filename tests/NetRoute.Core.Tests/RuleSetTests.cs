@@ -54,4 +54,21 @@ public class RuleSetTests
         Assert.NotEqual(a, b);
         Assert.Equal(a, RuleSet.Build(Catalog, new()).Fingerprint);
     }
+
+    [Fact]
+    public void BuildAll_includes_items_and_rules_that_are_switched_off()
+    {
+        IReadOnlyList<RuleItem> catalog = [new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true)];
+        var settings = new SmartRoutingSettings
+        {
+            Items = new Dictionary<string, bool> { ["youtube"] = false },
+            UserRules = [new UserRule(UserRuleType.App, "qbittorrent.exe", Enabled: false)],
+        };
+
+        var all = RuleSet.BuildAll(catalog, settings);
+        var enabled = RuleSet.Build(catalog, settings);
+
+        Assert.Equal(new[] { "youtube", "user:app:qbittorrent.exe" }, all.Entries.Select(e => e.Id));
+        Assert.Empty(enabled.Entries);
+    }
 }

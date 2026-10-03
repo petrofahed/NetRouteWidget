@@ -5,12 +5,18 @@ public sealed record RuleEntry(string Id, string Name, IReadOnlyList<string> Pro
 /// The enabled "LAN only" rules right now: built-in items switched on plus enabled user rules.
 public sealed record RuleSet(IReadOnlyList<RuleEntry> Entries)
 {
-    public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings)
+    public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings) =>
+        Create(catalog.Where(settings.IsItemOn), settings.UserRules.Where(r => r.Enabled));
+
+    /// Every built-in item and every user rule, switched on or off. Usage uses it so that traffic of a switched-off
+    /// item still lands in that item's row (it just goes through the phone).
+    public static RuleSet BuildAll(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings) =>
+        Create(catalog, settings.UserRules);
+
+    static RuleSet Create(IEnumerable<RuleItem> items, IEnumerable<UserRule> userRules)
     {
-        var entries = catalog.Where(settings.IsItemOn)
-            .Select(i => new RuleEntry(i.Id, i.Name, i.Processes, i.Domains))
-            .ToList();
-        foreach (var rule in settings.UserRules.Where(r => r.Enabled))
+        var entries = items.Select(i => new RuleEntry(i.Id, i.Name, i.Processes, i.Domains)).ToList();
+        foreach (var rule in userRules)
         {
             entries.Add(rule.Type == UserRuleType.App
                 ? new RuleEntry(UserRule.IdOf(rule), rule.Value, [rule.Value], [])

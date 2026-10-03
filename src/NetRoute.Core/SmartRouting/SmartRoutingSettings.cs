@@ -55,6 +55,10 @@ public sealed record SmartRoutingSettings
     /// Not part of the rule fingerprint: changing it never restarts sing-box by itself.
     public string? LastLanInterface { get; init; }
 
+    /// The Usage tab's date range in days (1 = Today, 3, 7, 15 or 30), remembered between runs.
+    /// Not part of the rule fingerprint: changing it never restarts sing-box.
+    public int UsageRangeDays { get; init; } = 7;
+
     public IReadOnlyDictionary<string, bool> Items { get; init; } = new Dictionary<string, bool>();
     public IReadOnlyList<UserRule> UserRules { get; init; } = [];
 
@@ -89,7 +93,7 @@ public sealed record SmartRoutingSettings
         a.Type == b.Type && string.Equals(a.Value, b.Value, StringComparison.OrdinalIgnoreCase);
 
     public bool Equals(SmartRoutingSettings? other) =>
-        other is not null && Enabled == other.Enabled && LastLanInterface == other.LastLanInterface
+        other is not null && Enabled == other.Enabled && LastLanInterface == other.LastLanInterface && UsageRangeDays == other.UsageRangeDays
         && Items.Count == other.Items.Count
         && Items.All(kv => other.Items.TryGetValue(kv.Key, out var v) && v == kv.Value)
         && UserRules.SequenceEqual(other.UserRules);

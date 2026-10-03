@@ -143,4 +143,19 @@ public sealed class SmartRoutingSettingsTests : IDisposable
         Assert.True(first.TryRememberLan("Ethernet 2", out var renamed));
         Assert.Equal("Ethernet 2", renamed.LastLanInterface);
     }
+
+    [Fact]
+    public void Usage_range_defaults_to_seven_days_and_takes_part_in_equality()
+    {
+        Assert.Equal(7, new SmartRoutingSettings().UsageRangeDays);
+        Assert.NotEqual(new SmartRoutingSettings(), new SmartRoutingSettings { UsageRangeDays = 30 });
+    }
+
+    [Fact]
+    public void A_settings_file_without_the_usage_range_loads_with_the_default()
+    {
+        var loaded = System.Text.Json.JsonSerializer.Deserialize<SmartRoutingSettings>("""{"Enabled":true}""");
+
+        Assert.Equal(7, loaded!.UsageRangeDays);
+    }
 }
