@@ -268,7 +268,12 @@ public sealed class SmartRoutingController
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_shutdown || _api is null || !_host.IsRunning) return;
+            if (_shutdown || _api is null) return;
+            if (!_host.IsRunning)
+            {
+                _liveSpeed = NoSpeed; // crashed: the exit event is queued behind the gate, a stale figure must not linger meanwhile
+                return;
+            }
             try
             {
                 if (await _api.GetConnectionsAsync(ct).ConfigureAwait(false) is not { } snapshot)
@@ -300,6 +305,7 @@ public sealed class SmartRoutingController
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                _liveSpeed = NoSpeed;
                 _log($"Smart routing: stats poll failed: {ex.Message}");
                 SafePublish();
             }

@@ -23,6 +23,9 @@ public sealed class UsageCounter
     public const int MaxRowsPerDay = 500;
     public const long ActiveBytesPerSecond = 1024;
     public static readonly TimeSpan RateWindow = TimeSpan.FromSeconds(3);
+    /// Samples are dropped this much BEFORE they are RateWindow old: with one-second polls whose stamps jitter, a 4th
+    /// sample would otherwise sit in the window (3 s window, sums divided by 3) and steady traffic would read 33 % high.
+    public static readonly TimeSpan RateWindowMargin = TimeSpan.FromMilliseconds(250);
     /// The most phone deficit that is carried between polls, so a stale deficit never hides real traffic for long.
     public const long MaxPhoneCarry = 8 * 1024 * 1024;
 
@@ -304,9 +307,9 @@ public sealed class UsageCounter
         foreach (var (key, queue) in _recent.ToList())
         {
             // Samples stamped after "now" come from a clock that has since stepped back: they are stale too.
-            if (queue.Any(e => e.At > now || now - e.At >= RateWindow))
+            if (queue.Any(e => !InWindow(e.At, now)))
             {
-                var fresh = queue.Where(e => e.At <= now && now - e.At < RateWindow).ToList();
+                var fresh = queue.Where(e => InWindow(e.At, now)).ToList();
                 queue.Clear();
                 foreach (var e in fresh) queue.Enqueue(e);
             }
@@ -331,12 +334,15 @@ public sealed class UsageCounter
         _rates = rates;
     }
 
+    /// Not from the future of a stepped-back clock, and younger than the window minus the jitter margin.
+    static bool InWindow(DateTimeOffset at, DateTimeOffset now) => at <= now && now - at < RateWindow - RateWindowMargin;
+
     void RebuildLive(DateTimeOffset now)
     {
         // The same rule as RebuildRates: samples older than the window and samples from the future of a stepped-back clock go.
-        if (_liveSamples.Any(e => e.At > now || now - e.At >= RateWindow))
+        if (_liveSamples.Any(e => !InWindow(e.At, now)))
         {
-            var fresh = _liveSamples.Where(e => e.At <= now && now - e.At < RateWindow).ToList();
+            var fresh = _liveSamples.Where(e => InWindow(e.At, now)).ToList();
             _liveSamples.Clear();
             foreach (var e in fresh) _liveSamples.Enqueue(e);
         }

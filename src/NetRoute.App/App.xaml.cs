@@ -116,10 +116,14 @@ public partial class App : Application
                 // One second: short connections would be missed by a slower poll (see the v3 spec, "Why a plain connection poll is not enough").
                 _usagePoll.Tick += async (_, _) =>
                 {
-                    if (_usagePolling) return; // the previous poll is still waiting for the API
-                    _usagePolling = true;
+                    var owner = false; // only the tick that took the guard may release it
                     try
                     {
+                        // Before the guard: while the gate is held (a restart or stop can take seconds) polls are skipped, and the
+                        // controller has already zeroed the speed or Smart routing has left Running, so a stale figure clears now.
+                        RenderLiveSpeeds(smartForUsage);
+                        if (_usagePolling) return; // the previous poll is still waiting for the API
+                        _usagePolling = owner = true;
                         await smartForUsage.PollStatsAsync();
                         RenderLiveSpeeds(smartForUsage);
                     }
@@ -129,7 +133,7 @@ public partial class App : Application
                     }
                     finally
                     {
-                        _usagePolling = false;
+                        if (owner) _usagePolling = false;
                     }
                 };
                 _usageSave.Tick += async (_, _) =>

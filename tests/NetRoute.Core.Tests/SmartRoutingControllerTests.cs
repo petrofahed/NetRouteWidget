@@ -1121,6 +1121,21 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
+    public async Task LiveSpeed_is_zero_when_a_poll_finds_sing_box_no_longer_running()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 9_000_000));
+        await c.PollStatsAsync();
+        Assert.NotEqual(0, c.LiveSpeed.Total);
+
+        _host.Crash(); // the exit event is still queued behind the gate: a stale figure must not linger meanwhile
+        await c.PollStatsAsync();
+
+        Assert.Equal(new UsageRate(0, 0), c.LiveSpeed);
+    }
+
+    [Fact]
     public async Task LiveSpeed_is_zero_after_a_restart_and_after_stopping()
     {
         var c = Create();

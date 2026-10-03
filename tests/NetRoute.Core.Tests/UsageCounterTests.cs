@@ -727,14 +727,43 @@ public class UsageCounterTests
         counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 0, process: "a.exe")], adapter: 3_010_000), Attr);
         Assert.Equal(1_000_000, counter.Live.PhoneBytesPerSecond);
 
-        // Burst end: the connection shows the 3 MB, the adapter nothing new. The 3 MB booked earlier is taken back,
-        // so the window holds the burst once (3 MB), not twice.
+        // Burst end: the connection shows the 3 MB, the adapter nothing new. The 3 MB booked earlier is taken back, so the
+        // burst counts once (3 MB), not twice. This poll's own net is zero, so no sample is enqueued for it.
         counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 3_000_000, process: "a.exe")], adapter: 3_010_000), Attr);
         Assert.Equal(1_000_000, counter.Live.PhoneBytesPerSecond);
 
-        // The positive sample ages out while the (net zero) take-back sample is still inside the window.
+        // The positive sample has aged out: nothing is left, and the result is not negative.
         counter.Update(Poll(T0.AddSeconds(4), [Conn("1", 0, 3_000_000, process: "a.exe")], adapter: 3_010_000), Attr);
         Assert.Equal(0, counter.Live.PhoneBytesPerSecond);
-        Assert.True(counter.Live.PhoneBytesPerSecond >= 0 && counter.Live.LanBytesPerSecond >= 0);
+    }
+
+    // ---- jittered one-second polls must never put a 4th sample into the 3-second window ----
+
+    static readonly double[] JitteredSeconds = [0, 0.99, 2.01, 2.99, 4.0, 5.01, 5.99, 7.0, 8.0, 8.99];
+
+    [Fact]
+    public void Live_of_steady_traffic_with_jittered_one_second_polls_is_exact_at_every_poll()
+    {
+        var counter = new UsageCounter(null, D0);
+        long total = 0;
+        for (var i = 0; i < JitteredSeconds.Length; i++)
+        {
+            total += 1_000_000;
+            counter.Update(Poll(T0.AddSeconds(JitteredSeconds[i]), [Conn("1", 0, total, process: "a.exe")]), Attr);
+            if (i >= 2) Assert.Equal(1_000_000, counter.Live.PhoneBytesPerSecond);
+        }
+    }
+
+    [Fact]
+    public void A_rows_rate_of_steady_traffic_with_jittered_one_second_polls_is_exact_at_every_poll()
+    {
+        var counter = new UsageCounter(null, D0);
+        long total = 0;
+        for (var i = 0; i < JitteredSeconds.Length; i++)
+        {
+            total += 1_000_000;
+            counter.Update(Poll(T0.AddSeconds(JitteredSeconds[i]), [Conn("1", 0, total, process: "a.exe")]), Attr);
+            if (i >= 2) Assert.Equal(new UsageRate(1_000_000, 0), counter.Snapshot().Rates["app:a.exe"]);
+        }
     }
 }
