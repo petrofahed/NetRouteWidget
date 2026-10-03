@@ -32,11 +32,11 @@ public sealed class SingBoxApi : ISingBoxApi, IDisposable
         }
     }
 
-    public async Task<IReadOnlyList<SingBoxConnection>?> GetConnectionsAsync(CancellationToken ct = default)
+    public async Task<ConnectionsSnapshot?> GetConnectionsAsync(CancellationToken ct = default)
     {
         try
         {
-            return ParseConnections(await _http.GetStringAsync("connections", ct).ConfigureAwait(false));
+            return ParseSnapshot(await _http.GetStringAsync("connections", ct).ConfigureAwait(false));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException
                                    || (ex is TaskCanceledException && !ct.IsCancellationRequested))
@@ -45,12 +45,21 @@ public sealed class SingBoxApi : ISingBoxApi, IDisposable
         }
     }
 
+    internal static IReadOnlyList<SingBoxConnection> ParseConnections(string json) => ParseSnapshot(json).Connections;
+
     /// Entries that are not shaped as expected are skipped rather than failing the whole poll.
-    internal static IReadOnlyList<SingBoxConnection> ParseConnections(string json)
+    internal static ConnectionsSnapshot ParseSnapshot(string json)
     {
         using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object
-            || !doc.RootElement.TryGetProperty("connections", out var list) || list.ValueKind != JsonValueKind.Array) return [];
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) return new ConnectionsSnapshot([], null, null);
+        long? Total(string name) => TryGetLong(root, name, out var value) ? value : null;
+        return new ConnectionsSnapshot(ReadConnections(root), Total("uploadTotal"), Total("downloadTotal"));
+    }
+
+    static IReadOnlyList<SingBoxConnection> ReadConnections(JsonElement root)
+    {
+        if (!root.TryGetProperty("connections", out var list) || list.ValueKind != JsonValueKind.Array) return [];
 
         var result = new List<SingBoxConnection>();
         foreach (var c in list.EnumerateArray())

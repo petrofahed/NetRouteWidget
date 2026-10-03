@@ -43,12 +43,21 @@ sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
     public List<(string Group, string Outbound)> Selects { get; } = new();
     public List<SingBoxConnection> Connections { get; } = new();
 
+    /// Bytes of connections that already closed: they are in the totals but no longer in Connections.
+    public long ClosedUpload { get; set; }
+    public long ClosedDownload { get; set; }
+
     public Task<bool> SelectAsync(string group, string outbound, CancellationToken ct = default)
     {
         Selects.Add((group, outbound));
         return Task.FromResult(SelectResult);
     }
 
-    public Task<IReadOnlyList<SingBoxConnection>?> GetConnectionsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<SingBoxConnection>?>(ConnectionsUnreachable ? null : Connections.ToList());
+    public Task<ConnectionsSnapshot?> GetConnectionsAsync(CancellationToken ct = default)
+    {
+        if (ConnectionsUnreachable) return Task.FromResult<ConnectionsSnapshot?>(null);
+        var open = Connections.ToList();
+        return Task.FromResult<ConnectionsSnapshot?>(new ConnectionsSnapshot(
+            open, open.Sum(c => c.Upload) + ClosedUpload, open.Sum(c => c.Download) + ClosedDownload));
+    }
 }

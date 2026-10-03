@@ -214,7 +214,7 @@ public sealed class SmartRoutingController
             if (_shutdown || _api is null || !_host.IsRunning) return;
             try
             {
-                if (await _api.GetConnectionsAsync(ct).ConfigureAwait(false) is not { } connections)
+                if (await _api.GetConnectionsAsync(ct).ConfigureAwait(false) is not { } snapshot)
                 {
                     if (_time.GetUtcNow() < _apiGraceUntil)
                     {
@@ -232,7 +232,7 @@ public sealed class SmartRoutingController
                     return;
                 }
                 _apiFailures = 0;
-                _counter.Update(connections, _rules, _appliedExit == RouteExit.Phone, Today());
+                _counter.Update(snapshot.Connections, _rules, _appliedExit == RouteExit.Phone, Today());
                 Publish();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

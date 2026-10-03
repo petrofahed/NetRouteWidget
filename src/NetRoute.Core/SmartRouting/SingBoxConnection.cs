@@ -9,6 +9,10 @@ public sealed record SingBoxConnection(
         Chains.Count >= 2 && Chains[0] == SingBoxConfigBuilder.LanTag && Chains[^1] == SingBoxConfigBuilder.LanOnlyTag;
 }
 
+/// What one /connections poll returns. The totals are sing-box's running counters since it started and, unlike the list
+/// of open connections, include connections that already closed. Null when the API did not report them.
+public sealed record ConnectionsSnapshot(IReadOnlyList<SingBoxConnection> Connections, long? UploadTotal, long? DownloadTotal);
+
 /// Runs sing-box.exe. Exited fires for every exit; for StopAsync-caused exits it fires before StopAsync completes.
 public interface ISingBoxHost
 {
@@ -25,5 +29,5 @@ public interface ISingBoxApi
     Task<bool> SelectAsync(string group, string outbound, CancellationToken ct = default);
 
     /// Null when the API cannot be reached.
-    Task<IReadOnlyList<SingBoxConnection>?> GetConnectionsAsync(CancellationToken ct = default);
+    Task<ConnectionsSnapshot?> GetConnectionsAsync(CancellationToken ct = default);
 }

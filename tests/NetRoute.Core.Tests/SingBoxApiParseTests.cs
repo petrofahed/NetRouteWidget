@@ -69,4 +69,38 @@ public class SingBoxApiParseTests
         // winnt.h: 144 bytes on x64 (72 basic + 48 io counters + 4 * 8); 112 on x86.
         Assert.Equal(IntPtr.Size == 8 ? 144 : 112, System.Runtime.InteropServices.Marshal.SizeOf<JobObjectNative.JOBOBJECT_EXTENDED_LIMIT_INFORMATION>());
     }
+
+    [Fact]
+    public void Parses_the_running_totals_that_include_closed_connections()
+    {
+        const string json = """{"connections":[],"downloadTotal":5390000,"uploadTotal":42000}""";
+
+        var snapshot = SingBoxApi.ParseSnapshot(json);
+
+        Assert.Empty(snapshot.Connections);
+        Assert.Equal(5_390_000, snapshot.DownloadTotal);
+        Assert.Equal(42_000, snapshot.UploadTotal);
+    }
+
+    [Theory]
+    [InlineData("""{"connections":[]}""")]
+    [InlineData("""{"connections":[],"downloadTotal":"x","uploadTotal":1}""")]
+    [InlineData("""{"connections":[],"downloadTotal":1.5,"uploadTotal":1}""")]
+    public void Missing_or_malformed_totals_are_null(string json) =>
+        Assert.Null(SingBoxApi.ParseSnapshot(json).DownloadTotal);
+
+    [Fact]
+    public void A_snapshot_still_lists_the_open_connections()
+    {
+        const string json = """
+            {"connections":[{"chains":["lan","lan-only"],"download":5,"id":"b","metadata":{"host":"x.com","processPath":"C:\\a\\Chrome.exe"},"upload":1}],
+             "downloadTotal":50,"uploadTotal":10}
+            """;
+
+        var snapshot = SingBoxApi.ParseSnapshot(json);
+
+        var c = Assert.Single(snapshot.Connections);
+        Assert.Equal("Chrome.exe", c.ProcessName);
+        Assert.Equal(50, snapshot.DownloadTotal);
+    }
 }
