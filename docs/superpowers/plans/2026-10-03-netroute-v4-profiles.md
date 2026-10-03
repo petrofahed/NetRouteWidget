@@ -59,6 +59,7 @@ src/NetRoute.App/
   CardWindow.xaml                          profile tooltips on the Phone / LAN buttons                              (Task 6)
   App.xaml.cs                              editing profile, edits routed to the right list                           (Task 6)
 README.md, docs/superpowers/specs/...      docs                                                                      (Task 7)
+tools/Make-AppIcon.ps1, Assets/NetRouteWidget.ico, csproj, window Icon=                                  (Task 8)
 tests/NetRoute.Core.Tests/
   RuleCatalogExitTests.cs (new)  RuleSetTests.cs  SmartRoutingSettingsTests.cs  UsageAttributionTests.cs
   SingBoxConfigBuilderTests.cs  SmartRoutingControllerTests.cs  SmartRoutingPresenterTests.cs
@@ -1199,6 +1200,104 @@ Run: `dotnet build src/NetRoute.App -c Release -o "F:\Temp\claude\f--source-petr
 ```bash
 git add README.md docs
 git commit -m "docs(v4): profiles in the README; spec marked implemented pending on-machine verification" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 8: An application icon (exe, taskbar, window title bars)
+
+Requested by the user after the plan was approved: the tray icon is a green globe, but the application itself (the exe in Explorer and the taskbar button of the management window) has no icon of its own, so Windows shows a generic blue window. Give the application the same globe.
+
+**Files:**
+- Create: `tools/Make-AppIcon.ps1`, `src/NetRoute.App/Assets/NetRouteWidget.ico` (generated, committed)
+- Modify: `src/NetRoute.App/NetRoute.App.csproj`, `src/NetRoute.App/CardWindow.xaml`, `src/NetRoute.App/SmartRoutingWindow.xaml`, `src/NetRoute.App/AddRuleWindow.xaml`, `src/NetRoute.App/AdapterPickerWindow.xaml`, `src/NetRoute.App/WaitingPopup.xaml`
+- Test: none (visual); verified by extracting the icons and reading them.
+
+**Interfaces:**
+- Produces: a multi-size `.ico` (16, 24, 32, 48, 64, 128, 256 px, 32-bit PNG entries) of the tray globe drawn in the Phone green (`#2EA043`) with the white meridian and equator, exactly the geometry of `TrayIcon.Draw` scaled from its 32 px grid; the exe's `ApplicationIcon`; every window's `Icon`.
+
+- [ ] **Step 1: The generator** — `tools/Make-AppIcon.ps1` (read-only on everything except the output file; draws with System.Drawing, assembles the ICO by hand):
+
+```powershell
+<#
+.SYNOPSIS
+  Generates src\NetRoute.App\Assets\NetRouteWidget.ico: the tray globe (Phone green) at 16..256 px.
+.DESCRIPTION
+  Same geometry as TrayIcon.Draw (32 px grid: filled circle 2,2,28,28; meridian ellipse 10,3,12,26; equator 3,16 to 29,16;
+  white 2 px lines), scaled per size. -PreviewPng also writes the 256 px image so it can be looked at.
+#>
+param(
+    [string]$Out = (Join-Path $PSScriptRoot '..\src\NetRoute.App\Assets\NetRouteWidget.ico'),
+    [string]$PreviewPng
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$sizes = 16, 24, 32, 48, 64, 128, 256
+
+function New-GlobePng([int]$size) {
+    $bmp = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.Clear([System.Drawing.Color]::Transparent)
+    $k = $size / 32.0
+    $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(0x2E, 0xA0, 0x43))
+    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([single][Math]::Max(1.0, 2 * $k))
+    $g.FillEllipse($brush, [single](2 * $k), [single](2 * $k), [single](28 * $k), [single](28 * $k))
+    $g.DrawEllipse($pen, [single](10 * $k), [single](3 * $k), [single](12 * $k), [single](26 * $k))
+    $g.DrawLine($pen, [single](3 * $k), [single](16 * $k), [single](29 * $k), [single](16 * $k))
+    $g.Dispose(); $brush.Dispose(); $pen.Dispose()
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    , $ms.ToArray()
+}
+
+$images = foreach ($s in $sizes) { [pscustomobject]@{ Size = $s; Png = (New-GlobePng $s) } }
+New-Item -ItemType Directory -Force (Split-Path $Out) | Out-Null
+$stream = [System.IO.File]::Create($Out)
+$w = New-Object System.IO.BinaryWriter $stream
+$w.Write([uint16]0); $w.Write([uint16]1); $w.Write([uint16]$images.Count)       # ICONDIR: reserved, type 1 = icon, count
+$offset = 6 + 16 * $images.Count
+foreach ($i in $images) {
+    $dim = if ($i.Size -ge 256) { [byte]0 } else { [byte]$i.Size }                   # 0 means 256
+    $w.Write($dim); $w.Write($dim); $w.Write([byte]0); $w.Write([byte]0)             # width, height, colours, reserved
+    $w.Write([uint16]1); $w.Write([uint16]32)                                         # planes, bits per pixel
+    $w.Write([uint32]$i.Png.Length); $w.Write([uint32]$offset)                        # image size, offset
+    $offset += $i.Png.Length
+}
+foreach ($i in $images) { $w.Write($i.Png) }
+$w.Flush(); $w.Dispose(); $stream.Dispose()
+if ($PreviewPng) { [System.IO.File]::WriteAllBytes($PreviewPng, ($images | Where-Object Size -eq 256).Png) }
+Write-Host "Wrote $Out ($($images.Count) sizes)"
+```
+
+- [ ] **Step 2: Generate and look at it.**
+
+Run (PowerShell, from the repo root): `powershell -NoProfile -File tools\Make-AppIcon.ps1 -PreviewPng "<scratch>\appicon-256.png"` — Expected: `Wrote ...NetRouteWidget.ico (7 sizes)`. Then load it back to prove it is a valid icon: `[void](New-Object System.Drawing.Icon "src\NetRoute.App\Assets\NetRouteWidget.ico")` (no exception). **Read the preview PNG** and check: a green disc with a white vertical ellipse and a white horizontal line, transparent corners.
+
+- [ ] **Step 3: Wire it in.**
+
+`src/NetRoute.App/NetRoute.App.csproj`: in the first `PropertyGroup` add `<ApplicationIcon>Assets\NetRouteWidget.ico</ApplicationIcon>`, and add a new `ItemGroup`:
+
+```xml
+  <ItemGroup>
+    <Resource Include="Assets\NetRouteWidget.ico" />
+  </ItemGroup>
+```
+
+Every window's root element (`CardWindow.xaml`, `SmartRoutingWindow.xaml`, `AddRuleWindow.xaml`, `AdapterPickerWindow.xaml`, `WaitingPopup.xaml`) gets the attribute `Icon="Assets/NetRouteWidget.ico"` (the card and popup have no taskbar button but appear in Alt+Tab and keep the icon consistent).
+
+- [ ] **Step 4: Build, test, look at the real exe icon.**
+
+Run: `dotnet build src/NetRoute.App -c Release -o "<scratch>\nrw-v4-build"` — Expected: 0 warnings, 0 errors.
+Run: `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"` — Expected: all green, 0 warnings.
+Extract the icon Windows will show for the built exe and read it: in PowerShell `Add-Type -AssemblyName System.Drawing; [System.Drawing.Icon]::ExtractAssociatedIcon("<scratch>\nrw-v4-build\NetRouteWidget.exe").ToBitmap().Save("<scratch>\exe-icon.png")` then read `exe-icon.png`: it must show the green globe, not the generic blue application icon. Also render the management window with the harness (own windows only) and confirm the title bar shows the globe. **Do not launch NetRouteWidget.exe.**
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tools/Make-AppIcon.ps1 src/NetRoute.App
+git commit -m "feat(app): application icon (the tray globe) for the exe, the taskbar button and every window" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
