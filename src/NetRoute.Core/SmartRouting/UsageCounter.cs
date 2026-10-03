@@ -13,7 +13,7 @@ public sealed record UsagePoll(
 ///   - The unattributed phone share is a running balance against that Windows counter: a poll where the adapter is behind
 ///     the connections takes bytes back from it (or carries the deficit, at most MaxPhoneCarry), so the timing skew
 ///     between the HTTP snapshot and the adapter reading cancels out and the Phone column follows the adapter total.
-///   - Live rates ("Now") are the bytes seen over the last RateWindow.
+///   - Live rates ("Now phone" and "Now LAN") are the bytes seen over the last RateWindow, per exit; a side below ActiveBytesPerSecond reads 0.
 /// Not thread-safe: callers must serialize all calls (the SmartRoutingController does this under its gate).
 public sealed class UsageCounter
 {
@@ -303,8 +303,12 @@ public sealed class UsageCounter
                 if (entry.Exit == RouteExit.Lan) lan += entry.Bytes;
                 else phone += entry.Bytes;
             }
-            var perSecond = (phone + lan) / (long)RateWindow.TotalSeconds;
-            if (perSecond >= ActiveBytesPerSecond) rates[key] = new UsageRate(lan > phone ? RouteExit.Lan : RouteExit.Phone, perSecond);
+            var seconds = (long)RateWindow.TotalSeconds;
+            var phoneRate = phone / seconds;
+            var lanRate = lan / seconds;
+            if (phoneRate < ActiveBytesPerSecond) phoneRate = 0;
+            if (lanRate < ActiveBytesPerSecond) lanRate = 0;
+            if (phoneRate > 0 || lanRate > 0) rates[key] = new UsageRate(phoneRate, lanRate);
         }
         _rates = rates;
     }

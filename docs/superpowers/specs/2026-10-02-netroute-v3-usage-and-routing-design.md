@@ -34,14 +34,14 @@ Tabs: **Usage** (first, the default) and **Config** (second).
 ```
 Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Smart routing: ON · LAN ● online
 
- Application / site                    📱 Phone     🖧 LAN       Now
- ─────────────────────────────────────────────────────────────────────────────
- Chrome                                 1.2 GB      340 MB      ↕ 1.4 MB/s · phone
- YouTube                                0 MB        2.3 GB      ↕ 3.0 MB/s · LAN
- Windows Update                         0 MB        860 MB      idle
- Steam                                  0 MB        2.1 GB      idle
- Facebook                               120 MB      0 MB        idle
- ─────────────────────────────────────────────────────────────────────────────
+ Application / site                    📱 Phone     🖧 LAN       Now phone      Now LAN
+ ─────────────────────────────────────────────────────────────────────────────────────────
+ Chrome                                 1.2 GB      340 MB      ↕ 1.4 MB/s     ↕ 5 KB/s
+ YouTube                                0 MB        2.3 GB      –              ↕ 3 MB/s
+ Windows Update                         0 MB        860 MB      –              –
+ Steam                                  0 MB        2.1 GB      –              –
+ Facebook                               120 MB      0 MB        –              –
+ ─────────────────────────────────────────────────────────────────────────────────────────
  Total                                  1.3 GB      5.6 GB
  Kept off 4G in this period: 5.3 GB
 ```
@@ -57,7 +57,7 @@ Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Sma
   - built-in item: switch it on (LAN) or off (Phone);
   - application: add a user App rule (**+ App**) and enable it for the LAN, or disable it to go back to the phone.
 - **Phone** and **LAN** columns show bytes (download + upload) for the selected date range. The exit is the connection's actual exit in sing-box: the phone or the LAN adapter.
-- **Now** shows the current rate and exit for rows that moved data in the last few seconds ("↕ 1.4 MB/s · phone"), otherwise "idle".
+- **Now phone** and **Now LAN** are two live columns: the current speed on each exit over the last ~3 seconds ("↕ 1.4 MB/s"). A side is shown only above 1 KB/s, otherwise a dash. Each column is sortable (idle rows last when sorting largest-first).
 - **Filter:** a "Filter:" box under the range buttons narrows the list by name (case-insensitive "contains" on the display name or the row key); the Total row then sums only the shown rows and reads "Total (filtered)", while "Kept off 4G" and the adapter total stay whole-period. It is per-session, not saved.
 - **Sorting:** click any column header. The default sort is Phone, largest first, so the biggest consumers of mobile data are on top.
 - **Date ranges:** Today (since local midnight), 3, 7, 15 and 30 days (today plus the previous days). The choice is remembered.
@@ -98,7 +98,7 @@ sing-box's Clash API lists only the connections that are **open right now**; it 
    - Unseen bytes go to a visible row **"Unattributed (short connections)"** with its own Phone and LAN values, so the column totals are correct instead of silently low. They are never assigned to a guessed application.
 3. **Exact footer.** The page also shows **"Phone adapter total in this period (exact, from Windows)"** (it follows the selected range, so it can be compared with the Phone column).
 4. **Kept off 4G** (card row and page) uses the same data: LAN bytes of rows assigned to the LAN while the default exit was the phone, plus the LAN part of the unattributed bytes that arrived while the phone was the default exit. It is labelled "at least" when a day in the range has `gaps > 0`.
-5. **Now** (the live rate) is computed from the 1 s deltas.
+5. **Now phone** and **Now LAN** (the live speeds) are computed from the 1 s deltas, per exit, over a 3-second window.
 
 The remaining limitation: an application's own short connections that were missed are counted under "Unattributed", not under the application. The page says so, and the totals stay right.
 
@@ -146,7 +146,7 @@ The remaining limitation: an application's own short connections that were misse
   - `UsageReport`: ranges (today, 3, 7, 15, 30), sorting, totals, assignment state per row type.
   - `UsageAssignment`: every row type, both directions.
 - Accuracy check on the real machine (scripted, read-only): download a known amount (for example 6 x youtube.com, about 5 MB) through the widget and require the page's YouTube + Unattributed rows to add up to within 10 % of the bytes downloaded; compare the phone column with Windows' phone adapter counter over an hour.
-  - Manual checklist with the user: play YouTube through the LAN and watch the **LAN** column and **Now**; switch Chrome to LAN and watch it move; unplug the LAN; check ranges after two days; restart the widget and see the history survive.
+  - Manual checklist with the user: play YouTube through the LAN and watch the **LAN** column and **Now LAN**; switch Chrome to LAN and watch it move; unplug the LAN; check ranges after two days; restart the widget and see the history survive.
 
 ## Out of scope
 

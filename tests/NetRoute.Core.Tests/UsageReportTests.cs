@@ -91,13 +91,13 @@ public class UsageReportTests
     [Fact]
     public void A_row_with_only_a_live_rate_still_appears()
     {
-        var usage = WithRates(Snap(), ("app:steam.exe", new UsageRate(RouteExit.Lan, 2_000_000)));
+        var usage = WithRates(Snap(), ("app:steam.exe", new UsageRate(0, 2_000_000)));
 
         var row = Assert.Single(Build(usage).Rows);
 
         Assert.Equal("app:steam.exe", row.Key);
         Assert.Equal(0, row.PhoneBytes + row.LanBytes);
-        Assert.Equal(new UsageRate(RouteExit.Lan, 2_000_000), row.Now);
+        Assert.Equal(new UsageRate(0, 2_000_000), row.Now);
     }
 
     [Fact]
@@ -127,16 +127,35 @@ public class UsageReportTests
         Assert.Equal(expected, Build(ThreeRows(), sort: new UsageSort(column, descending)).Rows.Select(r => r.Name));
     }
 
+    static UsageSnapshot RatedRows() => WithRates(ThreeRows(),
+        ("app:alpha.exe", new UsageRate(10_000, 0)),
+        ("app:charlie.exe", new UsageRate(0, 50_000)),
+        ("app:bravo.exe", new UsageRate(30_000, 20_000)));
+
     [Fact]
-    public void Sorting_by_Now_puts_the_busiest_first_and_idle_rows_last()
+    public void Sorting_by_Now_phone_uses_the_phone_rate_and_puts_idle_rows_last()
     {
-        var usage = WithRates(ThreeRows(),
-            ("app:alpha.exe", new UsageRate(RouteExit.Phone, 10_000)),
-            ("app:charlie.exe", new UsageRate(RouteExit.Lan, 50_000)));
+        var names = Build(RatedRows(), sort: new UsageSort(UsageSortColumn.NowPhone, true)).Rows.Select(r => r.Name);
 
-        var names = Build(usage, sort: new UsageSort(UsageSortColumn.Now, true)).Rows.Select(r => r.Name);
+        Assert.Equal(new[] { "bravo", "alpha", "charlie" }, names);
+    }
 
-        Assert.Equal(new[] { "charlie", "alpha", "bravo" }, names);
+    [Fact]
+    public void Sorting_by_Now_LAN_uses_the_LAN_rate_and_puts_idle_rows_last()
+    {
+        var names = Build(RatedRows(), sort: new UsageSort(UsageSortColumn.NowLan, true)).Rows.Select(r => r.Name);
+
+        Assert.Equal(new[] { "charlie", "bravo", "alpha" }, names);
+    }
+
+    [Fact]
+    public void Sorting_a_Now_column_ascending_puts_idle_rows_first_and_ties_go_by_name()
+    {
+        var usage = WithRates(ThreeRows(), ("app:charlie.exe", new UsageRate(5_000, 0)));
+
+        var names = Build(usage, sort: new UsageSort(UsageSortColumn.NowPhone, false)).Rows.Select(r => r.Name);
+
+        Assert.Equal(new[] { "alpha", "bravo", "charlie" }, names);
     }
 
     [Fact]
@@ -156,6 +175,9 @@ public class UsageReportTests
         Assert.Equal(new UsageSort(UsageSortColumn.Lan, true), phone.Click(UsageSortColumn.Lan));
         Assert.Equal(new UsageSort(UsageSortColumn.Name, false), phone.Click(UsageSortColumn.Name));
         Assert.Equal(new UsageSort(UsageSortColumn.Name, true), phone.Click(UsageSortColumn.Name).Click(UsageSortColumn.Name));
+        Assert.Equal(new UsageSort(UsageSortColumn.NowPhone, true), phone.Click(UsageSortColumn.NowPhone));
+        Assert.Equal(new UsageSort(UsageSortColumn.NowLan, true), phone.Click(UsageSortColumn.NowLan));
+        Assert.Equal(new UsageSort(UsageSortColumn.NowLan, false), phone.Click(UsageSortColumn.NowLan).Click(UsageSortColumn.NowLan));
     }
 
     // ---- assignment state ----
@@ -214,10 +236,10 @@ public class UsageReportTests
     [Fact]
     public void Now_text()
     {
-        Assert.Equal("idle", UsageReport.NowText(null));
-        Assert.Equal("↕ 3 MB/s · LAN", UsageReport.NowText(new UsageRate(RouteExit.Lan, 3 * 1024 * 1024)));
-        Assert.Equal("↕ 1.4 MB/s · phone", UsageReport.NowText(new UsageRate(RouteExit.Phone, 1_468_006)));
-        Assert.Equal("↕ 2 KB/s · phone", UsageReport.NowText(new UsageRate(RouteExit.Phone, 2048)));
+        Assert.Equal("–", UsageReport.NowText(0));
+        Assert.Equal("↕ 3 MB/s", UsageReport.NowText(3 * 1024 * 1024));
+        Assert.Equal("↕ 1.4 MB/s", UsageReport.NowText(1_468_006));
+        Assert.Equal("↕ 2 KB/s", UsageReport.NowText(2048));
     }
 
     [Fact]
@@ -297,7 +319,7 @@ public class UsageReportTests
     [Fact]
     public void A_row_with_only_a_live_rate_is_filtered_by_the_same_rule()
     {
-        var usage = WithRates(FilterRows(), ("app:vlc.exe", new UsageRate(RouteExit.Phone, 1000)));
+        var usage = WithRates(FilterRows(), ("app:vlc.exe", new UsageRate(1000, 0)));
 
         Assert.Equal("app:vlc.exe", Assert.Single(Build(usage, filter: "VLC").Rows).Key);
         Assert.DoesNotContain(Build(usage, filter: "steam").Rows, r => r.Key == "app:vlc.exe");

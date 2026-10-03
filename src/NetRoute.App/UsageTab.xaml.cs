@@ -13,7 +13,7 @@ namespace NetRoute.App;
 /// keyboard focus are away from the list, or right after the user clicked a column header.
 public partial class UsageTab : UserControl
 {
-    const double ByteWidth = 84, NowWidth = 150;
+    const double ByteWidth = 84, NowWidth = 96;
 
     readonly Dictionary<int, ToggleButton> _rangeButtons = new();
     readonly Dictionary<UsageSortColumn, Button> _headers = new();
@@ -145,7 +145,10 @@ public partial class UsageTab : UserControl
             "(YouTube traffic from Chrome counts under YouTube), otherwise the application.");
         AddHeader(UsageSortColumn.Phone, 1, HorizontalAlignment.Right, null);
         AddHeader(UsageSortColumn.Lan, 2, HorizontalAlignment.Right, null);
-        AddHeader(UsageSortColumn.Now, 3, HorizontalAlignment.Left, null);
+        AddHeader(UsageSortColumn.NowPhone, 3, HorizontalAlignment.Right,
+            "Current speed over the last few seconds on the phone connection, shown only above 1 KB/s.");
+        AddHeader(UsageSortColumn.NowLan, 4, HorizontalAlignment.Right,
+            "Current speed over the last few seconds on the LAN connection, shown only above 1 KB/s.");
     }
 
     void AddHeader(UsageSortColumn column, int index, HorizontalAlignment align, string? tooltip)
@@ -176,7 +179,8 @@ public partial class UsageTab : UserControl
                 UsageSortColumn.Name => "Application / site",
                 UsageSortColumn.Phone => "Phone",
                 UsageSortColumn.Lan => "LAN",
-                _ => "Now",
+                UsageSortColumn.NowPhone => "Now phone",
+                _ => "Now LAN",
             };
             button.Content = column == _sort.Column ? $"{label} {(_sort.Descending ? "▼" : "▲")}" : label;
         }
@@ -198,12 +202,13 @@ public partial class UsageTab : UserControl
         TotalGrid.Children.Add(_totalLan);
     }
 
-    /// Name | Phone | LAN | Now. Fixed widths so the header, the rows and the totals line up.
+    /// Name | Phone | LAN | Now phone | Now LAN. Fixed widths so the header, the rows and the totals line up.
     static void DefineColumns(Grid grid)
     {
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 120 });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NowWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NowWidth) });
     }
 
@@ -221,7 +226,8 @@ public partial class UsageTab : UserControl
         readonly TextBlock _name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 0, 0, 0) };
         readonly TextBlock _phone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _lan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        readonly TextBlock _now = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+        readonly TextBlock _nowPhone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        readonly TextBlock _nowLan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
 
         public RowView()
         {
@@ -229,7 +235,8 @@ public partial class UsageTab : UserControl
             Place(_name, 0);
             Place(_phone, 1);
             Place(_lan, 2);
-            Place(_now, 3);
+            Place(_nowPhone, 3);
+            Place(_nowLan, 4);
         }
 
         public UIElement Root => _grid;
@@ -240,9 +247,15 @@ public partial class UsageTab : UserControl
             _name.ToolTip = row.Name;
             _phone.Text = ByteFormat.Human(row.PhoneBytes);
             _lan.Text = ByteFormat.Human(row.LanBytes);
-            _now.Text = UsageReport.NowText(row.Now);
-            if (row.Now is null) _now.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-            else _now.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
+            ApplyRate(_nowPhone, row.Now?.PhoneBytesPerSecond ?? 0);
+            ApplyRate(_nowLan, row.Now?.LanBytesPerSecond ?? 0);
+        }
+
+        /// Active speeds use the accent colour, idle ones the dimmed text colour.
+        static void ApplyRate(TextBlock cell, long bytesPerSecond)
+        {
+            cell.Text = UsageReport.NowText(bytesPerSecond);
+            cell.SetResourceReference(TextBlock.ForegroundProperty, bytesPerSecond > 0 ? "Accent" : "TextSecondary");
         }
 
         void Place(UIElement element, int column)

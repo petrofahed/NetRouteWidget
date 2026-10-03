@@ -357,13 +357,53 @@ public class UsageCounterTests
         var counter = new UsageCounter(null, D0);
         counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, host: "youtube.com", lanOnly: true)]), Attr);
 
-        Assert.Equal(new UsageRate(RouteExit.Lan, 1_000_000), counter.Snapshot().Rates["youtube"]);
+        Assert.Equal(new UsageRate(0, 1_000_000), counter.Snapshot().Rates["youtube"]);
 
         counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 3_000_000, host: "youtube.com", lanOnly: true)]), Attr);
         Assert.True(counter.Snapshot().Rates.ContainsKey("youtube")); // still inside the window
 
         counter.Update(Poll(T0.AddSeconds(3), [Conn("1", 0, 3_000_000, host: "youtube.com", lanOnly: true)]), Attr);
         Assert.False(counter.Snapshot().Rates.ContainsKey("youtube"));
+    }
+
+    [Fact]
+    public void A_row_with_only_LAN_traffic_has_a_LAN_rate_and_a_zero_phone_rate()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "steam.exe", lanOnly: true)]), Attr);
+
+        var rate = counter.Snapshot().Rates["app:steam.exe"];
+
+        Assert.Equal(1_000_000, rate.LanBytesPerSecond);
+        Assert.Equal(0, rate.PhoneBytesPerSecond);
+        Assert.Equal(1_000_000, rate.Total);
+    }
+
+    [Fact]
+    public void A_row_active_on_both_exits_shows_both_rates()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [
+            Conn("1", 0, 6_000_000, exit: "phone", process: "chrome.exe"),
+            Conn("2", 0, 3_000_000, process: "chrome.exe", lanOnly: true)]), Attr);
+
+        var rate = counter.Snapshot().Rates["app:chrome.exe"];
+
+        Assert.Equal(new UsageRate(2_000_000, 1_000_000), rate);
+        Assert.Equal(3_000_000, rate.Total);
+    }
+
+    [Fact]
+    public void A_side_below_one_kilobyte_per_second_reads_zero_while_the_other_side_is_active()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [
+            Conn("1", 0, 3_000_000, exit: "phone", process: "chrome.exe"),
+            Conn("2", 0, 3000, process: "chrome.exe", lanOnly: true)]), Attr); // LAN: 1000 B/s
+
+        var rate = counter.Snapshot().Rates["app:chrome.exe"];
+
+        Assert.Equal(new UsageRate(1_000_000, 0), rate);
     }
 
     [Fact]

@@ -20,8 +20,11 @@ public sealed record UsageRow(Traffic Phone, Traffic Lan, long Kept)
 /// and how many times sing-box stopped or restarted (the bytes just before each stop were not recorded).
 public sealed record UsageDay(IReadOnlyDictionary<string, UsageRow> Rows, long PhoneAdapterBytes, int Gaps = 0);
 
-/// A row's live rate over the last few seconds and the exit most of it used.
-public sealed record UsageRate(RouteExit Exit, long BytesPerSecond);
+/// A row's live speed over the last few seconds, per exit. A side that is idle (below the active threshold) is 0.
+public sealed record UsageRate(long PhoneBytesPerSecond, long LanBytesPerSecond)
+{
+    public long Total => PhoneBytesPerSecond + LanBytesPerSecond;
+}
 
 /// An immutable copy of everything the counter knows. Safe to hand to the UI thread.
 public sealed record UsageSnapshot(IReadOnlyDictionary<DateOnly, UsageDay> Days, IReadOnlyDictionary<string, UsageRate> Rates)

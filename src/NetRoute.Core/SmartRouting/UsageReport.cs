@@ -1,6 +1,6 @@
 namespace NetRoute.Core;
 
-public enum UsageSortColumn { Name, Phone, Lan, Now }
+public enum UsageSortColumn { Name, Phone, Lan, NowPhone, NowLan }
 
 public readonly record struct UsageSort(UsageSortColumn Column, bool Descending)
 {
@@ -32,8 +32,9 @@ public static class UsageReport
 
     public static string RangeLabel(int days) => days == 1 ? "Today" : $"{days} days";
 
-    public static string NowText(UsageRate? rate) =>
-        rate is null ? "idle" : $"↕ {ByteFormat.Human(rate.BytesPerSecond)}/s · {(rate.Exit == RouteExit.Lan ? "LAN" : "phone")}";
+    /// One side's live speed: an en dash when idle, otherwise "↕ 1.4 MB/s".
+    public static string NowText(long bytesPerSecond) =>
+        bytesPerSecond <= 0 ? "–" : $"↕ {ByteFormat.Human(bytesPerSecond)}/s";
 
     public static UsageReportModel Build(
         UsageSnapshot usage, DateOnly today, int rangeDays, IReadOnlyList<RuleItem> catalog,
@@ -95,7 +96,9 @@ public static class UsageReport
     {
         UsageSortColumn.Phone => r => r.PhoneBytes,
         UsageSortColumn.Lan => r => r.LanBytes,
-        _ => r => r.Now?.BytesPerSecond ?? 0,
+        UsageSortColumn.NowPhone => r => r.Now?.PhoneBytesPerSecond ?? 0,
+        UsageSortColumn.NowLan => r => r.Now?.LanBytesPerSecond ?? 0,
+        _ => r => 0,
     };
 }
 
