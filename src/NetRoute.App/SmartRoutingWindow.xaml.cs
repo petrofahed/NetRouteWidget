@@ -25,7 +25,6 @@ public partial class SmartRoutingWindow : Window
         Theme.Track(this);
         Usage.RangeChanged += days => UsageRangeChanged?.Invoke(days);
         Usage.SortChanged += sort => UsageSortChanged?.Invoke(sort);
-        Usage.AssignmentRequested += (key, toLan) => AssignmentRequested?.Invoke(key, toLan);
     }
 
     public event Action<bool>? MasterToggled;
@@ -37,7 +36,6 @@ public partial class SmartRoutingWindow : Window
     public event Action? UsePhoneRequested;
     public event Action<int>? UsageRangeChanged;
     public event Action<UsageSort>? UsageSortChanged;
-    public event Action<string, bool>? AssignmentRequested;
     public event Action? ClearUsageRequested;
 
     /// Updates the Usage tab in place; safe to call every second.

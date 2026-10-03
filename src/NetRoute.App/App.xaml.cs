@@ -481,7 +481,6 @@ public partial class App : Application
             _usageSort = sort;
             RenderSmartWindow();
         };
-        window.AssignmentRequested += (key, toLan) => ChangeSmart(s => UsageAssignment.Set(_catalog, s, key, toLan));
         window.ClearUsageRequested += async () =>
         {
             if (_smart is not { } smart) return;

@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Windows;
-using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
@@ -8,13 +7,12 @@ using NetRoute.Core;
 
 namespace NetRoute.App;
 
-/// The Usage tab. Updated in place and keyed by row key: a refresh once a second never rebuilds the list, steals focus
-/// or closes an open "Goes via" drop-down. Rows only change places when the mouse and the keyboard focus are away from the list and no
-/// drop-down is open, or right after the user clicked a column header.
+/// The Usage tab, a read-only view of Phone and LAN use (rules are changed on the Config tab). Updated in place and keyed by
+/// row key: a refresh once a second never rebuilds the list or steals focus. Rows only change places when the mouse and the
+/// keyboard focus are away from the list, or right after the user clicked a column header.
 public partial class UsageTab : UserControl
 {
-    static readonly TimeSpan PendingTimeout = TimeSpan.FromSeconds(5);
-    const double ViaWidth = 96, ByteWidth = 84, NowWidth = 150;
+    const double ByteWidth = 84, NowWidth = 150;
 
     readonly Dictionary<int, ToggleButton> _rangeButtons = new();
     readonly Dictionary<UsageSortColumn, Button> _headers = new();
@@ -36,7 +34,6 @@ public partial class UsageTab : UserControl
 
     public event Action<int>? RangeChanged;
     public event Action<UsageSort>? SortChanged;
-    public event Action<string, bool>? AssignmentRequested;
 
     public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording)
     {
@@ -64,13 +61,13 @@ public partial class UsageTab : UserControl
         {
             if (!_rows.TryGetValue(row.Key, out var view))
             {
-                view = _rows[row.Key] = new RowView(row.Key, (key, toLan) => AssignmentRequested?.Invoke(key, toLan));
+                view = _rows[row.Key] = new RowView();
                 Rows.Children.Add(view.Root);
             }
             view.Apply(row);
         }
 
-        var freeze = !_forceReorder && (RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin || _rows.Values.Any(v => v.DropDownOpen));
+        var freeze = !_forceReorder && (RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin);
         _forceReorder = false;
         var next = UsageRowOrder.Next(_order, model.Rows.Select(r => r.Key).ToList(), freeze);
         if (!next.SequenceEqual(_order))
@@ -132,12 +129,9 @@ public partial class UsageTab : UserControl
         AddHeader(UsageSortColumn.Name, 0, HorizontalAlignment.Left,
             "Each connection counts under one row: an application that has its own rule, otherwise the site rule it matches " +
             "(YouTube traffic from Chrome counts under YouTube), otherwise the application.");
-        var via = Secondary(new TextBlock { Text = "Goes via", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        Grid.SetColumn(via, 1);
-        HeaderGrid.Children.Add(via);
-        AddHeader(UsageSortColumn.Phone, 2, HorizontalAlignment.Right, null);
-        AddHeader(UsageSortColumn.Lan, 3, HorizontalAlignment.Right, null);
-        AddHeader(UsageSortColumn.Now, 4, HorizontalAlignment.Left, null);
+        AddHeader(UsageSortColumn.Phone, 1, HorizontalAlignment.Right, null);
+        AddHeader(UsageSortColumn.Lan, 2, HorizontalAlignment.Right, null);
+        AddHeader(UsageSortColumn.Now, 3, HorizontalAlignment.Left, null);
     }
 
     void AddHeader(UsageSortColumn column, int index, HorizontalAlignment align, string? tooltip)
@@ -181,18 +175,17 @@ public partial class UsageTab : UserControl
         _totalPhone.HorizontalAlignment = _totalLan.HorizontalAlignment = HorizontalAlignment.Right;
         _totalPhone.Margin = _totalLan.Margin = new Thickness(0, 0, 6, 0);
         _totalPhone.FontWeight = _totalLan.FontWeight = FontWeights.SemiBold;
-        Grid.SetColumn(_totalPhone, 2);
-        Grid.SetColumn(_totalLan, 3);
+        Grid.SetColumn(_totalPhone, 1);
+        Grid.SetColumn(_totalLan, 2);
         TotalGrid.Children.Add(label);
         TotalGrid.Children.Add(_totalPhone);
         TotalGrid.Children.Add(_totalLan);
     }
 
-    /// Name | Goes via | Phone | LAN | Now. Fixed widths so the header, the rows and the totals line up.
+    /// Name | Phone | LAN | Now. Fixed widths so the header, the rows and the totals line up.
     static void DefineColumns(Grid grid)
     {
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 120 });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ViaWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NowWidth) });
@@ -210,36 +203,20 @@ public partial class UsageTab : UserControl
     {
         readonly Grid _grid = new() { Background = Brushes.Transparent }; // transparent: the whole row is hit-testable, so the list counts as "under the mouse"
         readonly TextBlock _name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 0, 0, 0) };
-        readonly ComboBox _via = new() { Width = ViaWidth - 8, Margin = new Thickness(8, 2, 0, 2), HorizontalAlignment = HorizontalAlignment.Left };
         readonly TextBlock _phone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _lan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _now = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
-        bool _suppress;
-        GoesVia? _pending; // the user's pick, kept until the model reports it (or gives up on it)
-        DateTime _pendingSince;
 
-        public RowView(string key, Action<string, bool> assign)
+        public RowView()
         {
             DefineColumns(_grid);
-            _via.Items.Add("Phone");
-            _via.Items.Add("LAN");
-            AutomationProperties.SetName(_via, "Goes via");
-            _via.SelectionChanged += (_, _) =>
-            {
-                if (_suppress || _via.SelectedIndex < 0) return;
-                _pending = _via.SelectedIndex == 1 ? GoesVia.Lan : GoesVia.Phone;
-                _pendingSince = DateTime.UtcNow;
-                assign(key, _via.SelectedIndex == 1);
-            };
             Place(_name, 0);
-            Place(_via, 1);
-            Place(_phone, 2);
-            Place(_lan, 3);
-            Place(_now, 4);
+            Place(_phone, 1);
+            Place(_lan, 2);
+            Place(_now, 3);
         }
 
         public UIElement Root => _grid;
-        public bool DropDownOpen => _via.IsDropDownOpen;
 
         public void Apply(UsageReportRow row)
         {
@@ -250,18 +227,6 @@ public partial class UsageTab : UserControl
             _now.Text = UsageReport.NowText(row.Now);
             if (row.Now is null) _now.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
             else _now.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
-            _via.IsEnabled = row.CanChange;
-            if (_via.IsDropDownOpen) return; // never change the selection under the user's hand
-            if (_pending is { } pick)
-            {
-                // The drop-down closes before the model catches up: keep the pick for a few seconds (not the old value),
-                // then trust the model again (the assignment may have been refused).
-                if (row.Via == pick || DateTime.UtcNow - _pendingSince > PendingTimeout) _pending = null;
-                else return;
-            }
-            _suppress = true;
-            _via.SelectedIndex = row.Via == GoesVia.Lan ? 1 : 0;
-            _suppress = false;
         }
 
         void Place(UIElement element, int column)

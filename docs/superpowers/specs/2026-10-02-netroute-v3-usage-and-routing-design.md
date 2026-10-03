@@ -16,14 +16,14 @@ One window, two tabs, that answers two questions together:
 - Check which application consumes the most data, with **Phone** and **LAN** shown separately for each application.
 - A runtime view: is YouTube (or any app) consuming **right now**, and through which connection?
 - Filter by **date ranges** (1 day, 3 days, 7 days, 15 days, 1 month), not by an All/Phone/LAN toggle, because Phone and LAN are columns.
-- It is part of the **management of assigning traffic to 4G or LAN**, not a separate page. Usage and assignment sit side by side.
+- It is part of the **management of assigning traffic to 4G or LAN**, not a separate page: the Usage tab shows the numbers, the Config tab (next to it) changes the rules.
 - **Two tabs. The second tab is the config.**
 - The window must follow the Windows light/dark theme (tracked as a v2 live fix).
 
 ### Decisions already taken
 
 - Measured through **sing-box** (not Windows tracing), so usage is recorded only while Smart routing is running.
-- Any application can be assigned, not only the built-in items.
+- Any application can be assigned (with a user App rule on the Config tab), not only the built-in items.
 
 ## The window
 
@@ -34,13 +34,13 @@ Tabs: **Usage** (first, the default) and **Config** (second).
 ```
 Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Smart routing: ON · LAN ● online
 
- Application / site      Goes via      📱 Phone     🖧 LAN       Now
+ Application / site                    📱 Phone     🖧 LAN       Now
  ─────────────────────────────────────────────────────────────────────────────
- Chrome                  [ Phone ▾ ]    1.2 GB      340 MB      ↕ 1.4 MB/s · phone
- YouTube                 [ LAN   ▾ ]    0 MB        2.3 GB      ↕ 3.0 MB/s · LAN
- Windows Update          [ LAN   ▾ ]    0 MB        860 MB      idle
- Steam                   [ LAN   ▾ ]    0 MB        2.1 GB      idle
- Facebook                [ Phone ▾ ]    120 MB      0 MB        idle
+ Chrome                                 1.2 GB      340 MB      ↕ 1.4 MB/s · phone
+ YouTube                                0 MB        2.3 GB      ↕ 3.0 MB/s · LAN
+ Windows Update                         0 MB        860 MB      idle
+ Steam                                  0 MB        2.1 GB      idle
+ Facebook                               120 MB      0 MB        idle
  ─────────────────────────────────────────────────────────────────────────────
  Total                                  1.3 GB      5.6 GB
  Kept off 4G in this period: 5.3 GB
@@ -53,11 +53,9 @@ Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Sma
   - So YouTube traffic from Chrome counts under **YouTube**; other Chrome traffic under **Chrome**.
   - A connection with no known application and no matching host goes to a row named **"Other"**. Traffic of connections that were missed between polls is shown in a separate row, **"Unattributed (short connections)"** (see Data).
 - **Application names:** the file name without `.exe`, except where a built-in item lists that file (OneDrive.exe → "OneDrive", steam.exe → "Steam").
-- **Goes via** is the assignment, a drop-down with **Phone** and **LAN**:
-  - built-in item row: LAN = the item is switched on, Phone = switched off (the same switch as in the Config tab);
-  - application row with a user App rule: LAN = the rule is enabled, Phone = the rule is disabled (it stays listed in the Config tab);
-  - application row with no rule: choosing **LAN** creates a user App rule; choosing Phone later disables it;
-  - the "Other" row and any row while Smart routing is unavailable: the drop-down is disabled.
+- **No assignment on this tab.** The Usage tab is a read-only view of Phone and LAN use (there is no "Goes via" column). To move an application or a site, use the Config tab:
+  - built-in item: switch it on (LAN) or off (Phone);
+  - application: add a user App rule (**+ App**) and enable it for the LAN, or disable it to go back to the phone.
 - **Phone** and **LAN** columns show bytes (download + upload) for the selected date range. The exit is the connection's actual exit in sing-box: the phone or the LAN adapter.
 - **Now** shows the current rate and exit for rows that moved data in the last few seconds ("↕ 1.4 MB/s · phone"), otherwise "idle".
 - **Sorting:** click any column header. The default sort is Phone, largest first, so the biggest consumers of mobile data are on top.
@@ -72,7 +70,7 @@ Show usage for: [ Today ] [ 3 days ] [ 7 days ] [ 15 days ] [ 30 days ]      Sma
 Today's management page, unchanged in behaviour:
 
 - the master switch, the status line, the LAN status and "Use phone until LAN is back";
-- built-in groups and items with their switches (the same switches the "Goes via" drop-down changes);
+- built-in groups and items with their switches (rules are changed only here, not on the Usage tab);
 - "My rules" with + App and + Website;
 - the note that a rule change restarts Smart routing for about a second;
 - new: **Clear usage history** (with a confirmation) and "History is kept for 35 days".
@@ -121,10 +119,10 @@ The remaining limitation: an application's own short connections that were misse
 - **`UsageReconciler`**: given the Clash API totals, the per-connection deltas seen, and the phone adapter's byte-counter delta, returns the unseen Phone and LAN bytes for the poll (pure, with tests for clamping, framing overhead, counter resets and a restarted sing-box).
 - **`IAdapterCounters`** (Windows implementation reads `NetworkInterface` statistics for the phone adapter by index; a fake in tests).
 - **`UsageStore`**: load/save/prune of `usage.json` (atomic, invariant culture, corrupt/locked handling).
-- **`UsageReport`**: `Build(snapshot, today, rangeDays, rules, settings, sort) → rows + totals`. It merges the assignment state and display names, and sorts.
+- **`UsageReport`**: `Build(snapshot, today, rangeDays, rules, settings, sort) → rows + totals`. It merges the assignment state (kept in the report model) and display names, and sorts.
 - **`SmartRoutingController`**: gains the faster poll, owns the `UsageCounter`, and exposes `UsageSnapshot GetUsage()` (copy, taken under the gate). No new threads. `DataSavedCounter` and `stats.json` are replaced (the old file is ignored, not migrated). `ApiFailureLimit` became 10 because the poll now runs once a second.
 - **Settings**: `SmartRouting.UsageRangeDays` (remembered range, default 7).
-- **Assignment helper** `UsageAssignment.Set(settings, row, goesViaLan) → settings`, implementing the per-row rules above (item switch, user App rule create/enable/disable). Pure, with tests.
+- **Assignment helper** `UsageAssignment.Set(settings, row, goesViaLan) → settings` (item switch, user App rule create/enable/disable) and `Describe`. Pure, with tests. The Usage tab no longer has a control that calls `Set`; `Describe` still feeds the report model.
 
 ### NetRoute.App
 
