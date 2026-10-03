@@ -1029,6 +1029,60 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
+    public async Task TodayTotals_shows_the_phone_and_lan_bytes_after_a_poll()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 1000));
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 200));
+
+        await c.PollStatsAsync();
+
+        Assert.Equal(new ExitTotals(200, 1000), c.TodayTotals);
+    }
+
+    [Fact]
+    public void TodayTotals_shows_restored_usage_immediately()
+    {
+        var today = DateOnly.FromDateTime(_time.GetLocalNow().DateTime);
+        var restored = new UsageSnapshot(new Dictionary<DateOnly, UsageDay>
+        {
+            [today] = new(new Dictionary<string, UsageRow> { ["youtube"] = new(new Traffic(0, 300), new Traffic(5, 6), 0) }, 0),
+        }, new Dictionary<string, UsageRate>());
+
+        var c = Create(restored: restored);
+
+        Assert.Equal(new ExitTotals(300, 11), c.TodayTotals);
+    }
+
+    [Fact]
+    public async Task ClearUsageAsync_zeroes_TodayTotals()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 200));
+        await c.PollStatsAsync();
+
+        await c.ClearUsageAsync();
+
+        Assert.Equal(new ExitTotals(0, 0), c.TodayTotals);
+    }
+
+    [Fact]
+    public async Task TodayTotals_survives_an_unreachable_api_poll()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 200));
+        await c.PollStatsAsync();
+
+        _api.ConnectionsUnreachable = true;
+        await c.PollStatsAsync();
+
+        Assert.Equal(new ExitTotals(200, 0), c.TodayTotals);
+    }
+
+    [Fact]
     public async Task Bytes_of_closed_connections_are_unattributed_and_split_with_the_phone_adapter_counter()
     {
         var counters = new FakeAdapterCounters { Bytes = 5000 };

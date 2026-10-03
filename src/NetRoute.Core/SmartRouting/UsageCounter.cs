@@ -195,6 +195,20 @@ public sealed class UsageCounter
         return new DailyStats(today, kept);
     }
 
+    /// Everything counted for that day through each exit: the sum of all rows, "unattributed" and "other" included. Zero when
+    /// there is no data for the day.
+    public ExitTotals TodayTotals(DateOnly today)
+    {
+        if (!_days.TryGetValue(today, out var data)) return ExitTotals.Zero;
+        long phone = 0, lan = 0;
+        foreach (var cell in data.Rows.Values)
+        {
+            phone += cell.PhoneUp + cell.PhoneDown;
+            lan += cell.LanUp + cell.LanDown;
+        }
+        return new ExitTotals(phone, lan);
+    }
+
     /// True once after any change since the last call: the signal to save the file.
     public bool TakeDirty()
     {

@@ -766,4 +766,62 @@ public class UsageCounterTests
             if (i >= 2) Assert.Equal(new UsageRate(1_000_000, 0), counter.Snapshot().Rates["app:a.exe"]);
         }
     }
+
+    [Fact]
+    public void TodayTotals_of_an_empty_counter_is_zero()
+    {
+        Assert.Equal(new ExitTotals(0, 0), new UsageCounter(null, D0).TodayTotals(D0));
+    }
+
+    [Fact]
+    public void TodayTotals_sums_every_row_per_exit_including_unattributed()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 10, 90, exit: "phone", host: "youtube.com"), Conn("2", 0, 300, exit: "lan", process: "steam.exe")],
+            up: 10, down: 90 + 300 + 50), Attr); // 50 bytes were missed by the connection list
+        var rows = counter.Snapshot().Days[D0].Rows.Values;
+
+        var totals = counter.TodayTotals(D0);
+
+        Assert.Equal(rows.Sum(r => r.Phone.Total), totals.PhoneBytes);
+        Assert.Equal(rows.Sum(r => r.Lan.Total), totals.LanBytes);
+        Assert.True(counter.Snapshot().Days[D0].Rows.ContainsKey(UsageAttribution.UnattributedKey));
+        Assert.True(totals.PhoneBytes + totals.LanBytes >= 400);
+    }
+
+    [Fact]
+    public void TodayTotals_counts_unattributed_bytes()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [], up: 0, down: 500, adapter: 1000), Attr);
+        counter.Update(Poll(T0.AddSeconds(1), [], up: 0, down: 1000, adapter: 1500), Attr);
+
+        var totals = counter.TodayTotals(D0);
+
+        Assert.Equal(counter.Snapshot().Days[D0].Rows[UsageAttribution.UnattributedKey].Phone.Total, totals.PhoneBytes);
+        Assert.True(totals.PhoneBytes > 0);
+    }
+
+    [Fact]
+    public void TodayTotals_leaves_out_other_days()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 100)]), Attr);
+
+        Assert.Equal(new ExitTotals(100, 0), counter.TodayTotals(D0));
+        Assert.Equal(new ExitTotals(0, 0), counter.TodayTotals(D0.AddDays(1)));
+        Assert.Equal(new ExitTotals(0, 0), counter.TodayTotals(D0.AddDays(-1)));
+    }
+
+    [Fact]
+    public void TodayTotals_includes_a_restored_snapshot_and_Clear_zeroes_it()
+    {
+        var counter = new UsageCounter(SnapshotWith(D0, "youtube", 700), D0);
+
+        Assert.Equal(new ExitTotals(700, 0), counter.TodayTotals(D0));
+
+        counter.Clear();
+
+        Assert.Equal(new ExitTotals(0, 0), counter.TodayTotals(D0));
+    }
 }

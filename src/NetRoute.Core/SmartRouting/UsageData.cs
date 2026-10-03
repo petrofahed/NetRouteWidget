@@ -20,6 +20,13 @@ public sealed record UsageRow(Traffic Phone, Traffic Lan, long Kept)
 /// and how many times sing-box stopped or restarted (the bytes just before each stop were not recorded).
 public sealed record UsageDay(IReadOnlyDictionary<string, UsageRow> Rows, long PhoneAdapterBytes, int Gaps = 0);
 
+/// Bytes through each exit for one day, all rows together (the Usage tab's "Today" Total row). A class, not a struct, so the
+/// controller can hold it in a volatile field and hand it to the UI thread without a lock.
+public sealed record ExitTotals(long PhoneBytes, long LanBytes)
+{
+    public static readonly ExitTotals Zero = new(0, 0);
+}
+
 /// A row's live speed over the last few seconds, per exit. A side that is idle (below the active threshold) is 0.
 public sealed record UsageRate(long PhoneBytesPerSecond, long LanBytesPerSecond)
 {

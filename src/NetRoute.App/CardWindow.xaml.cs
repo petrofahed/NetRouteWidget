@@ -88,6 +88,13 @@ public partial class CardWindow : Window
         if (block.Visibility != visibility) block.Visibility = visibility;
     }
 
+    /// Today's total data through each exit, right of its latency. An empty text hides the figure (the row looks as before).
+    public void RenderTotals(string phone, string lan)
+    {
+        SetSpeed(PhoneTotal, phone);
+        SetSpeed(LanTotal, lan);
+    }
+
     public void ShowSpeed(string text)
     {
         SpeedText.Text = text;

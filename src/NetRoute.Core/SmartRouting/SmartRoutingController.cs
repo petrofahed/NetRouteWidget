@@ -83,6 +83,7 @@ public sealed class SmartRoutingController
     bool _adapterReadFailed;
     static readonly UsageRate NoSpeed = new(0, 0);
     volatile UsageRate _liveSpeed = NoSpeed;
+    volatile ExitTotals _todayTotals = ExitTotals.Zero;
 
     public SmartRoutingController(
         IReadOnlyList<RuleItem> catalog, ISingBoxHost host, Func<int, string, ISingBoxApi> createApi,
@@ -98,6 +99,7 @@ public sealed class SmartRoutingController
         _counters = counters;
         _usage = new UsageCounter(restoredUsage, Today());
         _attribution = UsageAttribution.Build(catalog, new SmartRoutingSettings());
+        _todayTotals = _usage.TodayTotals(Today());
         _host.LineReceived += line => _ = ProcessLineAsync(line);
         _host.Exited += code => _ = HandleExitAsync(code);
         Status = new SmartRoutingStatus(SmartState.Off, null, RouteExit.Phone, false, true, [], 0, _usage.TodayKept(Today()));
@@ -108,6 +110,10 @@ public sealed class SmartRoutingController
     /// The speed of everything flowing through each exit right now, all applications together (0/0 when idle or when
     /// Smart routing is not running). Immutable and read without the gate, so the UI thread can poll it every second.
     public UsageRate LiveSpeed => _liveSpeed;
+
+    /// The bytes counted today through each exit, all applications together (history, not live speed: it is not zeroed when
+    /// a poll fails or sing-box stops). Immutable and read without the gate.
+    public ExitTotals TodayTotals => _todayTotals;
     public event Action<SmartRoutingStatus>? StatusChanged;
     public event Action<IReadOnlyList<string>>? WaitingDetected;
     public event Action<string>? Notify;
@@ -255,6 +261,7 @@ public sealed class SmartRoutingController
         try
         {
             _usage.Clear();
+            _todayTotals = _usage.TodayTotals(Today());
             SafePublish();
         }
         finally
@@ -301,6 +308,7 @@ public sealed class SmartRoutingController
                         _appliedExit == RouteExit.Phone, _time.GetLocalNow()),
                     _attribution);
                 _liveSpeed = _usage.Live;
+                _todayTotals = _usage.TodayTotals(Today());
                 Publish();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
