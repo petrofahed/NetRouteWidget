@@ -16,9 +16,9 @@ public class SmartRoutingControllerTests
     readonly List<string> _notes = new();
     readonly List<string> _logs = new();
 
-    SmartRoutingController Create(Func<int>? freePort = null)
+    SmartRoutingController Create(Func<int>? freePort = null, IAdapterCounters? counters = null, UsageSnapshot? restored = null)
     {
-        var c = new SmartRoutingController(Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), null, _logs.Add, _time);
+        var c = new SmartRoutingController(Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters);
         c.WaitingDetected += _popups.Add;
         c.Notify += _notes.Add;
         return c;
@@ -574,15 +574,14 @@ public class SmartRoutingControllerTests
     // ---- R7: API health, disposal, toast ----
 
     [Fact]
-    public async Task Three_failed_polls_after_grace_restart_sing_box()
+    public async Task Failed_polls_after_grace_restart_sing_box_when_the_limit_is_reached()
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
         _time.Advance(SmartRoutingController.ApiStartGrace);
         _api.ConnectionsUnreachable = true;
 
-        await c.PollStatsAsync();
-        await c.PollStatsAsync();
+        for (var i = 0; i < SmartRoutingController.ApiFailureLimit - 1; i++) await c.PollStatsAsync();
         Assert.Single(_host.Starts);
         await c.PollStatsAsync();
 
@@ -599,13 +598,11 @@ public class SmartRoutingControllerTests
         _time.Advance(SmartRoutingController.ApiStartGrace);
 
         _api.ConnectionsUnreachable = true;
-        await c.PollStatsAsync();
-        await c.PollStatsAsync();
+        for (var i = 0; i < SmartRoutingController.ApiFailureLimit - 1; i++) await c.PollStatsAsync();
         _api.ConnectionsUnreachable = false;
         await c.PollStatsAsync();
         _api.ConnectionsUnreachable = true;
-        await c.PollStatsAsync();
-        await c.PollStatsAsync();
+        for (var i = 0; i < SmartRoutingController.ApiFailureLimit - 1; i++) await c.PollStatsAsync();
 
         Assert.Single(_host.Starts);
     }
@@ -617,10 +614,12 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
         _api.ConnectionsUnreachable = true;
 
-        for (var i = 0; i < 9; i++)
+        for (var round = 0; round < SmartRoutingController.CrashLimit; round++)
         {
-            _time.Advance(SmartRoutingController.ApiStartGrace); // each restart starts a new grace period
-            await c.PollStatsAsync();
+            // Each restart starts a new grace period. Advance once per round, not per poll: the polls of a round are one
+            // second apart in real life, and ApiFailureLimit * ApiStartGrace would age the crashes out of CrashWindow.
+            _time.Advance(SmartRoutingController.ApiStartGrace);
+            for (var i = 0; i < SmartRoutingController.ApiFailureLimit; i++) await c.PollStatsAsync();
         }
 
         Assert.Equal(3, _host.Starts.Count);
@@ -701,10 +700,10 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
         _api.ConnectionsUnreachable = true;
         _time.Advance(SmartRoutingController.ApiStartGrace);
-        for (var i = 0; i < 3; i++) await c.PollStatsAsync(); // restarts
+        for (var i = 0; i < SmartRoutingController.ApiFailureLimit; i++) await c.PollStatsAsync(); // restarts
         Assert.Equal(2, _host.Starts.Count);
 
-        for (var i = 0; i < 5; i++) await c.PollStatsAsync(); // inside the new grace
+        for (var i = 0; i < SmartRoutingController.ApiFailureLimit + 2; i++) await c.PollStatsAsync(); // inside the new grace
 
         Assert.Equal(2, _host.Starts.Count);
     }
@@ -985,5 +984,140 @@ public class SmartRoutingControllerTests
 
         Assert.Equal(SmartState.Faulted, c.Status.State);
         Assert.Equal("FATAL initialize router: parse rule[3]: bad regexp", c.Status.Detail);
+    }
+
+    // ---- usage (v3) ----
+
+    [Fact]
+    public async Task A_poll_records_phone_and_lan_bytes_per_row()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 1000));
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 200));
+
+        await c.PollStatsAsync();
+
+        var rows = (await c.GetUsageAsync()).Days.Values.Single().Rows;
+        Assert.Equal(1000, rows["youtube"].Lan.Total);
+        Assert.Equal(200, rows["app:chrome.exe"].Phone.Total);
+    }
+
+    [Fact]
+    public async Task Bytes_of_closed_connections_are_unattributed_and_split_with_the_phone_adapter_counter()
+    {
+        var counters = new FakeAdapterCounters { Bytes = 5000 };
+        var c = Create(counters: counters);
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 100));
+        await c.PollStatsAsync();
+
+        _api.ClosedDownload = 500; // connections that opened and closed between the two polls
+        counters.Bytes = 5600;
+        await c.PollStatsAsync();
+
+        var day = (await c.GetUsageAsync()).Days.Values.Single();
+        Assert.Equal(600, day.Rows[UsageAttribution.UnattributedKey].Phone.Total);
+        Assert.Equal(600, day.PhoneAdapterBytes);
+        Assert.Contains(counters.Asked, name => name == TestAdapters.Phone(31).Name);
+    }
+
+    [Fact]
+    public async Task A_failing_adapter_counter_does_not_stop_recording_and_is_logged_once()
+    {
+        var counters = new FakeAdapterCounters { Throws = new InvalidOperationException("no stats") };
+        var c = Create(counters: counters);
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 100));
+
+        await c.PollStatsAsync();
+        _api.Connections[0] = _api.Connections[0] with { Download = 150 };
+        await c.PollStatsAsync();
+
+        Assert.Equal(150, (await c.GetUsageAsync()).Days.Values.Single().Rows["app:chrome.exe"].Phone.Total);
+        Assert.Equal(1, _logs.Count(l => l.Contains("byte counter failed")));
+    }
+
+    [Fact]
+    public async Task A_restart_resets_the_baselines_so_the_new_process_totals_count_in_full()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 100));
+        await c.PollStatsAsync();
+
+        await c.ApplyAsync(Net(phoneIndex: 36), On()); // the phone was replugged: sing-box restarts, its totals start from zero
+        _api.Connections.Clear();
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 300));
+        _api.ClosedDownload = 2000;
+        await c.PollStatsAsync();
+
+        var day = (await c.GetUsageAsync()).Days.Values.Single();
+        Assert.Equal(400, day.Rows["app:chrome.exe"].Phone.Total);
+        Assert.Equal(2000, day.Rows[UsageAttribution.UnattributedKey].Phone.Total);
+        Assert.Equal(1, day.Gaps); // the restart is marked, so the kept-off-4G figure says "at least"
+    }
+
+    [Fact]
+    public async Task An_unreachable_api_clears_the_live_rates_but_keeps_the_history()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 9_000_000));
+        await c.PollStatsAsync();
+        Assert.NotEmpty((await c.GetUsageAsync()).Rates);
+
+        _api.ConnectionsUnreachable = true;
+        await c.PollStatsAsync();
+
+        var usage = await c.GetUsageAsync();
+        Assert.Empty(usage.Rates);
+        Assert.Equal(9_000_000, usage.Days.Values.Single().Rows["app:chrome.exe"].Phone.Total);
+    }
+
+    [Fact]
+    public async Task TakeUsageIfChanged_returns_a_snapshot_once_per_change()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        Assert.Null(await c.TakeUsageIfChangedAsync());
+
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 100));
+        await c.PollStatsAsync();
+
+        Assert.NotNull(await c.TakeUsageIfChangedAsync());
+        Assert.Null(await c.TakeUsageIfChangedAsync());
+    }
+
+    [Fact]
+    public async Task ClearUsage_wipes_the_history_and_todays_kept_figure()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 1000));
+        await c.PollStatsAsync();
+        Assert.Equal(1000, c.Status.Today.Total);
+
+        await c.ClearUsageAsync();
+
+        Assert.Empty((await c.GetUsageAsync()).Days);
+        Assert.Equal(0, c.Status.Today.Total);
+    }
+
+    [Fact]
+    public async Task Restored_usage_continues_and_feeds_todays_kept_figure()
+    {
+        var today = DateOnly.FromDateTime(_time.GetLocalNow().DateTime);
+        var restored = new UsageSnapshot(
+            new Dictionary<DateOnly, UsageDay>
+            {
+                [today] = new(new Dictionary<string, UsageRow> { ["youtube"] = new(default, new Traffic(0, 700), 700) }, 0),
+            },
+            new Dictionary<string, UsageRate>());
+
+        var c = Create(restored: restored);
+
+        Assert.Equal(700, c.Status.Today.Total);
+        Assert.Equal(700, c.Status.Today.BytesByEntry["youtube"]);
     }
 }

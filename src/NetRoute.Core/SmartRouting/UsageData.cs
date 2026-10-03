@@ -32,3 +32,9 @@ public sealed record UsageSnapshot(IReadOnlyDictionary<DateOnly, UsageDay> Days,
     public static UsageSnapshot Empty { get; } =
         new(new Dictionary<DateOnly, UsageDay>(), new Dictionary<string, UsageRate>());
 }
+
+/// Kept-off-4G bytes for one local day, per row key (the card's "kept off 4G today" and the per-item numbers on the Config tab).
+public sealed record DailyStats(DateOnly Day, IReadOnlyDictionary<string, long> BytesByEntry)
+{
+    public long Total => BytesByEntry.Values.Sum();
+}

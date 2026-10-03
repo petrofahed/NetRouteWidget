@@ -25,7 +25,8 @@ public partial class App : Application
     DateTime _lastPruneDay;
     SmartRoutingController? _smart;
     IReadOnlyList<RuleItem> _catalog = [];
-    long _lastSavedStatsTotal = -1;
+    bool _usageUnreadable;
+    bool _usageSaveFailed;
     bool _speedTestRunning;
     bool _smartStopped;
     SmartRoutingWindow? _smartWindow;
@@ -98,7 +99,7 @@ public partial class App : Application
                 if (_smart is { } smart)
                 {
                     await smart.PollStatsAsync();
-                    SaveStatsIfChanged();
+                    await SaveUsageAsync();
                 }
             };
 
@@ -141,7 +142,7 @@ public partial class App : Application
     {
         // Do NOT stop Smart routing here: the sign-out can still be cancelled by another app, and ShutdownAsync latches
         // the controller for good. A real logoff ends the process, and the kill-on-close job object ends sing-box with it.
-        SaveStatsIfChanged();
+        Task.Run(() => SaveUsageAsync(force: true)).Wait(TimeSpan.FromSeconds(3));
         _card?.ForceClose(); // a real close, so OnClosing does not persist CardVisible=false
         base.OnSessionEnding(e);
     }
@@ -263,9 +264,12 @@ public partial class App : Application
                 if (suppressed > 0) log.Info($"sing-box: {suppressed} more error/warning lines suppressed");
                 log.Info("sing-box: " + line);
             };
-            var restored = DataSavedCounter.LoadFile(AppPaths.StatsFile);
+            var usage = UsageStore.Load(AppPaths.UsageFile, DateOnly.FromDateTime(DateTime.Now));
+            _usageUnreadable = usage.Unreadable;
+            if (usage.Unreadable) log.Error("usage.json could not be read; usage is kept in memory only this session and NOT saved");
             var smart = new SmartRoutingController(
-                _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next, restored, log.Info);
+                _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next, usage.Usage, log.Info,
+                counters: new WindowsAdapterCounters());
             smart.StatusChanged += s => Dispatcher.BeginInvoke(new Action(() => RenderSmart(s)));
             smart.Notify += m => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(m)));
             smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() => ShowWaitingPopup(names)));
@@ -282,7 +286,6 @@ public partial class App : Application
                 RememberLan(controller, status, log);
                 _ = smart.ApplyAsync(status, controller.Settings);
             };
-            _lastSavedStatsTotal = restored?.Total ?? -1;
             _smart = smart;
         }
         catch (Exception ex)
@@ -391,20 +394,22 @@ public partial class App : Application
         RenderSmartWindow(); // immediate feedback; the controller's StatusChanged re-renders again once applied
     }
 
-    void SaveStatsIfChanged()
+    /// Saves usage.json when something changed (or when force is set, or a previous save failed). Never throws.
+    async Task SaveUsageAsync(bool force = false)
     {
-        if (_smart is not { } smart) return;
-        var today = smart.Status.Today;
-        if (today.Total == _lastSavedStatsTotal) return;
-        if (today.Total == 0 && _lastSavedStatsTotal < 0) return; // nothing counted yet: no stats.json for someone who never used it
+        if (_smart is not { } smart || _usageUnreadable) return;
         try
         {
-            DataSavedCounter.SaveFile(AppPaths.StatsFile, today);
-            _lastSavedStatsTotal = today.Total;
+            var usage = force || _usageSaveFailed ? await smart.GetUsageAsync() : await smart.TakeUsageIfChangedAsync();
+            if (usage is null) return;
+            if (usage.Days.Count == 0 && !File.Exists(AppPaths.UsageFile)) return; // nothing recorded yet: no file for someone who never used it
+            await Task.Run(() => UsageStore.Save(AppPaths.UsageFile, usage));
+            _usageSaveFailed = false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            _log?.Error("Saving stats failed", ex);
+            _usageSaveFailed = true;
+            _log?.Error("Saving usage failed", ex);
         }
     }
 
@@ -437,8 +442,8 @@ public partial class App : Application
     {
         if (_smartStopped || _smart is not { } smart) return; // called from Quit and again from OnExit
         _smartStopped = true;
-        SaveStatsIfChanged();
         // ShutdownAsync latches: nothing restarts sing-box afterwards
         if (!Task.Run(() => smart.ShutdownAsync()).Wait(TimeSpan.FromSeconds(5))) _log?.Error("Smart routing did not stop within 5 s");
+        Task.Run(() => SaveUsageAsync(force: true)).Wait(TimeSpan.FromSeconds(3));
     }
 }

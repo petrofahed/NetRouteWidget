@@ -171,13 +171,19 @@ public sealed class UsageCounter
         _dirty = true;
     }
 
+    /// Forgets the live rates only (a failed poll must not leave rows looking busy). The baselines stay.
+    public void ClearRates()
+    {
+        _recent.Clear();
+        _rates = new Dictionary<string, UsageRate>();
+    }
+
     /// Forgets what the next poll would be compared with (per-connection bytes, totals, the adapter reading, rates).
-    /// Called when sing-box restarts or cannot be reached. The history stays.
+    /// Called when a running sing-box goes away. The history stays.
     public void ResetBaselines()
     {
         _lastSeen.Clear();
-        _recent.Clear();
-        _rates = new Dictionary<string, UsageRate>();
+        ClearRates();
         _lastUp = _lastDown = _lastAdapter = null;
     }
 

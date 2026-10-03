@@ -33,7 +33,8 @@ public sealed class SmartRoutingController
     public static readonly TimeSpan WaitWindow = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan LanOfflinePopupDelay = TimeSpan.FromSeconds(10);
     public const int LanHealthyChecksToRevert = 3;
-    public const int ApiFailureLimit = 3;
+    /// The Clash API is polled once a second, so this is about ten seconds of silence before sing-box counts as hung.
+    public const int ApiFailureLimit = 10;
     /// sing-box needs a moment before its Clash API listens; polls that fail inside this window are not failures.
     public static readonly TimeSpan ApiStartGrace = TimeSpan.FromSeconds(30);
 
@@ -49,7 +50,8 @@ public sealed class SmartRoutingController
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly List<DateTimeOffset> _crashes = new();
     readonly Queue<string> _recentLines = new();
-    readonly DataSavedCounter _counter;
+    readonly UsageCounter _usage;
+    readonly IAdapterCounters? _counters;
 
     ISingBoxApi? _api;
     LanWaitTracker? _tracker;
@@ -77,10 +79,13 @@ public sealed class SmartRoutingController
     bool _popupRaised;
     bool _keepWaiting;
     string? _lastCrashDetail;
+    UsageAttribution _attribution;
+    bool _adapterReadFailed;
 
     public SmartRoutingController(
         IReadOnlyList<RuleItem> catalog, ISingBoxHost host, Func<int, string, ISingBoxApi> createApi,
-        Func<int> freePort, DailyStats? restoredStats, Action<string> log, TimeProvider? time = null)
+        Func<int> freePort, UsageSnapshot? restoredUsage, Action<string> log, TimeProvider? time = null,
+        IAdapterCounters? counters = null)
     {
         _catalog = catalog;
         _host = host;
@@ -88,10 +93,12 @@ public sealed class SmartRoutingController
         _freePort = freePort;
         _log = log;
         _time = time ?? TimeProvider.System;
-        _counter = new DataSavedCounter(restoredStats, Today());
+        _counters = counters;
+        _usage = new UsageCounter(restoredUsage, Today());
+        _attribution = UsageAttribution.Build(catalog, new SmartRoutingSettings());
         _host.LineReceived += line => _ = ProcessLineAsync(line);
         _host.Exited += code => _ = HandleExitAsync(code);
-        Status = new SmartRoutingStatus(SmartState.Off, null, RouteExit.Phone, false, true, [], 0, _counter.Snapshot);
+        Status = new SmartRoutingStatus(SmartState.Off, null, RouteExit.Phone, false, true, [], 0, _usage.TodayKept(Today()));
     }
 
     public SmartRoutingStatus Status { get; private set; }
@@ -133,6 +140,7 @@ public sealed class SmartRoutingController
                 }
                 _lastEnabled = smart.Enabled;
                 _rules = RuleSet.Build(_catalog, smart);
+                _attribution = UsageAttribution.Build(_catalog, smart);
                 UpdateLanHealth(net);
 
                 var (state, _) = Desired();
@@ -206,6 +214,49 @@ public sealed class SmartRoutingController
         }
     }
 
+    /// A copy of the usage history and the live rates, for the Usage tab.
+    public async Task<UsageSnapshot> GetUsageAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return _usage.Snapshot();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// The history, once per change since the last call; null when nothing changed. The caller saves it to usage.json.
+    public async Task<UsageSnapshot?> TakeUsageIfChangedAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return _usage.TakeDirty() ? _usage.Snapshot() : null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// Wipes the usage history (and so today's kept-off-4G figure).
+    public async Task ClearUsageAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _usage.Clear();
+            SafePublish();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task PollStatsAsync(CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
@@ -216,6 +267,7 @@ public sealed class SmartRoutingController
             {
                 if (await _api.GetConnectionsAsync(ct).ConfigureAwait(false) is not { } snapshot)
                 {
+                    _usage.ClearRates(); // a poll that fails must not leave rows looking busy
                     if (_time.GetUtcNow() < _apiGraceUntil)
                     {
                         if (!_graceLogged) _log("Smart routing: Clash API not up yet");
@@ -232,7 +284,10 @@ public sealed class SmartRoutingController
                     return;
                 }
                 _apiFailures = 0;
-                _counter.Update(snapshot.Connections, _rules, _appliedExit == RouteExit.Phone, Today());
+                _usage.Update(
+                    new UsagePoll(snapshot.Connections, snapshot.UploadTotal, snapshot.DownloadTotal, PhoneAdapterBytes(),
+                        _appliedExit == RouteExit.Phone, _time.GetLocalNow()),
+                    _attribution);
                 Publish();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -244,6 +299,24 @@ public sealed class SmartRoutingController
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// The phone adapter's Windows byte counter, or null when it cannot be read (missed bytes are then split by the default exit).
+    long? PhoneAdapterBytes()
+    {
+        if (_counters is null || _net?.Adapters.Phone?.Name is not { } name) return null;
+        try
+        {
+            var bytes = _counters.TotalBytes(name);
+            _adapterReadFailed = false;
+            return bytes;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (!_adapterReadFailed) _log($"Smart routing: reading the phone adapter's byte counter failed: {ex.Message}");
+            _adapterReadFailed = true; // logged once per failure streak: this runs every second
+            return null;
         }
     }
 
@@ -428,6 +501,8 @@ public sealed class SmartRoutingController
 
     void DropApi()
     {
+        if (_api is not null) _usage.NoteGap(Today()); // a running sing-box went away: the bytes just before that were not recorded
+        _usage.ResetBaselines(); // the next sing-box starts from zero totals and new connection ids
         var api = _api;
         _api = null;
         try
@@ -523,7 +598,7 @@ public sealed class SmartRoutingController
             : [];
 
         Status = new SmartRoutingStatus(state, message, _appliedExit, _lanRulesOnPhone, _lanOnline, waiting,
-            _rules.Entries.Count, _counter.Snapshot, state == SmartState.Faulted ? _lastCrashDetail : null);
+            _rules.Entries.Count, _usage.TodayKept(Today()), state == SmartState.Faulted ? _lastCrashDetail : null);
         Raise(StatusChanged, Status);
 
         if (waiting.Count == 0 || _popupRaised || _keepWaiting) return;

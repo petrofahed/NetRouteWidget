@@ -61,3 +61,17 @@ sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
             open, open.Sum(c => c.Upload) + ClosedUpload, open.Sum(c => c.Download) + ClosedDownload));
     }
 }
+
+sealed class FakeAdapterCounters : IAdapterCounters
+{
+    public long? Bytes { get; set; }
+    public Exception? Throws { get; set; }
+    public List<string> Asked { get; } = new();
+
+    public long? TotalBytes(string adapterName)
+    {
+        Asked.Add(adapterName);
+        if (Throws is { } ex) throw ex;
+        return Bytes;
+    }
+}

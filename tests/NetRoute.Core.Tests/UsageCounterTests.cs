@@ -386,4 +386,18 @@ public class UsageCounterTests
 
         Assert.Equal(1000, Row(counter, D0, "youtube").Phone.Down);
     }
+
+    [Fact]
+    public void ClearRates_empties_the_rates_but_keeps_the_baselines()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+        Assert.NotEmpty(counter.Snapshot().Rates);
+
+        counter.ClearRates();
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 3_000_100, process: "a.exe")]), Attr);
+
+        Assert.Equal(3_000_100, Row(counter, D0, "app:a.exe").Phone.Down); // the connection was not counted twice
+        Assert.Empty(counter.Snapshot().Rates); // 100 B/s is idle
+    }
 }
