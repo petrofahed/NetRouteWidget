@@ -124,6 +124,151 @@ public class UsageCounterTests
         Assert.Equal(500, unattributed.Kept);
     }
 
+    // ---- the phone share is a running balance against the Windows adapter counter ----
+
+    static long PhoneTotal(UsageCounter counter, DateOnly day) =>
+        counter.Snapshot().Days[day].Rows.Values.Sum(r => r.Phone.Total);
+
+    static long UnattributedPhone(UsageCounter counter, DateOnly day) =>
+        counter.Snapshot().Days[day].Rows.TryGetValue(UsageAttribution.UnattributedKey, out var row) ? row.Phone.Total : 0;
+
+    [Fact]
+    public void Burst_timing_skew_between_the_snapshot_and_the_adapter_reading_cancels_out()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        // The adapter already counted 1000 bytes, the connections only show 400 so far.
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 400, process: "a.exe")], adapter: 11_000), Attr);
+        Assert.Equal(600, UnattributedPhone(counter, D0));
+
+        // The rest of the burst shows up in the connections; the adapter has nothing new.
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 1000, process: "a.exe")], adapter: 11_000), Attr);
+
+        Assert.Equal(0, UnattributedPhone(counter, D0));
+        Assert.Equal(1000, PhoneTotal(counter, D0));
+        Assert.Equal(1000, counter.Snapshot().Days[D0].PhoneAdapterBytes);
+    }
+
+    [Fact]
+    public void Real_missed_phone_bytes_are_still_booked_as_unattributed()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 500, process: "a.exe")], down: 2000, adapter: 12_000), Attr);
+
+        Assert.Equal(1500, UnattributedPhone(counter, D0));
+    }
+
+    [Fact]
+    public void Framing_overhead_of_the_adapter_is_still_booked_as_unattributed()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 1000, process: "a.exe")], adapter: 11_040), Attr);
+
+        Assert.Equal(40, UnattributedPhone(counter, D0));
+    }
+
+    [Fact]
+    public void A_deficit_that_could_not_be_taken_back_is_used_up_by_the_next_positive_difference()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        // 600 seen, the adapter shows nothing yet and there is no unattributed share to take it back from: carry -600.
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 600, process: "a.exe")], adapter: 10_000), Attr);
+        Assert.Equal(0, UnattributedPhone(counter, D0));
+
+        // 100 seen, the adapter delta is 1000: 1000 - 100 - 600 = 300.
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 700, process: "a.exe")], adapter: 11_000), Attr);
+
+        Assert.Equal(300, UnattributedPhone(counter, D0));
+        Assert.Equal(1000, PhoneTotal(counter, D0));
+    }
+
+    [Fact]
+    public void A_take_back_reduces_down_first_then_up_and_never_goes_below_zero()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+        // Missed: 100 up, 300 down; all of it phone (adapter delta 400, nothing seen).
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 0, process: "a.exe")], up: 100, down: 300, adapter: 10_400), Attr);
+        Assert.Equal(new Traffic(100, 300), Row(counter, D0, UsageAttribution.UnattributedKey).Phone);
+
+        // 450 seen, adapter delta 0: balance -450 takes the 300 down and 100 up, 50 stays as a deficit.
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 450, process: "a.exe")], up: 100, down: 750, adapter: 10_400), Attr);
+
+        Assert.Equal(0, UnattributedPhone(counter, D0)); // fully taken back, never negative
+        // The 50 byte deficit offsets the next positive difference: 500 - 0 - 50.
+        counter.Update(Poll(T0.AddSeconds(3), [Conn("1", 0, 450, process: "a.exe")], up: 100, down: 750, adapter: 10_900), Attr);
+        Assert.Equal(450, UnattributedPhone(counter, D0));
+    }
+
+    [Fact]
+    public void The_deficit_is_capped_at_eight_mebibytes()
+    {
+        const long mib = 1024 * 1024;
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 20 * mib, process: "a.exe")], adapter: 10_000), Attr); // -20 MiB, capped to -8
+
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 20 * mib, process: "a.exe")], adapter: 10_000 + 9 * mib), Attr);
+
+        Assert.Equal(mib, UnattributedPhone(counter, D0));
+    }
+
+    [Fact]
+    public void Reset_baselines_forgets_the_deficit()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 600, process: "a.exe")], adapter: 10_000), Attr); // carry -600
+
+        counter.ResetBaselines();
+        counter.Update(Poll(T0.AddSeconds(2), [], adapter: 20_000), Attr);
+        counter.Update(Poll(T0.AddSeconds(3), [], down: 0, adapter: 21_000), Attr);
+
+        Assert.Equal(1000, UnattributedPhone(counter, D0));
+    }
+
+    [Fact]
+    public void A_poll_without_an_adapter_reading_forgets_the_deficit()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 600, process: "a.exe")], adapter: 10_000), Attr); // carry -600
+
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 600, process: "a.exe")], adapter: null), Attr);
+        counter.Update(Poll(T0.AddSeconds(3), [Conn("1", 0, 600, process: "a.exe")], adapter: 20_000), Attr);
+        counter.Update(Poll(T0.AddSeconds(4), [Conn("1", 0, 600, process: "a.exe")], adapter: 21_000), Attr);
+
+        Assert.Equal(1000, UnattributedPhone(counter, D0));
+    }
+
+    [Fact]
+    public void Over_a_bursty_session_the_phone_column_follows_the_adapter_total()
+    {
+        var counter = new UsageCounter(null, D0);
+        long adapter = 1_000_000, conn = 0;
+        counter.Update(Poll(T0, [Conn("1", 0, conn, process: "a.exe")], adapter: adapter), Attr);
+
+        // Each burst: the adapter leads by 300 bytes for one poll, then the connection catches up.
+        for (var i = 1; i <= 20; i++)
+        {
+            adapter += 5000;
+            conn += 4700;
+            counter.Update(Poll(T0.AddSeconds(2 * i), [Conn("1", 0, conn, process: "a.exe")], adapter: adapter), Attr);
+            conn += 300;
+            counter.Update(Poll(T0.AddSeconds(2 * i + 1), [Conn("1", 0, conn, process: "a.exe")], adapter: adapter), Attr);
+        }
+
+        Assert.Equal(100_000, counter.Snapshot().Days[D0].PhoneAdapterBytes);
+        Assert.Equal(100_000, PhoneTotal(counter, D0));
+    }
+
     [Theory]
     [InlineData(true, 3000, 0)]
     [InlineData(false, 0, 3000)]

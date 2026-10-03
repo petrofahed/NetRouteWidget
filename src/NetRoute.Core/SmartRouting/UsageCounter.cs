@@ -10,6 +10,9 @@ public sealed record UsagePoll(
 ///   - Bytes the poll missed (connections that opened and closed between two polls) are found by comparing the Clash
 ///     totals with what the open connections explain, and go to the "unattributed" row, split by exit with the help of
 ///     the phone adapter's Windows counter (see UsageReconciler).
+///   - The unattributed phone share is a running balance against that Windows counter: a poll where the adapter is behind
+///     the connections takes bytes back from it (or carries the deficit, at most MaxPhoneCarry), so the timing skew
+///     between the HTTP snapshot and the adapter reading cancels out and the Phone column follows the adapter total.
 ///   - Live rates ("Now") are the bytes seen over the last RateWindow.
 /// Not thread-safe: callers must serialize all calls (the SmartRoutingController does this under its gate).
 public sealed class UsageCounter
@@ -17,6 +20,8 @@ public sealed class UsageCounter
     public const int MaxRowsPerDay = 500;
     public const long ActiveBytesPerSecond = 1024;
     public static readonly TimeSpan RateWindow = TimeSpan.FromSeconds(3);
+    /// The most phone deficit that is carried between polls, so a stale deficit never hides real traffic for long.
+    public const long MaxPhoneCarry = 8 * 1024 * 1024;
 
     sealed class Cell
     {
@@ -35,6 +40,7 @@ public sealed class UsageCounter
     readonly Dictionary<string, Queue<(DateTimeOffset At, RouteExit Exit, long Bytes)>> _recent = new();
     Dictionary<string, UsageRate> _rates = new();
     long? _lastUp, _lastDown, _lastAdapter;
+    long _phoneCarry; // <= 0: phone bytes already booked that the adapter has not counted yet
     DateOnly _today;
     bool _dirty;
 
@@ -110,12 +116,34 @@ public sealed class UsageCounter
             _lastUp = totalUp;
             _lastDown = totalDown;
 
-            var split = UsageReconciler.Split(upDelta + downDelta, seenUp + seenDown, seenPhone, adapterDelta, poll.PhoneIsDefault);
             var unseenUp = Math.Max(0, upDelta - seenUp);
             var unseenDown = Math.Max(0, downDelta - seenDown);
-            Add(rows, UsageAttribution.UnattributedKey, RouteExit.Phone, Spread(split.Phone, unseenUp, unseenDown), kept: 0);
-            Add(rows, UsageAttribution.UnattributedKey, RouteExit.Lan, Spread(split.Lan, unseenUp, unseenDown),
-                kept: poll.PhoneIsDefault ? split.Lan : 0);
+            long phoneBooked;
+            if (adapterDelta is { } adapterBytes)
+            {
+                var balance = UsageReconciler.PhoneBalance(_phoneCarry, adapterBytes, seenPhone);
+                if (balance >= 0)
+                {
+                    phoneBooked = balance;
+                    _phoneCarry = 0;
+                    Add(rows, UsageAttribution.UnattributedKey, RouteExit.Phone, Spread(balance, unseenUp, unseenDown), kept: 0);
+                }
+                else
+                {
+                    phoneBooked = 0;
+                    var taken = TakeBackPhone(rows, -balance);
+                    _phoneCarry = Math.Max(-MaxPhoneCarry, balance + taken);
+                }
+            }
+            else
+            {
+                _phoneCarry = 0; // no reading to balance against: the fallback below
+                phoneBooked = UsageReconciler.Split(upDelta + downDelta, seenUp + seenDown, seenPhone, null, poll.PhoneIsDefault).Phone;
+                Add(rows, UsageAttribution.UnattributedKey, RouteExit.Phone, Spread(phoneBooked, unseenUp, unseenDown), kept: 0);
+            }
+            var lan = UsageReconciler.LanShare(upDelta + downDelta, seenUp + seenDown, phoneBooked);
+            Add(rows, UsageAttribution.UnattributedKey, RouteExit.Lan, Spread(lan, unseenUp, unseenDown),
+                kept: poll.PhoneIsDefault ? lan : 0);
         }
         // A poll without totals skips the reconciliation but keeps the baseline: only ResetBaselines (a real restart)
         // clears it, otherwise the next poll with totals would book sing-box's whole lifetime total as unattributed.
@@ -185,6 +213,7 @@ public sealed class UsageCounter
         _lastSeen.Clear();
         ClearRates();
         _lastUp = _lastDown = _lastAdapter = null;
+        _phoneCarry = 0;
     }
 
     /// Growth of a counter. A first sighting counts the whole value; a counter that went backwards (a reused id, a
@@ -199,6 +228,22 @@ public sealed class UsageCounter
         if (sum <= 0) return new Traffic(0, bytes);
         var upShare = (long)Math.Round((double)bytes * up / sum);
         return new Traffic(upShare, bytes - upShare);
+    }
+
+    /// Takes up to wanted bytes back from the unattributed phone cell (down first, then up; never below zero) and returns
+    /// how much was taken. A cell left with nothing at all is removed so no empty row shows.
+    long TakeBackPhone(Dictionary<string, Cell> rows, long wanted)
+    {
+        if (!rows.TryGetValue(UsageAttribution.UnattributedKey, out var cell)) return 0;
+        var fromDown = Math.Min(wanted, cell.PhoneDown);
+        var fromUp = Math.Min(wanted - fromDown, cell.PhoneUp);
+        if (fromDown + fromUp == 0) return 0;
+        cell.PhoneDown -= fromDown;
+        cell.PhoneUp -= fromUp;
+        if (cell.PhoneUp == 0 && cell.PhoneDown == 0 && cell.LanUp == 0 && cell.LanDown == 0 && cell.Kept == 0)
+            rows.Remove(UsageAttribution.UnattributedKey);
+        _dirty = true;
+        return fromDown + fromUp;
     }
 
     DayData DayFor(DateOnly day)
