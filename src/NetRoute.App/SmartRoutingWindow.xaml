@@ -12,6 +12,11 @@
         <TabItem Header="Config">
             <DockPanel Margin="4,12,4,0">
                 <StackPanel DockPanel.Dock="Top">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="Editing:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondary}" />
+                        <ToggleButton x:Name="EditPhoneProfile" Content="Phone + exceptions" Padding="10,4" Margin="0,0,4,0" Click="OnEditPhoneProfile" />
+                        <ToggleButton x:Name="EditLanProfile" Content="LAN + exceptions" Padding="10,4" Click="OnEditLanProfile" />
+                    </StackPanel>
                     <DockPanel>
                         <CheckBox x:Name="MasterToggle" DockPanel.Dock="Left" VerticalAlignment="Center" Click="OnMaster" />
                         <TextBlock Text="Smart routing — keep data-hungry traffic off 4G (Phone and LAN modes)" FontSize="15" FontWeight="SemiBold"
@@ -21,7 +26,7 @@
                     <TextBlock x:Name="TotalText" Margin="0,4,0,0" Foreground="{DynamicResource TextSecondary}" />
                     <Button x:Name="UsePhoneButton" Content="Use phone until LAN is back (uses mobile data)" Margin="0,8,0,0"
                             HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" Click="OnUsePhone" />
-                    <TextBlock Text="Turned-off items go through the phone like everything else." Margin="0,8,0,0" Foreground="{DynamicResource TextSecondary}" />
+                    <TextBlock x:Name="HintText" Margin="0,8,0,0" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
                     <TextBlock Text="Changing a rule restarts Smart routing for about a second. Downloads already running may keep their old route until they reconnect."
                                Margin="0,2,0,4" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
                 </StackPanel>

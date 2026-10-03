@@ -23,6 +23,7 @@ public partial class App : Application
     bool _usagePolling;
     UsageSort _usageSort = UsageSort.Default;
     string _usageFilter = ""; // the Usage tab's filter box; per session, a new window starts empty
+    RouteExit? _editingProfile; // the Config tab's view; null = follow the active profile
     int _renderSeq;
     bool _renderRunning, _renderAgain;
     FileLog? _log;
@@ -422,6 +423,8 @@ public partial class App : Application
         popup.Show();
     }
 
+    RouteExit EditingProfile => _editingProfile ?? (_smart?.Status.Profile ?? RouteExit.Phone);
+
     /// Renders both tabs. The Config tab is synchronous; the Usage tab needs a copy of the usage taken under the
     /// controller's gate, so it arrives a moment later. A render that is already running is not stacked: one more is queued.
     void RenderSmartWindow()
@@ -447,7 +450,7 @@ public partial class App : Application
                 var seq = ++_renderSeq;
                 var settings = controller.Settings.SmartRouting;
                 var status = smart.Status;
-                window.Render(SmartRoutingPage.Build(_catalog, settings, status));
+                window.Render(SmartRoutingPage.Build(_catalog, settings, status, EditingProfile));
 
                 var usage = await smart.GetUsageAsync(); // continues on the UI thread
                 if (seq != _renderSeq || _smartWindow != window) continue;
@@ -484,15 +487,26 @@ public partial class App : Application
         }
         var window = _smartWindow = new SmartRoutingWindow();
         _usageFilter = ""; // the new window's filter box is empty
+        _editingProfile = null; // a new window follows the active profile
         window.MasterToggled += on => ChangeSmart(s => s with { Enabled = on });
         window.ItemToggled += (id, on) => ChangeSmart(s => s.WithItem(id, on));
         window.GroupToggled += (groupId, on) => ChangeSmart(s => SmartRoutingPage.WithGroup(_catalog, s, groupId, on));
-        window.UserRuleToggled += (rule, on) => ChangeSmart(s => s.WithUserRule(rule with { Enabled = on }));
-        window.UserRuleRemoved += rule => ChangeSmart(s => s.WithoutUserRule(rule));
+        window.EditingProfileChanged += profile =>
+        {
+            _editingProfile = profile;
+            RenderSmartWindow();
+        };
+        // The editing profile is resolved when the event fires, so a rule always lands in the list the user is looking at.
+        window.UserRuleToggled += (rule, on) => ChangeSmart(s => EditingProfile == RouteExit.Lan
+            ? s.WithPhoneUserRule(rule with { Enabled = on })
+            : s.WithUserRule(rule with { Enabled = on }));
+        window.UserRuleRemoved += rule => ChangeSmart(s => EditingProfile == RouteExit.Lan
+            ? s.WithoutPhoneUserRule(rule)
+            : s.WithoutUserRule(rule));
         window.AddRuleRequested += type =>
         {
             var dialog = new AddRuleWindow(type) { Owner = window };
-            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => s.WithUserRule(rule));
+            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => EditingProfile == RouteExit.Lan ? s.WithPhoneUserRule(rule) : s.WithUserRule(rule));
         };
         window.UsePhoneRequested += () => _ = _smart?.UseLanRulesOnPhoneAsync();
         window.UsageRangeChanged += days =>

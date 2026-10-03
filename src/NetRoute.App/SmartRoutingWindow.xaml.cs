@@ -35,6 +35,7 @@ public partial class SmartRoutingWindow : Window
     public event Action<UserRule>? UserRuleRemoved;
     public event Action<UserRuleType>? AddRuleRequested;
     public event Action? UsePhoneRequested;
+    public event Action<RouteExit>? EditingProfileChanged;
     public event Action<int>? UsageRangeChanged;
     public event Action<UsageSort>? UsageSortChanged;
     public event Action<string>? UsageFilterChanged;
@@ -71,6 +72,7 @@ public partial class SmartRoutingWindow : Window
     static string StructureKey(PageModel model)
     {
         var sb = new StringBuilder();
+        sb.Append("E").Append((int)model.EditingProfile).Append('\n'); // switching the view rebuilds the lists
         foreach (var group in model.Groups)
         {
             sb.Append('G').Append(group.Id).Append('\u001f').Append(group.Name);
@@ -104,7 +106,18 @@ public partial class SmartRoutingWindow : Window
     {
         MasterToggle.IsChecked = model.Enabled;
         StatusText.Text = model.Status.Text;
-        TotalText.Text = $"Kept off 4G today: {ByteFormat.Human(model.TotalToday)}";
+        // The selector's checked state comes from the model, so a click is undone until the App confirms (like the card's mode buttons).
+        var lanView = model.EditingProfile == RouteExit.Lan;
+        EditPhoneProfile.IsChecked = !lanView;
+        EditLanProfile.IsChecked = lanView;
+        EditPhoneProfile.Content = "Phone + exceptions" + (model.ActiveProfile == RouteExit.Phone ? "  ● active" : "");
+        EditLanProfile.Content = "LAN + exceptions" + (model.ActiveProfile == RouteExit.Lan ? "  ● active" : "");
+        TotalText.Text = lanView
+            ? "Everything else goes through the LAN. These go through the phone."
+            : $"Kept off 4G today: {ByteFormat.Human(model.TotalToday)}";
+        HintText.Text = lanView
+            ? "Turned-off items go through the LAN like everything else (a turned-off update item falls back to its app's phone rule)."
+            : "Turned-off items go through the phone like everything else.";
         UsePhoneButton.Visibility = model.CanUsePhone ? Visibility.Visible : Visibility.Collapsed;
 
         foreach (var group in model.Groups)
@@ -115,7 +128,7 @@ public partial class SmartRoutingWindow : Window
             foreach (var item in group.Items)
             {
                 if (_itemBoxes.TryGetValue(item.Id, out var box)) { box.IsChecked = item.On; box.IsEnabled = model.Enabled; }
-                if (_itemBytes.TryGetValue(item.Id, out var bytes)) bytes.Text = item.On ? ByteFormat.Human(item.TodayBytes) : "→ via phone";
+                if (_itemBytes.TryGetValue(item.Id, out var bytes)) bytes.Text = SmartRoutingPage.ItemCaption(item, model.EditingProfile);
             }
         }
         foreach (var rule in model.UserRules)
@@ -182,7 +195,7 @@ public partial class SmartRoutingWindow : Window
         DockPanel.SetDock(addApp, Dock.Right);
         header.Children.Add(addWebsite);
         header.Children.Add(addApp);
-        header.Children.Add(new TextBlock { Text = "My rules", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(new TextBlock { Text = model.EditingProfile == RouteExit.Lan ? "My phone rules" : "My rules", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
         panel.Children.Add(header);
 
         if (model.UserRules.Count == 0)
@@ -223,6 +236,10 @@ public partial class SmartRoutingWindow : Window
     }
 
     void OnMaster(object sender, RoutedEventArgs e) => MasterToggled?.Invoke(MasterToggle.IsChecked == true);
+
+    void OnEditPhoneProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(RouteExit.Phone);
+
+    void OnEditLanProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(RouteExit.Lan);
 
     void OnUsePhone(object sender, RoutedEventArgs e) => UsePhoneRequested?.Invoke();
 }
