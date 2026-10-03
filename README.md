@@ -10,6 +10,17 @@ A small Windows tray widget for PCs that are connected to **two networks at once
   - Repeated failures make it wait longer before switching back.
   - If the preferred connection keeps failing, it stays on the working one and says so ("click Phone to retry").
 
+## Features at a glance
+
+| | |
+|---|---|
+| **Routing modes** (v1) | One-click **Phone / LAN / Auto**, local devices always stay on the LAN, auto-heal when a connection has no internet, break-glass restore. |
+| **Smart routing** (v2) | Keeps data-hungry traffic (Windows Update, cloud sync, game downloads, YouTube/social, your own apps and sites) off 4G by sending it over the LAN; waits for the LAN instead of falling onto mobile data; on-demand speed test. |
+| **Usage tab** (v3) | Who used how much data: Phone and LAN per application or site for Today / 3 / 7 / 15 / 30 days, live **Now phone** and **Now LAN** speeds, filter box, accurate counting reconciled with Windows' own phone-adapter counter. |
+| **Profiles** (v4) | **Phone + exceptions** and **LAN + exceptions**: choose which connection carries everything else; AI tools (Claude, ChatGPT, Codex, VS Code, Copilot, Gemini, Cursor, Perplexity) and `*.omantel.om` can use the phone while the rest uses the LAN; update downloads always use the LAN. |
+| **On the card** | The live speed through each connection next to its latency, and today's total data through each connection at the right edge. |
+| **Your own lists** | Right-click a row in the Usage tab to *Send to exception* / *Exclude from exception* (a tag marks exceptions), edit either profile's list on the Config tab, or manage the lists from JSON in `%AppData%\NetRouteWidget\rules.user.json`. |
+
 ## How it works
 
 The widget only changes **interface metrics**, Windows' priority numbers for each connection:
@@ -120,12 +131,11 @@ dotnet test --filter "Category=Integration"    # read-only checks against this m
 dotnet run --project src/NetRoute.App
 ```
 
-## Roadmap
+## Versions
 
 - **v1:** Phone / LAN / Auto switch for the internet path, with local access preserved, auto-heal and a break-glass restore ✅
-- **v2:** Smart routing. Keep data-hungry traffic (updates, cloud sync, game downloads, YouTube/social, and your own apps and sites) off 4G by sending it over the LAN, plus an on-demand speed test. See [the v2 spec](docs/superpowers/specs/2026-10-02-netroute-v2-smart-routing-design.md).
-- **v3:** A Usage tab: Phone and LAN use per application, date ranges, and live "Now phone" and "Now LAN" speed columns. It is a read-only view; rules are changed on the Config tab. See [the v3 spec](docs/superpowers/specs/2026-10-02-netroute-v3-usage-and-routing-design.md).
-
-- **v4:** Smart routing profiles: the Phone / LAN buttons choose which connection carries everything else; each profile has its own exception list (AI tools and Omantel go through the phone in LAN + exceptions; update downloads always use the LAN), a Usage-tab right-click menu to move rows in and out of the exceptions, and a user rules file merged over the built-in lists. See [the v4 spec](docs/superpowers/specs/2026-10-03-netroute-v4-profiles-design.md).
+- **v2:** Smart routing. Keep data-hungry traffic (updates, cloud sync, game downloads, YouTube/social, and your own apps and sites) off 4G by sending it over the LAN, plus an on-demand speed test. See [the v2 spec](docs/superpowers/specs/2026-10-02-netroute-v2-smart-routing-design.md). ✅
+- **v3:** A Usage tab: Phone and LAN use per application, date ranges, a filter box and live "Now phone" and "Now LAN" speed columns; accurate counting; the card shows the live speed through each connection. See [the v3 spec](docs/superpowers/specs/2026-10-02-netroute-v3-usage-and-routing-design.md). ✅
+- **v4:** Smart routing profiles: the Phone / LAN buttons choose which connection carries everything else; each profile has its own exception list (AI tools and Omantel go through the phone in LAN + exceptions; update downloads always use the LAN), a Usage-tab right-click menu to move rows in and out of the exceptions, a user rules file merged over the built-in lists, an application icon, a roomier Usage grid, and today's total per connection on the card. See [the v4 spec](docs/superpowers/specs/2026-10-03-netroute-v4-profiles-design.md). ✅
 
 Design: [docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md](docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md)
