@@ -9,11 +9,12 @@ using NetRoute.Core;
 namespace NetRoute.App;
 
 /// The Usage tab. Updated in place and keyed by row key: a refresh once a second never rebuilds the list, steals focus
-/// or closes an open "Goes via" drop-down. Rows only change places when the mouse is away from the list and no
+/// or closes an open "Goes via" drop-down. Rows only change places when the mouse and the keyboard focus are away from the list and no
 /// drop-down is open, or right after the user clicked a column header.
 public partial class UsageTab : UserControl
 {
-    const double ViaWidth = 100, ByteWidth = 90, NowWidth = 170;
+    static readonly TimeSpan PendingTimeout = TimeSpan.FromSeconds(5);
+    const double ViaWidth = 96, ByteWidth = 84, NowWidth = 150;
 
     readonly Dictionary<int, ToggleButton> _rangeButtons = new();
     readonly Dictionary<UsageSortColumn, Button> _headers = new();
@@ -41,6 +42,7 @@ public partial class UsageTab : UserControl
     {
         _sort = sort;
         StatusText.Text = statusText;
+        StatusText.ToolTip = statusText;
         foreach (var (days, button) in _rangeButtons) button.IsChecked = days == model.RangeDays;
         UpdateHeaders();
 
@@ -68,7 +70,7 @@ public partial class UsageTab : UserControl
             view.Apply(row);
         }
 
-        var freeze = !_forceReorder && (Rows.IsMouseOver || _rows.Values.Any(v => v.DropDownOpen));
+        var freeze = !_forceReorder && (Rows.IsMouseOver || Rows.IsKeyboardFocusWithin || _rows.Values.Any(v => v.DropDownOpen));
         _forceReorder = false;
         var next = UsageRowOrder.Next(_order, model.Rows.Select(r => r.Key).ToList(), freeze);
         if (!next.SequenceEqual(_order))
@@ -189,7 +191,7 @@ public partial class UsageTab : UserControl
     /// Name | Goes via | Phone | LAN | Now. Fixed widths so the header, the rows and the totals line up.
     static void DefineColumns(Grid grid)
     {
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 140 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 120 });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ViaWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
@@ -206,13 +208,15 @@ public partial class UsageTab : UserControl
     /// One row of the list. Created once per row key and then only updated.
     sealed class RowView
     {
-        readonly Grid _grid = new() { Margin = new Thickness(0, 2, 0, 2) };
+        readonly Grid _grid = new() { Background = Brushes.Transparent }; // transparent: the whole row is hit-testable, so the list counts as "under the mouse"
         readonly TextBlock _name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 0, 0, 0) };
-        readonly ComboBox _via = new() { Width = ViaWidth - 8, Margin = new Thickness(8, 0, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        readonly ComboBox _via = new() { Width = ViaWidth - 8, Margin = new Thickness(8, 2, 0, 2), HorizontalAlignment = HorizontalAlignment.Left };
         readonly TextBlock _phone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         readonly TextBlock _lan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        readonly TextBlock _now = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+        readonly TextBlock _now = new() { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
         bool _suppress;
+        GoesVia? _pending; // the user's pick, kept until the model reports it (or gives up on it)
+        DateTime _pendingSince;
 
         public RowView(string key, Action<string, bool> assign)
         {
@@ -222,7 +226,10 @@ public partial class UsageTab : UserControl
             AutomationProperties.SetName(_via, "Goes via");
             _via.SelectionChanged += (_, _) =>
             {
-                if (!_suppress && _via.SelectedIndex >= 0) assign(key, _via.SelectedIndex == 1);
+                if (_suppress || _via.SelectedIndex < 0) return;
+                _pending = _via.SelectedIndex == 1 ? GoesVia.Lan : GoesVia.Phone;
+                _pendingSince = DateTime.UtcNow;
+                assign(key, _via.SelectedIndex == 1);
             };
             Place(_name, 0);
             Place(_via, 1);
@@ -245,6 +252,13 @@ public partial class UsageTab : UserControl
             else _now.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
             _via.IsEnabled = row.CanChange;
             if (_via.IsDropDownOpen) return; // never change the selection under the user's hand
+            if (_pending is { } pick)
+            {
+                // The drop-down closes before the model catches up: keep the pick for a few seconds (not the old value),
+                // then trust the model again (the assignment may have been refused).
+                if (row.Via == pick || DateTime.UtcNow - _pendingSince > PendingTimeout) _pending = null;
+                else return;
+            }
             _suppress = true;
             _via.SelectedIndex = row.Via == GoesVia.Lan ? 1 : 0;
             _suppress = false;
