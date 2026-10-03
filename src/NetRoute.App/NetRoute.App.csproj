@@ -9,6 +9,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>NetRouteWidget</AssemblyName>
     <RootNamespace>NetRoute.App</RootNamespace>
+    <ApplicationIcon>Assets\NetRouteWidget.ico</ApplicationIcon>
     <!-- ThemeMode (Fluent theme per window) is experimental in .NET 10; used only on the management/dialog windows. -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
@@ -18,6 +19,10 @@
          MessageBox, Color… resolve to WPF. WinForms types are used fully qualified. -->
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\NetRouteWidget.ico" />
   </ItemGroup>
 
   <ItemGroup>

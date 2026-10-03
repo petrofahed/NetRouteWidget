@@ -1,6 +1,7 @@
 <Window x:Class="NetRoute.App.WaitingPopup"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Icon="Assets/NetRouteWidget.ico"
         Width="380" SizeToContent="Height" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize" FontFamily="Segoe UI" FontSize="12">
     <Border CornerRadius="10" Padding="14,12" BorderThickness="1" Background="#F21F1F1F" BorderBrush="#33FFFFFF">
