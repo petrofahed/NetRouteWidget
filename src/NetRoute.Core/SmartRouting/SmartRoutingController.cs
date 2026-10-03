@@ -81,6 +81,8 @@ public sealed class SmartRoutingController
     string? _lastCrashDetail;
     UsageAttribution _attribution;
     bool _adapterReadFailed;
+    static readonly UsageRate NoSpeed = new(0, 0);
+    volatile UsageRate _liveSpeed = NoSpeed;
 
     public SmartRoutingController(
         IReadOnlyList<RuleItem> catalog, ISingBoxHost host, Func<int, string, ISingBoxApi> createApi,
@@ -102,6 +104,10 @@ public sealed class SmartRoutingController
     }
 
     public SmartRoutingStatus Status { get; private set; }
+
+    /// The speed of everything flowing through each exit right now, all applications together (0/0 when idle or when
+    /// Smart routing is not running). Immutable and read without the gate, so the UI thread can poll it every second.
+    public UsageRate LiveSpeed => _liveSpeed;
     public event Action<SmartRoutingStatus>? StatusChanged;
     public event Action<IReadOnlyList<string>>? WaitingDetected;
     public event Action<string>? Notify;
@@ -268,6 +274,7 @@ public sealed class SmartRoutingController
                 if (await _api.GetConnectionsAsync(ct).ConfigureAwait(false) is not { } snapshot)
                 {
                     _usage.ClearRates(); // a poll that fails must not leave rows looking busy
+                    _liveSpeed = NoSpeed;
                     if (_time.GetUtcNow() < _apiGraceUntil)
                     {
                         if (!_graceLogged) _log("Smart routing: Clash API not up yet");
@@ -288,6 +295,7 @@ public sealed class SmartRoutingController
                     new UsagePoll(snapshot.Connections, snapshot.UploadTotal, snapshot.DownloadTotal, PhoneAdapterBytes(),
                         _appliedExit == RouteExit.Phone, _time.GetLocalNow()),
                     _attribution);
+                _liveSpeed = _usage.Live;
                 Publish();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -341,6 +349,7 @@ public sealed class SmartRoutingController
         try
         {
             _shutdown = true;
+            _liveSpeed = NoSpeed;
             await StopIfRunningAsync().ConfigureAwait(false);
         }
         finally
@@ -503,6 +512,7 @@ public sealed class SmartRoutingController
     {
         if (_api is not null) _usage.NoteGap(Today()); // a running sing-box went away: the bytes just before that were not recorded
         _usage.ResetBaselines(); // the next sing-box starts from zero totals and new connection ids
+        _liveSpeed = NoSpeed;
         var api = _api;
         _api = null;
         try

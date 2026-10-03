@@ -14,6 +14,9 @@ public sealed record UsagePoll(
 ///     the connections takes bytes back from it (or carries the deficit, at most MaxPhoneCarry), so the timing skew
 ///     between the HTTP snapshot and the adapter reading cancels out and the Phone column follows the adapter total.
 ///   - Live rates ("Now phone" and "Now LAN") are the bytes seen over the last RateWindow, per exit; a side below ActiveBytesPerSecond reads 0.
+///   - Live is the same idea for ALL traffic together (the widget card): the seen bytes plus the unattributed shares booked
+///     in each poll, so short connections count too. A phone take-back counts as negative; the window sums are clamped at 0.
+///     It is never part of the snapshot and never persisted.
 /// Not thread-safe: callers must serialize all calls (the SmartRoutingController does this under its gate).
 public sealed class UsageCounter
 {
@@ -39,10 +42,14 @@ public sealed class UsageCounter
     readonly Dictionary<string, (long Up, long Down)> _lastSeen = new();
     readonly Dictionary<string, Queue<(DateTimeOffset At, RouteExit Exit, long Bytes)>> _recent = new();
     Dictionary<string, UsageRate> _rates = new();
+    readonly Queue<(DateTimeOffset At, long Phone, long Lan)> _liveSamples = new();
     long? _lastUp, _lastDown, _lastAdapter;
     long _phoneCarry; // <= 0: phone bytes already booked that the adapter has not counted yet
     DateOnly _today;
     bool _dirty;
+
+    /// The speed of everything flowing through each exit right now, all rows together (bytes per second over RateWindow).
+    public UsageRate Live { get; private set; } = new(0, 0);
 
     public UsageCounter(UsageSnapshot? restored, DateOnly today)
     {
@@ -77,6 +84,7 @@ public sealed class UsageCounter
         var rows = dayData.Rows;
 
         long seenUp = 0, seenDown = 0, seenPhone = 0;
+        long unattributedPhone = 0, unattributedLan = 0; // what this poll booked beyond the seen bytes (phone: net of a take-back)
         var alive = new HashSet<string>();
         foreach (var c in poll.Connections)
         {
@@ -125,6 +133,7 @@ public sealed class UsageCounter
                 if (balance >= 0)
                 {
                     phoneBooked = balance;
+                    unattributedPhone = balance;
                     _phoneCarry = 0;
                     Add(rows, UsageAttribution.UnattributedKey, RouteExit.Phone, Spread(balance, unseenUp, unseenDown), kept: 0);
                 }
@@ -132,6 +141,7 @@ public sealed class UsageCounter
                 {
                     phoneBooked = 0;
                     var taken = TakeBackPhone(rows, -balance);
+                    unattributedPhone = -taken;
                     _phoneCarry = Math.Max(-MaxPhoneCarry, balance + taken);
                 }
             }
@@ -139,16 +149,22 @@ public sealed class UsageCounter
             {
                 _phoneCarry = 0; // no reading to balance against: the fallback below
                 phoneBooked = UsageReconciler.Split(upDelta + downDelta, seenUp + seenDown, seenPhone, null, poll.PhoneIsDefault).Phone;
+                unattributedPhone = phoneBooked;
                 Add(rows, UsageAttribution.UnattributedKey, RouteExit.Phone, Spread(phoneBooked, unseenUp, unseenDown), kept: 0);
             }
             var lan = UsageReconciler.LanShare(upDelta + downDelta, seenUp + seenDown, phoneBooked);
+            unattributedLan = lan;
             Add(rows, UsageAttribution.UnattributedKey, RouteExit.Lan, Spread(lan, unseenUp, unseenDown),
                 kept: poll.PhoneIsDefault ? lan : 0);
         }
         // A poll without totals skips the reconciliation but keeps the baseline: only ResetBaselines (a real restart)
         // clears it, otherwise the next poll with totals would book sing-box's whole lifetime total as unattributed.
 
+        var seenLan = seenUp + seenDown - seenPhone;
+        if (seenPhone + unattributedPhone != 0 || seenLan + unattributedLan != 0)
+            _liveSamples.Enqueue((poll.Now, seenPhone + unattributedPhone, seenLan + unattributedLan));
         RebuildRates(poll.Now);
+        RebuildLive(poll.Now);
     }
 
     /// An immutable copy of everything.
@@ -204,6 +220,8 @@ public sealed class UsageCounter
     {
         _recent.Clear();
         _rates = new Dictionary<string, UsageRate>();
+        _liveSamples.Clear();
+        Live = new UsageRate(0, 0);
     }
 
     /// Forgets what the next poll would be compared with (per-connection bytes, totals, the adapter reading, rates).
@@ -311,6 +329,27 @@ public sealed class UsageCounter
             if (phoneRate > 0 || lanRate > 0) rates[key] = new UsageRate(phoneRate, lanRate);
         }
         _rates = rates;
+    }
+
+    void RebuildLive(DateTimeOffset now)
+    {
+        // The same rule as RebuildRates: samples older than the window and samples from the future of a stepped-back clock go.
+        if (_liveSamples.Any(e => e.At > now || now - e.At >= RateWindow))
+        {
+            var fresh = _liveSamples.Where(e => e.At <= now && now - e.At < RateWindow).ToList();
+            _liveSamples.Clear();
+            foreach (var e in fresh) _liveSamples.Enqueue(e);
+        }
+        long phone = 0, lan = 0;
+        foreach (var (_, p, l) in _liveSamples)
+        {
+            phone += p;
+            lan += l;
+        }
+        var seconds = (long)RateWindow.TotalSeconds;
+        var phoneRate = Math.Max(0, phone) / seconds;
+        var lanRate = Math.Max(0, lan) / seconds;
+        Live = new UsageRate(phoneRate < ActiveBytesPerSecond ? 0 : phoneRate, lanRate < ActiveBytesPerSecond ? 0 : lanRate);
     }
 
     void Prune()

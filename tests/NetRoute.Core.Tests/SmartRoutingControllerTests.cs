@@ -1076,6 +1076,74 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
+    public async Task LiveSpeed_is_zero_before_any_poll()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+
+        Assert.Equal(new UsageRate(0, 0), c.LiveSpeed);
+    }
+
+    [Fact]
+    public async Task LiveSpeed_totals_everything_through_each_exit_and_fades_once_traffic_stops()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 3_000_000));
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "firefox.exe", ["phone", "default"], 0, 6_000_000));
+        _api.ClosedDownload = 3_000_000; // short connections that closed between polls: no adapter reading, the phone is the default exit
+
+        await c.PollStatsAsync();
+
+        Assert.Equal(new UsageRate(3_000_000, 1_000_000), c.LiveSpeed);
+
+        _time.Advance(RateWindowPlusOneSecond);
+        await c.PollStatsAsync();
+
+        Assert.Equal(new UsageRate(0, 0), c.LiveSpeed);
+    }
+
+    static readonly TimeSpan RateWindowPlusOneSecond = UsageCounter.RateWindow + TimeSpan.FromSeconds(1);
+
+    [Fact]
+    public async Task LiveSpeed_is_zero_after_an_unreachable_api_poll()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 9_000_000));
+        await c.PollStatsAsync();
+        Assert.NotEqual(0, c.LiveSpeed.Total);
+
+        _api.ConnectionsUnreachable = true;
+        await c.PollStatsAsync();
+
+        Assert.Equal(new UsageRate(0, 0), c.LiveSpeed);
+    }
+
+    [Fact]
+    public async Task LiveSpeed_is_zero_after_a_restart_and_after_stopping()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _api.Connections.Add(new SingBoxConnection("1", "example.com", "chrome.exe", ["phone", "default"], 0, 9_000_000));
+        await c.PollStatsAsync();
+        Assert.NotEqual(0, c.LiveSpeed.Total);
+
+        await c.ApplyAsync(Net(phoneIndex: 36), On()); // the phone was replugged: sing-box restarts
+
+        Assert.Equal(new UsageRate(0, 0), c.LiveSpeed);
+
+        _api.Connections.Clear();
+        _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 9_000_000));
+        await c.PollStatsAsync();
+        Assert.NotEqual(0, c.LiveSpeed.Total);
+
+        await c.StopAsync();
+
+        Assert.Equal(new UsageRate(0, 0), c.LiveSpeed);
+    }
+
+    [Fact]
     public async Task TakeUsageIfChanged_returns_a_snapshot_once_per_change()
     {
         var c = Create();

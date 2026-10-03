@@ -99,6 +99,7 @@ sing-box's Clash API lists only the connections that are **open right now**; it 
 3. **Exact footer.** The page also shows **"Phone adapter total in this period (exact, from Windows)"** (it follows the selected range, so it can be compared with the Phone column).
 4. **Kept off 4G** (card row and page) uses the same data: LAN bytes of rows assigned to the LAN while the default exit was the phone, plus the LAN part of the unattributed bytes that arrived while the phone was the default exit. It is labelled "at least" when a day in the range has `gaps > 0`.
 5. **Now phone** and **Now LAN** (the live speeds) are computed from the 1 s deltas, per exit, over a 3-second window.
+6. **Live speed on the widget card:** next to each adapter's latency the card shows the total live speed through that exit, all applications together. `UsageCounter.Live` sums, over the same 3-second window, the seen connection bytes plus the unattributed shares booked in each poll (a phone take-back counts as negative, the sums are clamped at 0, a side below 1 KB/s reads 0). It is not part of the snapshot and is never saved; the controller exposes it as `LiveSpeed` and the card clears it whenever Smart routing is not running.
 
 The remaining limitation: an application's own short connections that were missed are counted under "Unattributed", not under the application. The page says so, and the totals stay right.
 

@@ -585,4 +585,156 @@ public class UsageCounterTests
         Assert.Equal(3_000_100, Row(counter, D0, "app:a.exe").Phone.Down); // the connection was not counted twice
         Assert.Empty(counter.Snapshot().Rates); // 100 B/s is idle
     }
+
+    // ---- Live: the all-traffic speed through each exit (the widget card) ----
+
+    [Fact]
+    public void Live_is_zero_before_any_poll()
+    {
+        var counter = new UsageCounter(null, D0);
+
+        Assert.Equal(new UsageRate(0, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_phone_is_the_phone_exit_growth_over_the_window()
+    {
+        var counter = new UsageCounter(null, D0);
+
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+
+        Assert.Equal(new UsageRate(1_000_000, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_lan_is_the_lan_exit_growth_over_the_window()
+    {
+        var counter = new UsageCounter(null, D0);
+
+        counter.Update(Poll(T0, [Conn("1", 0, 6_000_000, process: "steam.exe", lanOnly: true)]), Attr);
+
+        Assert.Equal(new UsageRate(0, 2_000_000), counter.Live);
+    }
+
+    [Fact]
+    public void Live_adds_all_rows_together()
+    {
+        var counter = new UsageCounter(null, D0);
+
+        counter.Update(Poll(T0, [
+            Conn("1", 0, 3_000_000, process: "a.exe"),
+            Conn("2", 0, 3_000_000, host: "youtube.com"),
+            Conn("3", 0, 3_000_000, process: "b.exe", lanOnly: true)]), Attr);
+
+        Assert.Equal(new UsageRate(2_000_000, 1_000_000), counter.Live);
+    }
+
+    [Fact]
+    public void Live_counts_bytes_of_short_connections_that_only_show_in_the_totals_and_the_adapter()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        // 9 MB passed in total, none of it on an open connection; the phone adapter carried 6 MB of it, so 3 MB went over the LAN.
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 0, process: "a.exe")], down: 9_000_000, adapter: 6_010_000), Attr);
+
+        Assert.Equal(new UsageRate(2_000_000, 1_000_000), counter.Live);
+        Assert.Empty(counter.Snapshot().Rates); // unattributed bytes still never show as a per-row rate
+    }
+
+    [Fact]
+    public void Live_counts_seen_and_unattributed_bytes_of_the_same_poll_together()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        // 3 MB seen on the connection; the adapter carried 6 MB, so 3 MB were short connections.
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 3_000_000, process: "a.exe")], down: 3_000_000, adapter: 6_010_000), Attr);
+
+        Assert.Equal(2_000_000, counter.Live.PhoneBytesPerSecond);
+    }
+
+    [Fact]
+    public void Live_fades_three_seconds_after_the_last_bytes()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+        Assert.Equal(1_000_000, counter.Live.PhoneBytesPerSecond); // still inside the window
+
+        counter.Update(Poll(T0.AddSeconds(3), [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+        Assert.Equal(new UsageRate(0, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_drops_samples_from_the_future_of_a_clock_that_stepped_back()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+
+        counter.Update(Poll(T0.AddSeconds(-10), [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+
+        Assert.Equal(new UsageRate(0, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_reads_zero_for_a_side_below_one_kilobyte_per_second()
+    {
+        var counter = new UsageCounter(null, D0);
+
+        counter.Update(Poll(T0, [
+            Conn("1", 0, 3_000_000, process: "a.exe"),
+            Conn("2", 0, 3000, process: "b.exe", lanOnly: true)]), Attr); // LAN: 1000 B/s
+
+        Assert.Equal(new UsageRate(1_000_000, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_trickle_is_idle()
+    {
+        var counter = new UsageCounter(null, D0);
+
+        counter.Update(Poll(T0, [Conn("1", 0, 1000, process: "a.exe")]), Attr);
+
+        Assert.Equal(new UsageRate(0, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_is_reset_by_ClearRates_and_ResetBaselines()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 3_000_000, process: "a.exe")]), Attr);
+        Assert.NotEqual(0, counter.Live.Total);
+
+        counter.ClearRates();
+        Assert.Equal(new UsageRate(0, 0), counter.Live);
+
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("2", 0, 3_000_000, process: "a.exe")]), Attr);
+        Assert.NotEqual(0, counter.Live.Total);
+
+        counter.ResetBaselines();
+        Assert.Equal(new UsageRate(0, 0), counter.Live);
+    }
+
+    [Fact]
+    public void Live_after_a_phone_take_back_counts_the_burst_once_and_is_never_negative()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [Conn("1", 0, 0, process: "a.exe")], adapter: 10_000), Attr);
+
+        // Burst start: the adapter is 3 MB ahead of the connections (booked as unattributed phone bytes).
+        counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 0, 0, process: "a.exe")], adapter: 3_010_000), Attr);
+        Assert.Equal(1_000_000, counter.Live.PhoneBytesPerSecond);
+
+        // Burst end: the connection shows the 3 MB, the adapter nothing new. The 3 MB booked earlier is taken back,
+        // so the window holds the burst once (3 MB), not twice.
+        counter.Update(Poll(T0.AddSeconds(2), [Conn("1", 0, 3_000_000, process: "a.exe")], adapter: 3_010_000), Attr);
+        Assert.Equal(1_000_000, counter.Live.PhoneBytesPerSecond);
+
+        // The positive sample ages out while the (net zero) take-back sample is still inside the window.
+        counter.Update(Poll(T0.AddSeconds(4), [Conn("1", 0, 3_000_000, process: "a.exe")], adapter: 3_010_000), Attr);
+        Assert.Equal(0, counter.Live.PhoneBytesPerSecond);
+        Assert.True(counter.Live.PhoneBytesPerSecond >= 0 && counter.Live.LanBytesPerSecond >= 0);
+    }
 }

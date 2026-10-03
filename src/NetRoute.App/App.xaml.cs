@@ -121,6 +121,7 @@ public partial class App : Application
                     try
                     {
                         await smartForUsage.PollStatsAsync();
+                        RenderLiveSpeeds(smartForUsage);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -368,9 +369,26 @@ public partial class App : Application
         if (_smart is { } smart) _ = smart.ApplyAsync(controller.Status, controller.Settings);
     }
 
+    /// The card's live speed next to each latency: the total through that exit right now. Blank whenever Smart routing
+    /// is not running, so a stale figure never lingers (it measures what passes through Smart routing).
+    void RenderLiveSpeeds(SmartRoutingController smart)
+    {
+        if (_card is not { } card) return;
+        if (smart.Status.State is not (SmartState.Running or SmartState.Starting))
+        {
+            card.RenderSpeeds("", "");
+            return;
+        }
+        var live = smart.LiveSpeed;
+        card.RenderSpeeds(SpeedLabel(live.PhoneBytesPerSecond), SpeedLabel(live.LanBytesPerSecond));
+    }
+
+    static string SpeedLabel(long bytesPerSecond) => bytesPerSecond <= 0 ? "" : UsageReport.NowText(bytesPerSecond);
+
     void RenderSmart(SmartRoutingStatus status)
     {
         _card?.RenderSmart(SmartRoutingPresenter.Row(status));
+        if (status.State is not (SmartState.Running or SmartState.Starting)) _card?.RenderSpeeds("", "");
         RenderSmartWindow();
         if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone
             || status.State is SmartState.Off or SmartState.Unavailable or SmartState.Faulted)) // Starting is a transient restart: keep the popup

@@ -73,6 +73,21 @@ public partial class CardWindow : Window
         SmartText.Opacity = row.Tone == SmartTone.Muted ? 0.7 : 1.0;
     }
 
+    /// The live speed through each exit, left of its latency. An empty text hides the figure (the row looks as before).
+    /// Only touches a TextBlock when its text changed: this is called every second.
+    public void RenderSpeeds(string phone, string lan)
+    {
+        SetSpeed(PhoneSpeed, phone);
+        SetSpeed(LanSpeed, lan);
+    }
+
+    static void SetSpeed(TextBlock block, string text)
+    {
+        if (block.Text != text) block.Text = text;
+        var visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (block.Visibility != visibility) block.Visibility = visibility;
+    }
+
     public void ShowSpeed(string text)
     {
         SpeedText.Text = text;
