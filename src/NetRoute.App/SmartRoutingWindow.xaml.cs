@@ -43,10 +43,14 @@ public partial class SmartRoutingWindow : Window
     /// Right-click menu on a Usage row: send the row to / exclude it from the active profile's exception list (the row key).
     public event Action<string>? UsageExceptionToggleRequested;
     public event Action? ClearUsageRequested;
+    /// "Edit rules file…" link: open the user rules file (rules.user.json) in the default editor.
+    public event Action? EditRulesFileRequested;
 
     /// Updates the Usage tab in place; safe to call every second.
     public void RenderUsage(UsageReportModel model, UsageSort sort, string statusText, bool recording) =>
         Usage.Render(model, sort, statusText, recording);
+
+    void OnEditRulesFile(object sender, RoutedEventArgs e) => EditRulesFileRequested?.Invoke();
 
     void OnClearUsage(object sender, RoutedEventArgs e)
     {

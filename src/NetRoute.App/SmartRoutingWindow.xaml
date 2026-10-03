@@ -32,6 +32,7 @@
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
                     <TextBlock Text="Usage history is kept for 35 days." Foreground="{DynamicResource TextSecondary}" />
+                    <TextBlock Margin="0,6,0,0"><Hyperlink Click="OnEditRulesFile">Edit rules file… (restart to apply)</Hyperlink></TextBlock>
                     <Button Content="Clear usage history…" HorizontalAlignment="Left" Padding="10,4" Margin="0,6,0,0" Click="OnClearUsage" />
                 </StackPanel>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">

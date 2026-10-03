@@ -39,6 +39,16 @@ Keep data-hungry traffic off 4G while the PC uses the phone:
 
 Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights and runs in Phone and LAN modes and pauses in Auto mode. LAN-only items wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
 
+## Editing the lists
+
+The built-in lists are in `rules\builtin.json` next to the app; every install overwrites that file, so do not edit it. Your own changes go in `%AppData%\NetRouteWidget\rules.user.json`, which uses the same format and is merged over the built-in lists by item `id`:
+
+- an item with a built-in `id` **replaces** that item (and keeps its place in the list);
+- an item with a new `id` is **added** (a new group `id` makes a new group after the built-in ones);
+- `{ "id": "xbox", "remove": true }` **removes** a built-in item (naming an unknown `id` does nothing).
+
+A missing file changes nothing. A broken file (bad JSON, a bad `exit`, a duplicate `id`, a phone carve-out) is ignored as a whole, with a line in the log, and the built-in lists are used, so it can never stop Smart routing from starting. Changes apply after you restart the widget. On the Config tab, **Edit rules file…** creates a small template if the file does not exist yet and opens it in your editor.
+
 ## Usage tab (v3)
 
 The ⚙ window has two tabs, **Usage** and **Config**. Config is the Smart routing page described above; Usage shows who is using your data.

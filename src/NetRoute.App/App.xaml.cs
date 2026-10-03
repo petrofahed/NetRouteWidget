@@ -284,7 +284,7 @@ public partial class App : Application
         {
             try
             {
-                _catalog = RuleCatalog.Load(RuleCatalog.DefaultPath);
+                _catalog = RuleCatalog.LoadMerged(RuleCatalog.DefaultPath, AppPaths.UserRulesFile, log.Info);
             }
             catch (Exception ex)
             {
@@ -529,6 +529,7 @@ public partial class App : Application
             var profile = _smart?.Status.Profile ?? RouteExit.Phone;
             ChangeSmart(s => UsageExceptions.Toggle(_catalog, s, profile, key));
         };
+        window.EditRulesFileRequested += () => OpenRulesFile();
         window.ClearUsageRequested += async () =>
         {
             if (_smart is not { } smart) return;
@@ -546,6 +547,32 @@ public partial class App : Application
         window.Closed += (_, _) => _smartWindow = null;
         RenderSmartWindow();
         window.Show();
+    }
+
+    /// Opens the user's rules file in the default editor, creating a small template first. Changes apply after a restart.
+    void OpenRulesFile()
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.UserRulesFile))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(AppPaths.UserRulesFile)!);
+                File.WriteAllText(AppPaths.UserRulesFile,
+                    "{\n  \"version\": 1,\n  \"groups\": [\n    { \"id\": \"my-apps\", \"name\": \"My apps\", \"exit\": \"phone\", \"items\": [] }\n  ]\n}\n");
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo(AppPaths.UserRulesFile) { UseShellExecute = true });
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                Process.Start(new ProcessStartInfo("notepad.exe", $"\"{AppPaths.UserRulesFile}\"") { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            _log?.Error("Could not open the rules file", ex);
+        }
     }
 
     void ChangeSmart(Func<SmartRoutingSettings, SmartRoutingSettings> change)
