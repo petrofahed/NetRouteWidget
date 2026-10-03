@@ -12,10 +12,18 @@ public partial class App : Application
 {
     static readonly TimeSpan VisiblePoll = TimeSpan.FromSeconds(5);
     static readonly TimeSpan HiddenPoll = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan UsagePollInterval = TimeSpan.FromSeconds(1);
+    static readonly TimeSpan UsageSaveInterval = TimeSpan.FromSeconds(30);
 
     readonly SingleInstance _instance = new();
     readonly StartupTask _startupTask = new();
     readonly DispatcherTimer _poll = new();
+    readonly DispatcherTimer _usagePoll = new() { Interval = UsagePollInterval };
+    readonly DispatcherTimer _usageSave = new() { Interval = UsageSaveInterval };
+    bool _usagePolling;
+    UsageSort _usageSort = UsageSort.Default;
+    int _renderSeq;
+    bool _renderRunning, _renderAgain;
     FileLog? _log;
     RouteController? _controller;
     TrayIcon? _tray;
@@ -96,17 +104,46 @@ public partial class App : Application
             {
                 if (DateTime.Today != _lastPruneDay) PruneLogs(); // the widget may run for days
                 await controller.RefreshAsync(measureLatency: true);
-                if (_smart is { } smart)
-                {
-                    await smart.PollStatsAsync();
-                    await SaveUsageAsync();
-                }
             };
 
             Render(controller.Status);
             if (loaded.Settings.CardVisible) ShowCard();
             UpdatePollInterval();
             _poll.Start();
+            if (_smart is { } smartForUsage)
+            {
+                // One second: short connections would be missed by a slower poll (see the v3 spec, "Why a plain connection poll is not enough").
+                _usagePoll.Tick += async (_, _) =>
+                {
+                    if (_usagePolling) return; // the previous poll is still waiting for the API
+                    _usagePolling = true;
+                    try
+                    {
+                        await smartForUsage.PollStatsAsync();
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        log.Error("Usage poll failed", ex); // an async void handler must never throw: it would end the app
+                    }
+                    finally
+                    {
+                        _usagePolling = false;
+                    }
+                };
+                _usageSave.Tick += async (_, _) =>
+                {
+                    try
+                    {
+                        await SaveUsageAsync();
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        log.Error("Usage save failed", ex); // SaveUsageAsync only catches IO errors
+                    }
+                };
+                _usagePoll.Start();
+                _usageSave.Start();
+            }
             await controller.RefreshAsync(measureLatency: true); // publishes the first status, which the StatusChanged subscription applies to Smart routing
         }
         catch (Exception ex)
@@ -130,6 +167,8 @@ public partial class App : Application
         NetworkChange.NetworkAddressChanged -= OnNetworkEvent;
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkEvent;
         _poll.Stop();
+        _usagePoll.Stop();
+        _usageSave.Stop();
         _debouncer?.Dispose();
         StopSmartRouting();
         _tray?.Dispose();
@@ -351,10 +390,50 @@ public partial class App : Application
         popup.Show();
     }
 
+    /// Renders both tabs. The Config tab is synchronous; the Usage tab needs a copy of the usage taken under the
+    /// controller's gate, so it arrives a moment later. A render that is already running is not stacked: one more is queued.
     void RenderSmartWindow()
     {
         if (_smartWindow is null || _smart is null || _controller is null) return;
-        _smartWindow.Render(SmartRoutingPage.Build(_catalog, _controller.Settings.SmartRouting, _smart.Status));
+        if (_renderRunning)
+        {
+            _renderAgain = true;
+            return;
+        }
+        _ = RenderSmartWindowAsync();
+    }
+
+    async Task RenderSmartWindowAsync()
+    {
+        _renderRunning = true;
+        try
+        {
+            do
+            {
+                _renderAgain = false;
+                if (_smartWindow is not { } window || _smart is not { } smart || _controller is not { } controller) return;
+                var seq = ++_renderSeq;
+                var settings = controller.Settings.SmartRouting;
+                var status = smart.Status;
+                window.Render(SmartRoutingPage.Build(_catalog, settings, status));
+
+                var usage = await smart.GetUsageAsync(); // continues on the UI thread
+                if (seq != _renderSeq || _smartWindow != window) continue;
+                var canAssign = settings.Enabled && (status.State is SmartState.Running or SmartState.Starting);
+                var report = UsageReport.Build(
+                    usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort);
+                window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text, recording: status.State == SmartState.Running);
+            }
+            while (_renderAgain);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log?.Error("Rendering the management window failed", ex);
+        }
+        finally
+        {
+            _renderRunning = false;
+        }
     }
 
     void OpenSmartRouting()
@@ -383,6 +462,31 @@ public partial class App : Application
             if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => s.WithUserRule(rule));
         };
         window.UsePhoneRequested += () => _ = _smart?.UseLanRulesOnPhoneAsync();
+        window.UsageRangeChanged += days =>
+        {
+            _controller!.UpdateSettings(s => s with { SmartRouting = s.SmartRouting with { UsageRangeDays = UsageReport.NormalizeRange(days) } });
+            RenderSmartWindow(); // no ApplyAsync: a range change must never touch sing-box
+        };
+        window.UsageSortChanged += sort =>
+        {
+            _usageSort = sort;
+            RenderSmartWindow();
+        };
+        window.AssignmentRequested += (key, toLan) => ChangeSmart(s => UsageAssignment.Set(_catalog, s, key, toLan));
+        window.ClearUsageRequested += async () =>
+        {
+            if (_smart is not { } smart) return;
+            try
+            {
+                await smart.ClearUsageAsync();
+                await SaveUsageAsync(force: true);
+                RenderSmartWindow();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log?.Error("Clearing usage failed", ex); // an async void handler must never throw: it would end the app
+            }
+        };
         window.Closed += (_, _) => _smartWindow = null;
         RenderSmartWindow();
         window.Show();
