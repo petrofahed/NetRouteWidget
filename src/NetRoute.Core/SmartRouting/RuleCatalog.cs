@@ -2,10 +2,13 @@ using System.Text.Json;
 
 namespace NetRoute.Core;
 
-/// One switchable thing that can be kept off 4G (e.g. "YouTube"), matched by process names and/or domain suffixes.
+/// One switchable thing with an exit: a LAN exception ("keep off 4G", the default) or a phone exception (used by the
+/// LAN + exceptions profile), matched by process names and/or domain suffixes. A carve-out is a LAN item that stays
+/// active in both profiles and is matched before the phone rules (e.g. an app's update download).
 public sealed record RuleItem(
     string Id, string GroupId, string GroupName, string Name,
-    IReadOnlyList<string> Processes, IReadOnlyList<string> Domains, bool DefaultOn);
+    IReadOnlyList<string> Processes, IReadOnlyList<string> Domains, bool DefaultOn,
+    RouteExit Exit = RouteExit.Lan, bool CarveOut = false);
 
 /// Built-in items shipped as rules/builtin.json next to the app, so lists can be updated without code changes.
 public static class RuleCatalog
@@ -25,12 +28,20 @@ public static class RuleCatalog
             {
                 var groupId = Required(group, "id");
                 var groupName = Required(group, "name");
+                var groupExit = ExitOf(group, RouteExit.Lan);
+                var groupCarveOut = Flag(group, "carveOut", false);
                 foreach (var item in group.GetProperty("items").EnumerateArray())
                 {
+                    var exit = ExitOf(item, groupExit);
+                    var carveOut = Flag(item, "carveOut", groupCarveOut);
+                    var id = Required(item, "id");
+                    if (carveOut && exit != RouteExit.Lan)
+                        throw new InvalidDataException($"Rule item '{id}' is a carve-out, which must route to the LAN");
                     items.Add(new RuleItem(
-                        Required(item, "id"), groupId, groupName, Required(item, "name"),
+                        id, groupId, groupName, Required(item, "name"),
                         Strings(item, "processes"), Strings(item, "domains"),
-                        !item.TryGetProperty("defaultOn", out var on) || on.GetBoolean()));
+                        !item.TryGetProperty("defaultOn", out var on) || on.GetBoolean(),
+                        exit, carveOut));
                 }
             }
         }
@@ -43,6 +54,20 @@ public static class RuleCatalog
         if (duplicate is not null) throw new InvalidDataException($"Duplicate rule item id '{duplicate.Key}'");
         return items;
     }
+
+    static RouteExit ExitOf(JsonElement e, RouteExit fallback)
+    {
+        if (!e.TryGetProperty("exit", out var value)) return fallback;
+        return value.GetString()?.ToLowerInvariant() switch
+        {
+            "lan" => RouteExit.Lan,
+            "phone" => RouteExit.Phone,
+            var other => throw new InvalidDataException($"Rule catalog 'exit' must be \"lan\" or \"phone\", not '{other}'"),
+        };
+    }
+
+    static bool Flag(JsonElement e, string name, bool fallback) =>
+        e.TryGetProperty(name, out var value) ? value.GetBoolean() : fallback;
 
     static string Required(JsonElement e, string name) =>
         e.GetProperty(name).GetString() ?? throw new InvalidDataException($"Rule catalog property '{name}' must be a string");

@@ -28,5 +28,27 @@
         "domains": ["blzddist1-a.akamaihd.net", "blizzard.com"] },
       { "id": "xbox", "name": "Xbox / Microsoft gaming", "processes": ["XboxPcApp.exe", "gamingservices.exe"],
         "domains": ["assets1.xboxlive.com"] } ] }
+    ,
+    { "id": "ai-tools", "name": "AI tools", "exit": "phone", "items": [
+      { "id": "claude", "name": "Claude / Claude Code",
+        "processes": ["claude.exe"], "domains": ["claude.ai", "anthropic.com"] },
+      { "id": "chatgpt", "name": "OpenAI / ChatGPT",
+        "processes": ["chatgpt.exe"], "domains": ["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"] },
+      { "id": "codex", "name": "Codex", "processes": ["codex.exe"] },
+      { "id": "vscode", "name": "Visual Studio Code", "processes": ["Code.exe"] },
+      { "id": "copilot", "name": "GitHub Copilot", "domains": ["githubcopilot.com", "copilot.microsoft.com"] },
+      { "id": "gemini", "name": "Gemini",
+        "domains": ["gemini.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"] },
+      { "id": "cursor", "name": "Cursor", "processes": ["Cursor.exe"], "domains": ["cursor.sh", "cursor.com"] },
+      { "id": "perplexity", "name": "Perplexity", "domains": ["perplexity.ai"] } ] },
+    { "id": "isp", "name": "Omantel", "exit": "phone", "items": [
+      { "id": "omantel", "name": "Omantel (*.omantel.om)", "domains": ["omantel.om"] } ] },
+    { "id": "ai-updates", "name": "AI & dev tool updates (always LAN)", "carveOut": true, "items": [
+      { "id": "vscode-updates", "name": "VS Code updates",
+        "domains": ["update.code.visualstudio.com", "vscode.download.prss.microsoft.com", "az764295.vo.msecnd.net",
+                    "marketplace.visualstudio.com", "gallerycdn.vsassets.io"] },
+      { "id": "claude-updates", "name": "Claude updates", "domains": ["downloads.claude.ai"] },
+      { "id": "codex-updates", "name": "Codex updates",
+        "domains": ["registry.npmjs.org", "release-assets.githubusercontent.com", "objects.githubusercontent.com"] } ] }
   ]
 }
