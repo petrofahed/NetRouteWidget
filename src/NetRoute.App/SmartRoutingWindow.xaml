@@ -1,0 +1,45 @@
+<Window x:Class="NetRoute.App.SmartRoutingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:NetRoute.App"
+        Icon="Assets/NetRouteWidget.ico"
+        Title="NetRoute — Smart routing" Width="780" Height="720" MinWidth="640" MinHeight="460"
+        WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="13" ThemeMode="System"
+        Background="{DynamicResource WindowBackground}" Foreground="{DynamicResource TextPrimary}">
+    <TabControl x:Name="Tabs" Margin="12" SelectedIndex="0">
+        <TabItem Header="Usage">
+            <local:UsageTab x:Name="Usage" />
+        </TabItem>
+        <TabItem Header="Config">
+            <DockPanel Margin="4,12,4,0">
+                <StackPanel DockPanel.Dock="Top">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <TextBlock Text="Editing:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondary}" />
+                        <ToggleButton x:Name="EditPhoneProfile" Content="Phone + exceptions" Padding="10,4" Margin="0,0,4,0" Click="OnEditPhoneProfile" />
+                        <ToggleButton x:Name="EditLanProfile" Content="LAN + exceptions" Padding="10,4" Click="OnEditLanProfile" />
+                    </StackPanel>
+                    <DockPanel>
+                        <CheckBox x:Name="MasterToggle" DockPanel.Dock="Left" VerticalAlignment="Center" Click="OnMaster" />
+                        <TextBlock Text="Smart routing — keep data-hungry traffic off 4G (Phone and LAN modes)" FontSize="15" FontWeight="SemiBold"
+                                   Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    </DockPanel>
+                    <TextBlock x:Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" />
+                    <TextBlock x:Name="TotalText" Margin="0,4,0,0" Foreground="{DynamicResource TextSecondary}" />
+                    <Button x:Name="UsePhoneButton" Content="Use phone until LAN is back (uses mobile data)" Margin="0,8,0,0"
+                            HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" Click="OnUsePhone" />
+                    <TextBlock x:Name="HintText" Margin="0,8,0,0" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
+                    <TextBlock Text="Changing a rule restarts Smart routing for about a second. Downloads already running may keep their old route until they reconnect."
+                               Margin="0,2,0,4" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                    <TextBlock Text="Usage history is kept for 35 days." Foreground="{DynamicResource TextSecondary}" />
+                    <TextBlock Margin="0,6,0,0"><Hyperlink Click="OnEditRulesFile">Edit rules file… (restart to apply)</Hyperlink></TextBlock>
+                    <Button Content="Clear usage history…" HorizontalAlignment="Left" Padding="10,4" Margin="0,6,0,0" Click="OnClearUsage" />
+                </StackPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="Body" />
+                </ScrollViewer>
+            </DockPanel>
+        </TabItem>
+    </TabControl>
+</Window>

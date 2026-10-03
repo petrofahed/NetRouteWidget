@@ -1,15 +1,17 @@
 <Window x:Class="NetRoute.App.AdapterPickerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Icon="Assets/NetRouteWidget.ico"
         Title="Choose adapters" Width="440" SizeToContent="Height"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize" Topmost="True"
-        FontFamily="Segoe UI" FontSize="12">
+        FontFamily="Segoe UI" FontSize="12" ThemeMode="System"
+        Background="{DynamicResource WindowBackground}" Foreground="{DynamicResource TextPrimary}">
     <StackPanel Margin="16">
         <TextBlock Text="Phone (carries internet in Phone mode)" FontWeight="SemiBold" />
         <ComboBox x:Name="PhoneBox" Margin="0,4,0,12" DisplayMemberPath="Label" />
         <TextBlock Text="LAN (printer, NAS, other PCs)" FontWeight="SemiBold" />
         <ComboBox x:Name="LanBox" Margin="0,4,0,12" DisplayMemberPath="Label" />
-        <TextBlock TextWrapping="Wrap" Foreground="Gray"
+        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                    Text="Automatic finds the phone by its USB-tethering driver and the LAN as the wired adapter that has a gateway." />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="OK" Width="80" IsDefault="True" Click="OnOk" />

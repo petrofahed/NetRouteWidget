@@ -9,6 +9,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>NetRouteWidget</AssemblyName>
     <RootNamespace>NetRoute.App</RootNamespace>
+    <ApplicationIcon>Assets\NetRouteWidget.ico</ApplicationIcon>
+    <!-- ThemeMode (Fluent theme per window) is experimental in .NET 10; used only on the management/dialog windows. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="Assets\NetRouteWidget.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\NetRoute.Core\NetRoute.Core.csproj" />
   </ItemGroup>
 
@@ -26,5 +33,7 @@
     <None Include="..\..\tools\Restore-Network.cmd" Link="Restore-Network.cmd"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Import Project="..\..\build\SingBox.Items.targets" />
 
 </Project>

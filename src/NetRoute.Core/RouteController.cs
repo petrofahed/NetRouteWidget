@@ -78,6 +78,15 @@ public sealed class RouteController
         _persist(updated);
     }
 
+    /// Lets Smart routing report its own TUN as the phone/LAN path it currently uses, so the card and toasts
+    /// don't show "other adapter (VPN?)" while sing-box carries traffic. Null result = not ours, use the default.
+    public Func<int, InternetPath?>? ExternalPathResolver { get; set; }
+
+    InternetPath PathFor(int? bestIndex, DetectionResult adapters) =>
+        bestIndex is { } index && ExternalPathResolver?.Invoke(index) is { } external
+            ? external
+            : NetworkStatus.ResolvePath(bestIndex, adapters);
+
     public async Task RefreshAsync(bool measureLatency, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
@@ -112,8 +121,8 @@ public sealed class RouteController
                 IsHealing = _healing,
                 IsHealSticky = _healSticky,
                 Adapters = detection,
-                ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
-                Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
+                ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
+                Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
                 PhoneLatencyMs = phoneMs,
                 LanLatencyMs = lanMs,
                 Error = error,
@@ -169,8 +178,8 @@ public sealed class RouteController
                 IsHealing = _healing,
                 IsHealSticky = _healSticky,
                 Adapters = detection,
-                ActivePath = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
-                Ipv6Path = NetworkStatus.ResolvePath(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
+                ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
+                Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
                 Error = result.Error,
             }, toast: null);
             return result;

@@ -19,9 +19,13 @@ public sealed class WindowsAdapterSource : IAdapterSource
             var hasGateway = properties.GatewayAddresses
                 .Any(g => !g.Address.Equals(IPAddress.Any) && !g.Address.Equals(IPAddress.IPv6Any));
 
+            var dnsServer = properties.DnsAddresses
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)?.ToString();
+
             adapters.Add(new AdapterInfo(
                 index, nic.Name, nic.Description, KindOf(nic.NetworkInterfaceType),
-                nic.OperationalStatus == OperationalStatus.Up, hasGateway, ipv4, FormatMac(nic.GetPhysicalAddress())));
+                nic.OperationalStatus == OperationalStatus.Up, hasGateway, ipv4, FormatMac(nic.GetPhysicalAddress()),
+                dnsServer));
         }
         return adapters;
     }

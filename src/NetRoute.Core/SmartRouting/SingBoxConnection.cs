@@ -1,0 +1,33 @@
+namespace NetRoute.Core;
+
+/// One live connection as reported by sing-box's Clash API.
+public sealed record SingBoxConnection(
+    string Id, string? Host, string? ProcessName, IReadOnlyList<string> Chains, long Upload, long Download)
+{
+    /// Chains are innermost-first, e.g. ["lan", "lan-only"] for traffic a LAN-only rule sent out of the LAN.
+    public bool IsLanOnly =>
+        Chains.Count >= 2 && Chains[0] == SingBoxConfigBuilder.LanTag && Chains[^1] == SingBoxConfigBuilder.LanOnlyTag;
+}
+
+/// What one /connections poll returns. The totals are sing-box's running counters since it started and, unlike the list
+/// of open connections, include connections that already closed. Null when the API did not report them.
+public sealed record ConnectionsSnapshot(IReadOnlyList<SingBoxConnection> Connections, long? UploadTotal, long? DownloadTotal);
+
+/// Runs sing-box.exe. Exited fires for every exit; for StopAsync-caused exits it fires before StopAsync completes.
+public interface ISingBoxHost
+{
+    bool IsRunning { get; }
+    Task StartAsync(string configJson, CancellationToken ct = default);
+    Task StopAsync();
+    event Action<string>? LineReceived;
+    event Action<int>? Exited;
+}
+
+/// sing-box's local Clash API.
+public interface ISingBoxApi
+{
+    Task<bool> SelectAsync(string group, string outbound, CancellationToken ct = default);
+
+    /// Null when the API cannot be reached.
+    Task<ConnectionsSnapshot?> GetConnectionsAsync(CancellationToken ct = default);
+}

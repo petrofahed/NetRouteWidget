@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "groups": [
+    { "id": "updates", "name": "System updates", "items": [
+      { "id": "windows-update", "name": "Windows Update & Delivery Optimization",
+        "domains": ["windowsupdate.com", "update.microsoft.com", "delivery.mp.microsoft.com", "dl.delivery.mp.microsoft.com",
+                    "download.windowsupdate.com", "tlu.dl.delivery.mp.microsoft.com", "do.dsp.mp.microsoft.com"] },
+      { "id": "microsoft-store", "name": "Microsoft Store",
+        "domains": ["storeedgefd.dsx.mp.microsoft.com", "displaycatalog.mp.microsoft.com", "store-images.s-microsoft.com"] } ] },
+    { "id": "sync", "name": "Cloud sync", "items": [
+      { "id": "onedrive", "name": "OneDrive",
+        "processes": ["OneDrive.exe", "OneDrive.Sync.Service.exe"],
+        "domains": ["onedrive.live.com", "storage.live.com", "onedrive.com", "1drv.ms"] },
+      { "id": "google-drive", "name": "Google Drive", "processes": ["GoogleDriveFS.exe"] },
+      { "id": "dropbox", "name": "Dropbox", "processes": ["Dropbox.exe"] },
+      { "id": "icloud", "name": "iCloud", "processes": ["iCloudDrive.exe", "iCloudServices.exe", "iCloudPhotos.exe"] } ] },
+    { "id": "video", "name": "Video & social", "items": [
+      { "id": "youtube", "name": "YouTube",
+        "domains": ["youtube.com", "googlevideo.com", "ytimg.com", "youtu.be", "youtube-nocookie.com"] },
+      { "id": "facebook", "name": "Facebook",
+        "domains": ["facebook.com", "fbcdn.net", "facebook.net", "fb.com", "fbsbx.com"] },
+      { "id": "instagram", "name": "Instagram", "domains": ["instagram.com", "cdninstagram.com"] } ] },
+    { "id": "games", "name": "Game launchers", "items": [
+      { "id": "steam", "name": "Steam", "processes": ["steam.exe"], "domains": ["steamcontent.com", "steamstatic.com"] },
+      { "id": "epic", "name": "Epic Games", "processes": ["EpicGamesLauncher.exe"],
+        "domains": ["epicgames-download1.akamaized.net"] },
+      { "id": "battlenet", "name": "Battle.net", "processes": ["Battle.net.exe", "Agent.exe"],
+        "domains": ["blzddist1-a.akamaihd.net", "blizzard.com"] },
+      { "id": "xbox", "name": "Xbox / Microsoft gaming", "processes": ["XboxPcApp.exe", "gamingservices.exe"],
+        "domains": ["assets1.xboxlive.com"] } ] },
+    { "id": "ai-tools", "name": "AI tools", "exit": "phone", "items": [
+      { "id": "claude", "name": "Claude / Claude Code",
+        "processes": ["claude.exe"], "domains": ["claude.ai", "anthropic.com"] },
+      { "id": "chatgpt", "name": "OpenAI / ChatGPT",
+        "processes": ["chatgpt.exe"], "domains": ["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com"] },
+      { "id": "codex", "name": "Codex", "processes": ["codex.exe"] },
+      { "id": "vscode", "name": "Visual Studio Code", "processes": ["Code.exe"] },
+      { "id": "copilot", "name": "GitHub Copilot", "domains": ["githubcopilot.com", "copilot.microsoft.com"] },
+      { "id": "gemini", "name": "Gemini",
+        "domains": ["gemini.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"] },
+      { "id": "cursor", "name": "Cursor", "processes": ["Cursor.exe"], "domains": ["cursor.sh", "cursor.com"] },
+      { "id": "perplexity", "name": "Perplexity", "domains": ["perplexity.ai"] } ] },
+    { "id": "isp", "name": "Omantel", "exit": "phone", "items": [
+      { "id": "omantel", "name": "Omantel (*.omantel.om)", "domains": ["omantel.om"] } ] },
+    { "id": "ai-updates", "name": "AI & dev tool updates (always LAN)", "carveOut": true, "items": [
+      { "id": "vscode-updates", "name": "VS Code updates",
+        "domains": ["update.code.visualstudio.com", "vscode.download.prss.microsoft.com", "az764295.vo.msecnd.net",
+                    "marketplace.visualstudio.com", "gallerycdn.vsassets.io"] },
+      { "id": "claude-updates", "name": "Claude updates", "domains": ["downloads.claude.ai"] },
+      { "id": "codex-updates", "name": "Codex updates",
+        "domains": ["registry.npmjs.org", "release-assets.githubusercontent.com", "objects.githubusercontent.com"] } ] }
+  ]
+}

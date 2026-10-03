@@ -29,6 +29,8 @@ public partial class CardWindow : Window
     public event Action? OpenNetworkSettingsRequested;
     public event Action? RestartAsAdminRequested;
     public event Action? QuitRequested;
+    public event Action? SmartSettingsRequested;
+    public event Action? SpeedTestRequested;
 
     /// Shows the card at its saved spot, or bottom-right when that spot is no longer on screen.
     public void ShowAndPlace(double? savedLeft, double? savedTop)
@@ -62,6 +64,41 @@ public partial class CardWindow : Window
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
+    }
+
+    public void RenderSmart(SmartRow row)
+    {
+        SmartText.Text = row.Text;
+        SmartText.SetResourceReference(TextBlock.ForegroundProperty, row.Tone == SmartTone.Warning ? "Warning" : "TextSecondary");
+        SmartText.Opacity = row.Tone == SmartTone.Muted ? 0.7 : 1.0;
+    }
+
+    /// The live speed through each exit, left of its latency. An empty text hides the figure (the row looks as before).
+    /// Only touches a TextBlock when its text changed: this is called every second.
+    public void RenderSpeeds(string phone, string lan)
+    {
+        SetSpeed(PhoneSpeed, phone);
+        SetSpeed(LanSpeed, lan);
+    }
+
+    static void SetSpeed(TextBlock block, string text)
+    {
+        if (block.Text != text) block.Text = text;
+        var visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (block.Visibility != visibility) block.Visibility = visibility;
+    }
+
+    /// Today's total data through each exit, right of its latency. An empty text hides the figure (the row looks as before).
+    public void RenderTotals(string phone, string lan)
+    {
+        SetSpeed(PhoneTotal, phone);
+        SetSpeed(LanTotal, lan);
+    }
+
+    public void ShowSpeed(string text)
+    {
+        SpeedText.Text = text;
+        SpeedText.Visibility = Visibility.Visible;
     }
 
     /// Closes for real on app exit; any other close (Alt+F4) just hides to the tray.
@@ -135,6 +172,12 @@ public partial class CardWindow : Window
     void OnRestartAsAdmin(object sender, RoutedEventArgs e) => RestartAsAdminRequested?.Invoke();
 
     void OnQuit(object sender, RoutedEventArgs e) => QuitRequested?.Invoke();
+
+    void OnSmartSettings(object sender, RoutedEventArgs e) => SmartSettingsRequested?.Invoke();
+
+    void OnSmartTextClick(object sender, MouseButtonEventArgs e) => SmartSettingsRequested?.Invoke();
+
+    void OnSpeedTest(object sender, RoutedEventArgs e) => SpeedTestRequested?.Invoke();
 
     void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {

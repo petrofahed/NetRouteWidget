@@ -26,6 +26,7 @@ public static partial class AdapterDetector
     [
         "VMware", "Hyper-V", "Virtual", "vEthernet", "VirtualBox", "WireGuard", "NordLynx",
         "TAP-", "Wintun", "Tunnel", "VPN", "Loopback", "Bluetooth",
+        "NetRoute", "sing-tun", // the Smart routing sing-box TUN
     ];
 
     public static bool IsPhone(AdapterInfo a) => ContainsAny(a.Description, PhoneMarkers);

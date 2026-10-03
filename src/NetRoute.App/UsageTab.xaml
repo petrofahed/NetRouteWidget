@@ -1,0 +1,42 @@
+<UserControl x:Class="NetRoute.App.UsageTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Spacing rhythm: 8 inside a group, 12 between groups, 16 around the page. -->
+    <DockPanel Margin="4,16,4,4">
+        <StackPanel DockPanel.Dock="Top">
+            <StackPanel x:Name="RangeBar" Orientation="Horizontal" />
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0"> <!-- its own line: next to the range buttons it does not fit at the minimum window width -->
+                <TextBlock Text="Filter:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondary}" />
+                <TextBox x:Name="FilterBox" Width="220" VerticalContentAlignment="Center" Padding="6,4"
+                         ToolTip="Type part of an application or site name, for example youtube. Esc clears it." />
+            </StackPanel>
+            <TextBlock x:Name="StatusText" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+        </StackPanel>
+        <TextBlock x:Name="Banner" DockPanel.Dock="Top" Margin="0,4,0,0" TextWrapping="Wrap"
+                   Foreground="{DynamicResource Warning}" Visibility="Collapsed" />
+        <!-- The kept-off / adapter / explanation lines: a calm secondary block under the list. -->
+        <StackPanel DockPanel.Dock="Bottom" Margin="4,12,4,0" TextElement.FontSize="12">
+            <TextBlock x:Name="KeptText" />
+            <TextBlock x:Name="AdapterText" Margin="0,2,0,0" Foreground="{DynamicResource TextSecondary}" />
+            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                       Text="Numbers are what Smart routing saw. Short connections it missed are shown as “Unattributed”, so the totals stay right." />
+        </StackPanel>
+        <!-- The list card: header, rows and totals share one set of columns (DefineColumns). -->
+        <Border Margin="0,12,0,0" Padding="8,4,8,6" CornerRadius="8" BorderThickness="1"
+                Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
+            <DockPanel>
+                <Border DockPanel.Dock="Top" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource CardBorder}" Padding="0,2,0,4" Margin="0,0,0,4">
+                    <Grid x:Name="HeaderGrid" />
+                </Border>
+                <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource CardBorder}" Padding="0,10,0,6" Margin="0,4,0,0">
+                    <Grid x:Name="TotalGrid" />
+                </Border>
+                <TextBlock x:Name="EmptyText" DockPanel.Dock="Top" Margin="10,16,10,16" Text="No usage recorded in this period yet."
+                           Foreground="{DynamicResource TextSecondary}" Visibility="Collapsed" />
+                <ScrollViewer x:Name="RowScroll" VerticalScrollBarVisibility="Visible">
+                    <StackPanel x:Name="Rows" Background="Transparent" />
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
+    </DockPanel>
+</UserControl>

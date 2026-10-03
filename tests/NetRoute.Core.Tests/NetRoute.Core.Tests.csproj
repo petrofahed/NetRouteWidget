@@ -23,4 +23,6 @@
     <ProjectReference Include="..\..\src\NetRoute.Core\NetRoute.Core.csproj" />
   </ItemGroup>
 
+  <Import Project="..\..\build\SingBox.Items.targets" />
+
 </Project>

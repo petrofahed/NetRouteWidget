@@ -1,0 +1,18 @@
+<!-- Imported by NetRoute.App.csproj and the test project. Only copies; the download itself happens once, in
+     NetRoute.Core (see SingBox.Fetch.targets), which both of them reference. -->
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)SingBox.props" />
+
+  <ItemGroup>
+    <None Include="$(SingBoxCache)sing-box.exe" Link="sing-box\sing-box.exe" Visible="false"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- upstream's short licence notice -->
+    <None Include="$(SingBoxCache)LICENSE" Link="sing-box\LICENSE" Visible="false"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- the full GNU GPL v3 text, tracked in the repo -->
+    <None Include="$(MSBuildThisFileDirectory)..\licenses\GPL-3.0.txt" Link="sing-box\COPYING" Visible="false"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" Visible="false"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

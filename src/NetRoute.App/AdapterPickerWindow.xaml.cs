@@ -12,6 +12,7 @@ public partial class AdapterPickerWindow : Window
     public AdapterPickerWindow(IReadOnlyList<AdapterInfo> candidates, AdapterOverrides current)
     {
         InitializeComponent();
+        Theme.Track(this);
         Fill(PhoneBox, candidates.Select(a => new Choice(Label(a), a.Description)), current.PhoneDescription);
         Fill(LanBox, candidates.Select(a => new Choice(Label(a), a.Mac)), current.LanMac);
     }

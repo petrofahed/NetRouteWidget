@@ -1,0 +1,197 @@
+namespace NetRoute.Core.Tests;
+
+public class UsageAttributionTests
+{
+    static readonly IReadOnlyList<RuleItem> Catalog =
+    [
+        new("youtube", "video", "Video", "YouTube", [], ["youtube.com", "googlevideo.com"], true),
+        new("onedrive", "sync", "Cloud sync", "OneDrive", ["OneDrive.exe"], ["onedrive.com"], true),
+    ];
+
+    static UsageAttribution Build(SmartRoutingSettings? settings = null) =>
+        UsageAttribution.Build(Catalog, settings ?? new SmartRoutingSettings());
+
+    [Fact]
+    public void A_rule_that_lists_the_application_wins_over_a_domain_rule()
+    {
+        Assert.Equal("onedrive", Build().Resolve("OneDrive.exe", "www.youtube.com"));
+    }
+
+    [Theory]
+    [InlineData("chrome.exe", "www.youtube.com")]
+    [InlineData(null, "r1---sn.googlevideo.com")]
+    public void A_domain_rule_claims_the_connection_when_no_process_rule_does(string? process, string host)
+    {
+        Assert.Equal("youtube", Build().Resolve(process, host));
+    }
+
+    [Fact]
+    public void Other_traffic_of_an_application_counts_under_the_application_lower_cased()
+    {
+        Assert.Equal("app:chrome.exe", Build().Resolve("Chrome.EXE", "example.com"));
+        Assert.Equal("app:chrome.exe", Build().Resolve("chrome.exe", null));
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(null, "example.com")]
+    [InlineData("", "")]
+    [InlineData("  ", null)]
+    public void Without_an_application_or_a_matching_host_the_row_is_Other(string? process, string? host)
+    {
+        Assert.Equal(UsageAttribution.OtherKey, Build().Resolve(process, host));
+    }
+
+    [Fact]
+    public void A_user_app_rule_keeps_the_application_key_whether_it_is_on_or_off()
+    {
+        foreach (var enabled in new[] { true, false })
+        {
+            var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "qbittorrent.exe", enabled)] };
+
+            Assert.Equal("app:qbittorrent.exe", Build(settings).Resolve("qBittorrent.exe", "tracker.example"));
+        }
+    }
+
+    [Fact]
+    public void A_disabled_user_app_rule_does_not_claim_the_process_so_a_site_rule_still_gets_its_traffic()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "chrome.exe", false)] };
+
+        Assert.Equal("youtube", Build(settings).Resolve("chrome.exe", "www.youtube.com"));
+    }
+
+    [Fact]
+    public void A_disabled_user_app_rule_leaves_other_traffic_of_the_process_under_the_application_row()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "chrome.exe", false)] };
+
+        Assert.Equal("app:chrome.exe", Build(settings).Resolve("chrome.exe", "example.com"));
+    }
+
+    [Fact]
+    public void An_enabled_user_app_rule_claims_everything_of_the_process_before_the_domain_rules()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "chrome.exe", true)] };
+
+        Assert.Equal("app:chrome.exe", Build(settings).Resolve("chrome.exe", "www.youtube.com"));
+    }
+
+    [Fact]
+    public void A_switched_off_item_still_gets_its_row_so_the_phone_usage_is_visible()
+    {
+        var settings = new SmartRoutingSettings().WithItem("youtube", false);
+
+        Assert.Equal("youtube", Build(settings).Resolve("chrome.exe", "www.youtube.com"));
+    }
+
+    [Fact]
+    public void A_user_website_rule_is_a_row_of_its_own()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.Website, "dropbox.com")] };
+
+        Assert.Equal("user:website:dropbox.com", Build(settings).Resolve("chrome.exe", "dl.dropbox.com"));
+    }
+
+    [Fact]
+    public void Display_names()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.Website, "dropbox.com")] };
+        var a = Build(settings);
+
+        Assert.Equal("YouTube", a.DisplayName("youtube"));
+        Assert.Equal("OneDrive", a.DisplayName("onedrive"));
+        Assert.Equal("chrome", a.DisplayName("app:chrome.exe"));
+        Assert.Equal("dropbox.com", a.DisplayName("user:website:dropbox.com"));
+        Assert.Equal("Other", a.DisplayName(UsageAttribution.OtherKey));
+        Assert.Equal("Unattributed (short connections)", a.DisplayName(UsageAttribution.UnattributedKey));
+    }
+
+    [Fact]
+    public void A_row_from_history_whose_rule_was_deleted_still_has_a_readable_name()
+    {
+        var a = Build();
+
+        Assert.Equal("gone.com", a.DisplayName("user:website:gone.com"));
+        Assert.Equal("removed-item", a.DisplayName("removed-item"));
+    }
+
+    static readonly IReadOnlyList<RuleItem> V4Catalog =
+    [
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], ["claude.ai"], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    [Fact]
+    public void Phone_exception_items_have_their_own_row_in_both_profiles()
+    {
+        var attribution = UsageAttribution.Build(V4Catalog, new SmartRoutingSettings());
+
+        Assert.Equal("claude", attribution.Resolve("claude.exe", "claude.ai"));
+        Assert.Equal("vscode-updates", attribution.Resolve("code.exe", "update.code.visualstudio.com"));
+        Assert.Equal("Claude", attribution.DisplayName("claude"));
+    }
+
+    [Fact]
+    public void The_same_app_in_both_lists_has_distinct_entry_ids_and_one_usage_row()
+    {
+        var rule = new UserRule(UserRuleType.App, "chrome.exe");
+        var settings = new SmartRoutingSettings().WithUserRule(rule).WithPhoneUserRule(rule);
+
+        var all = RuleSet.BuildAll(V4Catalog, settings);
+        var attribution = UsageAttribution.Build(V4Catalog, settings);
+
+        Assert.Equal(2, all.Entries.Count(e => e.Name == "chrome.exe"));
+        Assert.Equal(all.Entries.Count, all.Entries.Select(e => e.Id).Distinct().Count());
+        Assert.Equal("app:chrome.exe", attribution.Resolve("Chrome.exe", "example.com"));
+        Assert.Equal("chrome", attribution.DisplayName("app:chrome.exe"));
+        Assert.Equal("app:chrome.exe", UsageAttribution.RowKeyOf(rule));
+    }
+
+    [Fact]
+    public void A_phone_website_rule_counts_under_the_same_row_as_a_lan_website_rule()
+    {
+        var rule = new UserRule(UserRuleType.Website, "example.com");
+        var attribution = UsageAttribution.Build(V4Catalog, new SmartRoutingSettings().WithPhoneUserRule(rule));
+
+        Assert.Equal("user:website:example.com", attribution.Resolve("chrome.exe", "www.example.com"));
+        Assert.Equal("example.com", attribution.DisplayName("user:website:example.com"));
+    }
+
+    // sing-box matches the carve-out (update) rules before the process rules, so the usage must too.
+    static readonly IReadOnlyList<RuleItem> CarveOutCatalog =
+    [
+        new("vscode", "dev", "Dev tools", "VS Code", ["Code.exe"], [], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    [Fact]
+    public void A_carve_out_host_claims_the_connection_before_the_process_rule()
+    {
+        var attribution = UsageAttribution.Build(CarveOutCatalog, new SmartRoutingSettings());
+
+        Assert.Equal("vscode-updates", attribution.Resolve("Code.exe", "update.code.visualstudio.com"));
+        Assert.Equal("vscode-updates", attribution.Resolve("chrome.exe", "update.code.visualstudio.com"));
+        Assert.Equal("vscode", attribution.Resolve("Code.exe", "example.com"));
+    }
+
+    [Fact]
+    public void A_switched_off_carve_out_still_claims_its_traffic()
+    {
+        var settings = new SmartRoutingSettings().WithItem("vscode-updates", false);
+        var attribution = UsageAttribution.Build(CarveOutCatalog, settings);
+
+        Assert.Equal("vscode-updates", attribution.Resolve("Code.exe", "update.code.visualstudio.com"));
+        Assert.Equal("vscode", attribution.Resolve("Code.exe", "example.com"));
+    }
+
+    [Fact]
+    public void A_disabled_phone_app_rule_does_not_claim_its_application()
+    {
+        var settings = new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "chrome.exe", Enabled: false));
+        var attribution = UsageAttribution.Build(V4Catalog, settings);
+
+        Assert.Equal("vscode-updates", attribution.Resolve("chrome.exe", "update.code.visualstudio.com"));
+        Assert.Equal("app:chrome.exe", attribution.Resolve("chrome.exe", "example.com"));
+    }
+}
