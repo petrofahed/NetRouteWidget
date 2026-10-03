@@ -54,6 +54,30 @@ public class UsageAttributionTests
     }
 
     [Fact]
+    public void A_disabled_user_app_rule_does_not_claim_the_process_so_a_site_rule_still_gets_its_traffic()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "chrome.exe", false)] };
+
+        Assert.Equal("youtube", Build(settings).Resolve("chrome.exe", "www.youtube.com"));
+    }
+
+    [Fact]
+    public void A_disabled_user_app_rule_leaves_other_traffic_of_the_process_under_the_application_row()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "chrome.exe", false)] };
+
+        Assert.Equal("app:chrome.exe", Build(settings).Resolve("chrome.exe", "example.com"));
+    }
+
+    [Fact]
+    public void An_enabled_user_app_rule_claims_everything_of_the_process_before_the_domain_rules()
+    {
+        var settings = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "chrome.exe", true)] };
+
+        Assert.Equal("app:chrome.exe", Build(settings).Resolve("chrome.exe", "www.youtube.com"));
+    }
+
+    [Fact]
     public void A_switched_off_item_still_gets_its_row_so_the_phone_usage_is_visible()
     {
         var settings = new SmartRoutingSettings().WithItem("youtube", false);

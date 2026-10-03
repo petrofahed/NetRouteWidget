@@ -6,7 +6,9 @@ namespace NetRoute.Core;
 ///   2. otherwise a rule whose domains match the connection's host (YouTube, Facebook, a user Website rule);
 ///   3. otherwise the application itself ("app:chrome.exe");
 ///   4. otherwise "other".
-/// Rules switched off still count, so a row keeps its history when the user moves it to the phone and back.
+/// Rules switched off still count, so a row keeps its history when the user moves it to the phone and back. The one
+/// exception is a disabled user App rule: it does not claim its application (so Chrome's YouTube traffic still reaches
+/// the YouTube row); its traffic falls through to the domain rules and then to the same "app:x.exe" row.
 public sealed class UsageAttribution
 {
     public const string OtherKey = "other";
@@ -29,7 +31,12 @@ public sealed class UsageAttribution
     }
 
     public static UsageAttribution Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings) =>
-        new(RuleSet.BuildAll(catalog, settings));
+        new(RuleSet.BuildAll(catalog, settings with
+        {
+            // A disabled App rule routes nothing, so it must not claim its process ahead of the site rules; its traffic
+            // falls through to them and then to the same "app:x.exe" row, so no history is lost.
+            UserRules = [.. settings.UserRules.Where(r => r.Enabled || r.Type != UserRuleType.App)],
+        }));
 
     public string Resolve(string? processName, string? host)
     {
