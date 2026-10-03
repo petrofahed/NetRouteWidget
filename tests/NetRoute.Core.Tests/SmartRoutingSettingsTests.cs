@@ -158,4 +158,52 @@ public sealed class SmartRoutingSettingsTests : IDisposable
 
         Assert.Equal(7, loaded!.UsageRangeDays);
     }
+
+    [Fact]
+    public void A_settings_file_without_phone_rules_loads_with_none()
+    {
+        var loaded = System.Text.Json.JsonSerializer.Deserialize<SmartRoutingSettings>("""{"Enabled":true,"UserRules":[{"Type":0,"Value":"a.exe","Enabled":true}]}""");
+
+        Assert.Empty(loaded!.PhoneUserRules);
+        Assert.Single(loaded.UserRules);
+        Assert.True(loaded.IsValid());
+    }
+
+    [Fact]
+    public void Phone_rules_round_trip_replace_and_remove_independently_of_the_lan_rules()
+    {
+        var rule = new UserRule(UserRuleType.App, "claude.exe");
+        var s = new SmartRoutingSettings().WithUserRule(rule).WithPhoneUserRule(rule);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(s);
+        var back = System.Text.Json.JsonSerializer.Deserialize<SmartRoutingSettings>(json)!;
+
+        Assert.Equal(s, back);
+        Assert.Single(back.PhoneUserRules);
+
+        var toggled = back.WithPhoneUserRule(rule with { Enabled = false });
+        Assert.False(Assert.Single(toggled.PhoneUserRules).Enabled);
+        Assert.True(Assert.Single(toggled.UserRules).Enabled);
+
+        var removed = toggled.WithoutPhoneUserRule(rule);
+        Assert.Empty(removed.PhoneUserRules);
+        Assert.Single(removed.UserRules);
+    }
+
+    [Fact]
+    public void Phone_rules_take_part_in_equality_and_validity()
+    {
+        Assert.NotEqual(new SmartRoutingSettings(), new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "a.exe")));
+        Assert.False((new SmartRoutingSettings { PhoneUserRules = null! }).IsValid());
+        Assert.False(new SmartRoutingSettings { PhoneUserRules = [new UserRule(UserRuleType.App, " ")] }.IsValid());
+    }
+
+    [Fact]
+    public void A_phone_rule_has_its_own_id()
+    {
+        var rule = new UserRule(UserRuleType.Website, "Example.com");
+
+        Assert.Equal("user:website:example.com", UserRule.IdOf(rule));
+        Assert.Equal("phone-user:website:example.com", UserRule.PhoneIdOf(rule));
+    }
 }

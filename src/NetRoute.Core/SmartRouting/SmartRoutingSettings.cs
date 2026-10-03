@@ -10,6 +10,9 @@ public sealed partial record UserRule(UserRuleType Type, string Value, bool Enab
     public static string IdOf(UserRule rule) =>
         $"user:{rule.Type.ToString().ToLowerInvariant()}:{rule.Value.ToLowerInvariant()}";
 
+    /// Id of a rule in the phone list ("LAN + exceptions"): the prefix keeps it apart from the same app or site in the LAN list.
+    public static string PhoneIdOf(UserRule rule) => "phone-" + IdOf(rule);
+
     public static bool TryCreate(UserRuleType type, string raw, out UserRule? rule, out string? error)
     {
         rule = null;
@@ -62,6 +65,10 @@ public sealed record SmartRoutingSettings
     public IReadOnlyDictionary<string, bool> Items { get; init; } = new Dictionary<string, bool>();
     public IReadOnlyList<UserRule> UserRules { get; init; } = [];
 
+    /// The "LAN + exceptions" list: apps and websites the user sends through the PHONE while the LAN carries everything
+    /// else. (UserRules is the "Phone + exceptions" list, whose rules go through the LAN.)
+    public IReadOnlyList<UserRule> PhoneUserRules { get; init; } = [];
+
     /// Built-in items not mentioned in Items fall back to their catalog default (ON).
     public bool IsItemOn(RuleItem item) => Items.TryGetValue(item.Id, out var on) ? on : item.DefaultOn;
 
@@ -73,6 +80,12 @@ public sealed record SmartRoutingSettings
 
     public SmartRoutingSettings WithoutUserRule(UserRule rule) =>
         this with { UserRules = [.. UserRules.Where(r => !SameRule(r, rule))] };
+
+    public SmartRoutingSettings WithPhoneUserRule(UserRule rule) =>
+        this with { PhoneUserRules = [.. PhoneUserRules.Where(r => !SameRule(r, rule)), rule] };
+
+    public SmartRoutingSettings WithoutPhoneUserRule(UserRule rule) =>
+        this with { PhoneUserRules = [.. PhoneUserRules.Where(r => !SameRule(r, rule))] };
 
     /// True (with the updated settings) only when a LAN is present and its name differs from the saved one, so callers
     /// write the settings file on a change rather than on every status update.
@@ -86,8 +99,10 @@ public sealed record SmartRoutingSettings
 
     /// False for hand-edited or corrupt content that would crash later (null collections or rules, blank values, unknown rule types).
     public bool IsValid() =>
-        Items is not null && UserRules is not null
-        && UserRules.All(r => r is not null && !string.IsNullOrWhiteSpace(r.Value) && Enum.IsDefined(r.Type));
+        Items is not null && UserRules is not null && PhoneUserRules is not null
+        && UserRules.All(ValidRule) && PhoneUserRules.All(ValidRule);
+
+    static bool ValidRule(UserRule r) => r is not null && !string.IsNullOrWhiteSpace(r.Value) && Enum.IsDefined(r.Type);
 
     static bool SameRule(UserRule a, UserRule b) =>
         a.Type == b.Type && string.Equals(a.Value, b.Value, StringComparison.OrdinalIgnoreCase);
@@ -96,7 +111,8 @@ public sealed record SmartRoutingSettings
         other is not null && Enabled == other.Enabled && LastLanInterface == other.LastLanInterface && UsageRangeDays == other.UsageRangeDays
         && Items.Count == other.Items.Count
         && Items.All(kv => other.Items.TryGetValue(kv.Key, out var v) && v == kv.Value)
-        && UserRules.SequenceEqual(other.UserRules);
+        && UserRules.SequenceEqual(other.UserRules)
+        && PhoneUserRules.SequenceEqual(other.PhoneUserRules);
 
     public override int GetHashCode() => HashCode.Combine(Enabled, Items.Count, UserRules.Count);
 }

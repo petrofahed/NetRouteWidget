@@ -71,4 +71,93 @@ public class RuleSetTests
         Assert.Equal(new[] { "youtube", "user:app:qbittorrent.exe" }, all.Entries.Select(e => e.Id));
         Assert.Empty(enabled.Entries);
     }
+
+    static readonly IReadOnlyList<RuleItem> V4Catalog =
+    [
+        new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true),                                       // LAN exception
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], ["claude.ai"], true, RouteExit.Phone),                  // phone exception
+        new("vscode", "ai", "AI", "VS Code", ["Code.exe"], [], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    [Fact]
+    public void The_phone_profile_activates_the_lan_items_and_carve_outs_and_the_lan_rules()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new UserRule(UserRuleType.App, "qbittorrent.exe")],
+            PhoneUserRules = [new UserRule(UserRuleType.App, "ignored.exe")],
+        };
+
+        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Phone);
+
+        Assert.Equal(new[] { "youtube", "vscode-updates", "user:app:qbittorrent.exe" }, set.Entries.Select(e => e.Id));
+        Assert.All(set.Entries, e => Assert.Equal(RouteExit.Lan, e.Exit));
+    }
+
+    [Fact]
+    public void Carve_outs_come_first_in_the_lan_profile()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new UserRule(UserRuleType.App, "ignored.exe")],
+            PhoneUserRules = [new UserRule(UserRuleType.Website, "example.com")],
+        };
+
+        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+
+        // The update domain (LAN) is matched before the code.exe rule (phone), so a VS Code update never rides the phone.
+        Assert.Equal(new[] { "vscode-updates", "claude", "vscode", "phone-user:website:example.com" }, set.Entries.Select(e => e.Id));
+        Assert.Equal(new[] { RouteExit.Lan, RouteExit.Phone, RouteExit.Phone, RouteExit.Phone }, set.Entries.Select(e => e.Exit));
+        Assert.True(set.Entries[0].CarveOut);
+    }
+
+    [Fact]
+    public void Switched_off_items_and_disabled_rules_are_left_out_of_both_profiles()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            PhoneUserRules = [new UserRule(UserRuleType.App, "x.exe", Enabled: false)],
+        }.WithItem("claude", false).WithItem("vscode-updates", false);
+
+        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+
+        Assert.Equal(new[] { "vscode" }, set.Entries.Select(e => e.Id));
+    }
+
+    [Fact]
+    public void The_two_argument_build_is_the_phone_profile()
+    {
+        var settings = new SmartRoutingSettings();
+
+        Assert.Equal(
+            RuleSet.Build(V4Catalog, settings, RouteExit.Phone).Fingerprint,
+            RuleSet.Build(V4Catalog, settings).Fingerprint);
+    }
+
+    [Fact]
+    public void BuildAll_includes_both_lists_and_every_catalog_item()
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new UserRule(UserRuleType.App, "chrome.exe")],
+            PhoneUserRules = [new UserRule(UserRuleType.App, "chrome.exe")],
+        };
+
+        var all = RuleSet.BuildAll(V4Catalog, settings);
+
+        Assert.Equal(
+            new[] { "youtube", "claude", "vscode", "vscode-updates", "user:app:chrome.exe", "phone-user:app:chrome.exe" },
+            all.Entries.Select(e => e.Id));
+    }
+
+    [Fact]
+    public void The_fingerprint_changes_with_the_profile()
+    {
+        var settings = new SmartRoutingSettings();
+
+        Assert.NotEqual(
+            RuleSet.Build(V4Catalog, settings, RouteExit.Phone).Fingerprint,
+            RuleSet.Build(V4Catalog, settings, RouteExit.Lan).Fingerprint);
+    }
 }

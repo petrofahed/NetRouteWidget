@@ -2,7 +2,7 @@ namespace NetRoute.Core;
 
 /// Which usage row a connection counts under, and what each row is called. A connection counts under exactly one row,
 /// so the totals never double-count:
-///   1. a rule that lists the connection's application (a built-in item such as OneDrive, or a user App rule);
+///   1. a rule that lists the connection's application (a built-in item such as OneDrive, or a user App rule of either list);
 ///   2. otherwise a rule whose domains match the connection's host (YouTube, Facebook, a user Website rule);
 ///   3. otherwise the application itself ("app:chrome.exe");
 ///   4. otherwise "other".
@@ -14,6 +14,7 @@ public sealed class UsageAttribution
     public const string OtherKey = "other";
     public const string UnattributedKey = "unattributed";
     public const string AppPrefix = "app:";
+    const string PhonePrefix = "phone-";
     const string UserAppPrefix = "user:app:";
     const string UserWebsitePrefix = "user:website:";
 
@@ -26,7 +27,7 @@ public sealed class UsageAttribution
         _names = new Dictionary<string, string>();
         // User App rules are named after their file (see DisplayName), not with the ".exe". TryAdd: a hand-edited settings
         // file may list a rule twice.
-        foreach (var entry in all.Entries.Where(e => !e.Id.StartsWith(UserAppPrefix, StringComparison.Ordinal)))
+        foreach (var entry in all.Entries.Where(e => !BareId(e).StartsWith(UserAppPrefix, StringComparison.Ordinal)))
             _names.TryAdd(KeyOf(entry), entry.Name);
     }
 
@@ -36,6 +37,7 @@ public sealed class UsageAttribution
             // A disabled App rule routes nothing, so it must not claim its process ahead of the site rules; its traffic
             // falls through to them and then to the same "app:x.exe" row, so no history is lost.
             UserRules = [.. settings.UserRules.Where(r => r.Enabled || r.Type != UserRuleType.App)],
+            PhoneUserRules = [.. settings.PhoneUserRules.Where(r => r.Enabled || r.Type != UserRuleType.App)],
         }));
 
     public string Resolve(string? processName, string? host)
@@ -64,7 +66,14 @@ public sealed class UsageAttribution
     public static string RowKeyOf(UserRule rule) =>
         rule.Type == UserRuleType.App ? AppPrefix + rule.Value.ToLowerInvariant() : UserRule.IdOf(rule);
 
-    /// A user App rule shares the application row's key, so assigning or unassigning it never splits the history.
-    static string KeyOf(RuleEntry entry) =>
-        entry.Id.StartsWith(UserAppPrefix, StringComparison.Ordinal) ? AppPrefix + entry.Id[UserAppPrefix.Length..] : entry.Id;
+    /// The entry id without the phone-list prefix: the same app or site counts under one row whichever list holds its rule.
+    static string BareId(RuleEntry entry) =>
+        entry.Id.StartsWith(PhonePrefix, StringComparison.Ordinal) ? entry.Id[PhonePrefix.Length..] : entry.Id;
+
+    /// A user App rule (either list) shares the application row's key, so assigning or unassigning it never splits the history.
+    static string KeyOf(RuleEntry entry)
+    {
+        var id = BareId(entry);
+        return id.StartsWith(UserAppPrefix, StringComparison.Ordinal) ? AppPrefix + id[UserAppPrefix.Length..] : id;
+    }
 }

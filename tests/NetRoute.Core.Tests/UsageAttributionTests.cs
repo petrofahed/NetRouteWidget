@@ -115,4 +115,56 @@ public class UsageAttributionTests
         Assert.Equal("gone.com", a.DisplayName("user:website:gone.com"));
         Assert.Equal("removed-item", a.DisplayName("removed-item"));
     }
+
+    static readonly IReadOnlyList<RuleItem> V4Catalog =
+    [
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], ["claude.ai"], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    [Fact]
+    public void Phone_exception_items_have_their_own_row_in_both_profiles()
+    {
+        var attribution = UsageAttribution.Build(V4Catalog, new SmartRoutingSettings());
+
+        Assert.Equal("claude", attribution.Resolve("claude.exe", "claude.ai"));
+        Assert.Equal("vscode-updates", attribution.Resolve("code.exe", "update.code.visualstudio.com"));
+        Assert.Equal("Claude", attribution.DisplayName("claude"));
+    }
+
+    [Fact]
+    public void The_same_app_in_both_lists_has_distinct_entry_ids_and_one_usage_row()
+    {
+        var rule = new UserRule(UserRuleType.App, "chrome.exe");
+        var settings = new SmartRoutingSettings().WithUserRule(rule).WithPhoneUserRule(rule);
+
+        var all = RuleSet.BuildAll(V4Catalog, settings);
+        var attribution = UsageAttribution.Build(V4Catalog, settings);
+
+        Assert.Equal(2, all.Entries.Count(e => e.Name == "chrome.exe"));
+        Assert.Equal(all.Entries.Count, all.Entries.Select(e => e.Id).Distinct().Count());
+        Assert.Equal("app:chrome.exe", attribution.Resolve("Chrome.exe", "example.com"));
+        Assert.Equal("chrome", attribution.DisplayName("app:chrome.exe"));
+        Assert.Equal("app:chrome.exe", UsageAttribution.RowKeyOf(rule));
+    }
+
+    [Fact]
+    public void A_phone_website_rule_counts_under_the_same_row_as_a_lan_website_rule()
+    {
+        var rule = new UserRule(UserRuleType.Website, "example.com");
+        var attribution = UsageAttribution.Build(V4Catalog, new SmartRoutingSettings().WithPhoneUserRule(rule));
+
+        Assert.Equal("user:website:example.com", attribution.Resolve("chrome.exe", "www.example.com"));
+        Assert.Equal("example.com", attribution.DisplayName("user:website:example.com"));
+    }
+
+    [Fact]
+    public void A_disabled_phone_app_rule_does_not_claim_its_application()
+    {
+        var settings = new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "chrome.exe", Enabled: false));
+        var attribution = UsageAttribution.Build(V4Catalog, settings);
+
+        Assert.Equal("vscode-updates", attribution.Resolve("chrome.exe", "update.code.visualstudio.com"));
+        Assert.Equal("app:chrome.exe", attribution.Resolve("chrome.exe", "example.com"));
+    }
 }
