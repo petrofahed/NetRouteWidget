@@ -31,13 +31,27 @@ Keep data-hungry traffic off 4G while the PC uses the phone:
   - Cloud sync: OneDrive, Google Drive, Dropbox, iCloud
   - Video & social: YouTube, Facebook, Instagram
   - Game launchers: Steam, Epic, Battle.net, Xbox
+  - AI & dev tool updates (always LAN): VS Code, Claude and Codex updates (see Profiles below)
 - **Your own rules:** add any app (`.exe`) or website (subdomains are included).
-- **How it works:** matching traffic goes through the LAN. If the LAN is down it **waits**, and a popup offers "Use phone until LAN is back".
+- **How it works:** in the default **Phone + exceptions** profile, matching traffic goes through the LAN. If the LAN is down it **waits**, and a popup offers "Use phone until LAN is back". The other profile does the opposite, see Profiles below.
 - **What it saves:** the card and the ⚙ page show how much was kept off 4G today.
 - **Speed test:** ⏱ on the card measures both connections (about 5 MB of mobile data).
 - **Live speed on the card:** while Smart routing runs, the card shows the current total speed through the phone and through the LAN (all applications together, over the last ~3 seconds, shown only above 1 KB/s) next to each latency. It measures what passes through Smart routing, so nothing is shown while Smart routing is off.
 
-Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights and runs in Phone and LAN modes and pauses in Auto mode. LAN-only items wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
+Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights, runs in Phone and LAN modes and pauses in Auto mode. Items that go through the LAN wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
+
+## Profiles (v4)
+
+Smart routing has two **profiles**, and the card's **Phone** and **LAN** buttons switch between them (the tooltips say "Phone + exceptions" and "LAN + exceptions"). **Auto** still pauses Smart routing.
+
+- **Phone + exceptions** (Phone button): everything uses the phone, except the items on the first list (updates, cloud sync, video, game launchers, your own LAN rules), which go through the LAN. This is the Smart routing described above.
+- **LAN + exceptions** (LAN button): everything uses the LAN, except the items on the second list, which go through the **phone**. If the LAN is unplugged, other traffic falls back to the phone, as in plain LAN mode. The phone exceptions are not affected.
+- **Starting phone list**, each item with its own switch and all on by default: Claude / Claude Code, OpenAI / ChatGPT, Codex, Visual Studio Code, GitHub Copilot, Gemini, Cursor, Perplexity, and Omantel (`omantel.om`, so every `*.omantel.om` site).
+- **Update items always use the LAN:** VS Code updates, Claude updates and Codex updates are separate items, and they stay on the LAN in both profiles so big downloads never use mobile data. They are matched before the phone list, so a VS Code update is not caught by the Visual Studio Code item. In LAN + exceptions the other LAN-list items (YouTube, OneDrive, Steam and so on) are **not** active, only these update items; like any LAN item they wait while the LAN is down (the "waiting" popup can appear for them), while plain traffic and the phone exceptions never wait.
+- **Config tab:** an **Editing:** selector (Phone + exceptions | LAN + exceptions) chooses which list you are looking at; the active profile is marked, and you can edit the other list without switching. Adding an app or website adds it to the list you are editing.
+- **Usage tab:** right-click a row and choose **Send to exception** or **Exclude from exception**. It edits the active profile's list, the same one the Config tab shows, and an exception row carries a tag showing where it goes (`→ LAN` or `→ phone`). The menu is available while Smart routing is running.
+- **Switching restarts Smart routing for about a second**, because the rules change; connections that are open at that moment are reset.
+- **Best guesses:** the built-in process names and update domains are best guesses, not a guarantee. Check the Usage tab to see what really goes where; if one is wrong, fix it with **Edit rules file…** on the Config tab (`rules.user.json`, below) or in `rules\builtin.json`.
 
 ## Editing the lists
 
@@ -56,7 +70,7 @@ The ⚙ window has two tabs, **Usage** and **Config**. Config is the Smart routi
 - **Measured through Smart routing,** so history only grows while it is running. Traffic to your home devices and anything while Smart routing is off is not counted.
 - **Phone and LAN columns** per application or site, for **Today, 3, 7, 15 or 30 days** (click a column header to sort; the default is Phone, largest first). Two live columns, **Now phone** and **Now LAN**, show the current speed on each connection over the last ~3 seconds (shown only above 1 KB/s, otherwise a dash).
 - **Filter box:** type part of a name (for example `youtube`) to narrow the list and its totals to the matching applications and sites; Esc clears it.
-- **The Usage tab only shows the numbers.** To keep an application or site off 4G (or let it use the phone again), change its rule on the Config tab.
+- **Right-click a row** to **Send to exception** or **Exclude from exception** for the active profile (in Phone + exceptions that keeps it off 4G, in LAN + exceptions it makes it use the phone). Rows that are exceptions show a tag (`→ LAN` or `→ phone`). Rules can also be changed on the Config tab, and the numbers themselves are never changed.
 - **Unattributed:** connections that open and close between two one-second checks cannot be tied to an application, so they appear in an **Unattributed** row and the column totals stay right. The footer also shows the **exact phone adapter total** from Windows, to compare with the Phone column.
 - **Stored in `%AppData%\NetRouteWidget\usage.json`** for 35 days: only application names and byte totals, never URLs. **Clear usage history…** (Config tab) deletes it. The "kept off 4G" figure comes from this file too.
 - **Check the accuracy on your PC:** with Smart routing on and a quiet connection, run `tools\Check-UsageAccuracy.ps1`. It downloads a known amount and passes if the recorded growth is within 10 %. It only reads `usage.json`.
@@ -110,5 +124,7 @@ dotnet run --project src/NetRoute.App
 - **v1:** Phone / LAN / Auto switch for the internet path, with local access preserved, auto-heal and a break-glass restore ✅
 - **v2:** Smart routing. Keep data-hungry traffic (updates, cloud sync, game downloads, YouTube/social, and your own apps and sites) off 4G by sending it over the LAN, plus an on-demand speed test. See [the v2 spec](docs/superpowers/specs/2026-10-02-netroute-v2-smart-routing-design.md).
 - **v3:** A Usage tab: Phone and LAN use per application, date ranges, and live "Now phone" and "Now LAN" speed columns. It is a read-only view; rules are changed on the Config tab. See [the v3 spec](docs/superpowers/specs/2026-10-02-netroute-v3-usage-and-routing-design.md).
+
+- **v4:** Smart routing profiles: the Phone / LAN buttons choose which connection carries everything else; each profile has its own exception list (AI tools and Omantel go through the phone in LAN + exceptions; update downloads always use the LAN), a Usage-tab right-click menu to move rows in and out of the exceptions, and a user rules file merged over the built-in lists. See [the v4 spec](docs/superpowers/specs/2026-10-03-netroute-v4-profiles-design.md).
 
 Design: [docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md](docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md)

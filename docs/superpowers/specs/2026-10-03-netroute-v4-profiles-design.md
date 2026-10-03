@@ -1,6 +1,6 @@
 # NetRoute Widget v4 — Smart routing profiles (design)
 
-**Status:** Draft for review. Design approved in conversation on 2026-10-03; this file is the written spec to approve before a plan is written.
+**Status:** Implemented on branch feat/v2-smart-routing; waiting for the user's on-machine verification.
 **Builds on:** v3 (`feat/v2-smart-routing`): Usage tab, live speed on the card, running-balance accounting.
 
 ## Goal
@@ -25,8 +25,8 @@ In **LAN + exceptions** the exceptions are the AI tools and the user's ISP site,
 ## Behaviour
 
 - **Active exceptions follow the mode.** Mode Phone → the LAN list is active (items → LAN, waiting for the LAN if it is unplugged, as today). Mode LAN → the phone list is active (items → phone, always). The inactive list is stored and shown but produces no sing-box rules.
-- **Update items are carve-outs and are active in both profiles.** They are LAN-exit items flagged `"carveOut": true`. In *LAN + exceptions* they are active together with the phone list and are matched **before** it, so e.g. a VS Code update download (domain rule → LAN) wins over the `code.exe` process rule (→ phone). In *Phone + exceptions* they are plain LAN items. Carve-outs are domain-only (no process match), so they apply to whichever process fetches the update. Like any LAN-exit rule they wait for the LAN if it is unplugged (a big download must not fall onto 4G).
-- **LAN + exceptions, LAN unplugged / no gateway:** unmatched traffic falls back to the phone exactly as LAN mode does today (`WantedExit`); phone exceptions are unaffected. No waiting popup (nothing waits for the LAN in this profile).
+- **Update items are carve-outs and are active in both profiles.** They are LAN-exit items flagged `"carveOut": true`. In *LAN + exceptions* they are active together with the phone list and are matched **before** it, so e.g. a VS Code update download (domain rule → LAN) wins over the `code.exe` process rule (→ phone). In *Phone + exceptions* they are plain LAN items. Carve-outs are domain-only (no process match), so they apply to whichever process fetches the update. Like any LAN-exit rule they wait for the LAN if it is unplugged (a big download must not fall onto 4G). In *LAN + exceptions* the Phone-list (LAN) items of the other profile (YouTube, OneDrive, Steam, ...) are **inactive**: only the carve-outs, the phone items and the phone user rules produce rules.
+- **LAN + exceptions, LAN unplugged / no gateway:** unmatched traffic falls back to the phone exactly as LAN mode does today (`WantedExit`); phone exceptions are unaffected. The only LAN-exit rules active in this profile are the update carve-outs, so they are the only thing that can wait for the LAN: the "waiting for LAN" popup can still appear for them, while plain unmatched traffic and phone exceptions never wait.
 - **Switching profile = mode change.** The rule set changes, so sing-box restarts for about a second, same as a rule change. Open connections move (the selectors already interrupt existing connections).
 - **Phone lost:** unchanged — Smart routing becomes Unavailable and v1 falls back to the LAN.
 - **Existing users:** no migration. Settings and rules saved today are the *Phone + exceptions* list. New built-in phone items appear ON.
