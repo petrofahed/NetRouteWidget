@@ -14,7 +14,9 @@ namespace NetRoute.App;
 /// are away from the list and no row menu is open, or right after the user clicked a column header.
 public partial class UsageTab : UserControl
 {
-    const double ByteWidth = 84, NowWidth = 96;
+    // Column widths and the inner gutters: text sits NameInset from the left edge of the name cell and CellInset from the right edge
+    // of a number cell, in the header, the rows and the totals alike, so the three line up.
+    const double ByteWidth = 92, NowWidth = 108, NameInset = 10, CellInset = 14;
 
     readonly Dictionary<int, ToggleButton> _rangeButtons = new();
     readonly Dictionary<UsageSortColumn, Button> _headers = new();
@@ -22,6 +24,7 @@ public partial class UsageTab : UserControl
     readonly TextBlock _totalLabel = new(), _totalPhone = new(), _totalLan = new();
     List<string> _order = [];
     UsageSort _sort = UsageSort.Default;
+    UsageSort? _headerSort; // the sort the header labels currently show
     bool _forceReorder;
 
     public UsageTab()
@@ -97,6 +100,8 @@ public partial class UsageTab : UserControl
             }
             _order = next.ToList();
         }
+        // The last row has no line under it: the totals band has its own line.
+        for (var i = 0; i < _order.Count; i++) _rows[_order[i]].SetLast(i == _order.Count - 1);
 
         _totalLabel.Text = model.Filtered ? "Total (filtered)" : "Total";
         _totalPhone.Text = ByteFormat.Human(model.PhoneTotal);
@@ -113,7 +118,7 @@ public partial class UsageTab : UserControl
     void MatchScrollBarWidth()
     {
         var bar = Math.Max(0, RowScroll.ActualWidth - RowScroll.ViewportWidth);
-        HeaderGrid.Margin = new Thickness(0, 12, bar, 0);
+        HeaderGrid.Margin = new Thickness(0, 0, bar, 0);
         TotalGrid.Margin = new Thickness(0, 0, bar, 0);
     }
 
@@ -121,14 +126,14 @@ public partial class UsageTab : UserControl
     {
         RangeBar.Children.Add(Secondary(new TextBlock
         {
-            Text = "Show usage for:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0),
+            Text = "Show usage for:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0),
         }));
         foreach (var days in UsageReport.Ranges)
         {
             var chosen = days;
             var button = new ToggleButton
             {
-                Content = UsageReport.RangeLabel(days), Padding = new Thickness(10, 3, 10, 3), Margin = new Thickness(0, 0, 4, 0),
+                Content = UsageReport.RangeLabel(days), Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 6, 0),
             };
             button.Click += (_, _) =>
             {
@@ -158,9 +163,11 @@ public partial class UsageTab : UserControl
     {
         var button = new Button
         {
-            Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(6, 2, 6, 2),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), FontSize = 12,
+            Padding = align == HorizontalAlignment.Left ? new Thickness(NameInset, 4, 6, 4) : new Thickness(6, 4, CellInset, 4),
             HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = align, FontWeight = FontWeights.SemiBold, ToolTip = tooltip,
         };
+        button.SetResourceReference(Control.ForegroundProperty, "TextSecondary");
         button.Click += (_, _) =>
         {
             _sort = _sort.Click(column);
@@ -173,8 +180,11 @@ public partial class UsageTab : UserControl
         HeaderGrid.Children.Add(button);
     }
 
+    /// The active sort column is in the primary text colour with its arrow, the others in the secondary one. Only touched when the sort changes.
     void UpdateHeaders()
     {
+        if (_headerSort == _sort) return;
+        _headerSort = _sort;
         foreach (var (column, button) in _headers)
         {
             var label = column switch
@@ -186,6 +196,7 @@ public partial class UsageTab : UserControl
                 _ => "Now LAN",
             };
             button.Content = column == _sort.Column ? $"{label} {(_sort.Descending ? "▼" : "▲")}" : label;
+            button.SetResourceReference(Control.ForegroundProperty, column == _sort.Column ? "TextPrimary" : "TextSecondary");
         }
     }
 
@@ -194,9 +205,9 @@ public partial class UsageTab : UserControl
         DefineColumns(TotalGrid);
         _totalLabel.Text = "Total";
         _totalLabel.FontWeight = FontWeights.SemiBold;
-        _totalLabel.Margin = new Thickness(6, 0, 0, 0);
+        _totalLabel.Margin = new Thickness(NameInset, 0, 0, 0);
         _totalPhone.HorizontalAlignment = _totalLan.HorizontalAlignment = HorizontalAlignment.Right;
-        _totalPhone.Margin = _totalLan.Margin = new Thickness(0, 0, 6, 0);
+        _totalPhone.Margin = _totalLan.Margin = new Thickness(0, 0, CellInset, 0);
         _totalPhone.FontWeight = _totalLan.FontWeight = FontWeights.SemiBold;
         Grid.SetColumn(_totalPhone, 1);
         Grid.SetColumn(_totalLan, 2);
@@ -225,23 +236,28 @@ public partial class UsageTab : UserControl
     /// One row of the list. Created once per row key and then only updated.
     sealed class RowView
     {
-        readonly Grid _grid = new() { Background = Brushes.Transparent }; // transparent: the whole row is hit-testable, so the list counts as "under the mouse"
-        readonly TextBlock _name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 0, 0, 0) };
+        // Transparent, not null: the whole row is hit-testable, so the list counts as "under the mouse"; hovering swaps in the highlight.
+        readonly Border _root = new() { Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Margin = new Thickness(0, 1, 0, 1) };
+        readonly Grid _grid = new() { MinHeight = 32 };
+        readonly Border _separator = new() { Height = 1, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(NameInset, 0, NameInset, 0), IsHitTestVisible = false };
+        readonly TextBlock _name = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(NameInset, 0, 0, 0) };
         readonly TextBlock _tagText = new() { FontSize = 11 };
         readonly Border _tag = new()
         {
-            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Padding = new Thickness(5, 0, 5, 0),
-            Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 1, 6, 1),
+            Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
         };
         readonly MenuItem _menuItem = new();
-        readonly TextBlock _phone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        readonly TextBlock _lan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        readonly TextBlock _nowPhone = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-        readonly TextBlock _nowLan = new() { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        readonly TextBlock _phone = Number(), _lan = Number(), _nowPhone = Number(), _nowLan = Number();
+        bool _hovered;
 
         public RowView(string key, Action<string> toggle)
         {
             DefineColumns(_grid);
+            _root.Child = _grid;
+            // The two catch-all rows are not applications: dim their names.
+            _name.SetResourceReference(TextBlock.ForegroundProperty, key is UsageAttribution.OtherKey or UsageAttribution.UnattributedKey ? "TextSecondary" : "TextPrimary");
+            _separator.SetResourceReference(Border.BackgroundProperty, "CardBorder");
             _tagText.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
             _tag.SetResourceReference(Border.BorderBrushProperty, "Accent");
             _tag.Child = _tagText;
@@ -253,19 +269,26 @@ public partial class UsageTab : UserControl
             _menuItem.Click += (_, _) => toggle(key);
             var menu = new ContextMenu();
             menu.Items.Add(_menuItem);
-            menu.Opened += (_, _) => MenuOpen = true;
-            menu.Closed += (_, _) => MenuOpen = false;
-            _grid.ContextMenu = menu;
+            menu.Opened += (_, _) => { MenuOpen = true; UpdateHover(); };
+            menu.Closed += (_, _) => { MenuOpen = false; UpdateHover(); };
+            _root.ContextMenu = menu;
+            _root.MouseEnter += (_, _) => UpdateHover();
+            _root.MouseLeave += (_, _) => UpdateHover();
             Place(_phone, 1);
             Place(_lan, 2);
             Place(_nowPhone, 3);
             Place(_nowLan, 4);
+            Grid.SetColumnSpan(_separator, 5);
+            _grid.Children.Add(_separator);
         }
 
-        public UIElement Root => _grid;
+        public UIElement Root => _root;
 
         /// True while this row's context menu is showing: the list must not reorder under it.
         public bool MenuOpen { get; private set; }
+
+        /// The line under a row; the last row of the list has none.
+        public void SetLast(bool last) => _separator.Visibility = last ? Visibility.Collapsed : Visibility.Visible;
 
         public void Apply(UsageReportRow row)
         {
@@ -282,11 +305,31 @@ public partial class UsageTab : UserControl
             ApplyRate(_nowLan, row.Now?.LanBytesPerSecond ?? 0);
         }
 
-        /// Active speeds use the accent colour, idle ones the dimmed text colour.
+        /// The row is highlighted while the mouse is over it or its menu is open.
+        void UpdateHover()
+        {
+            var on = _root.IsMouseOver || MenuOpen;
+            if (on == _hovered) return;
+            _hovered = on;
+            if (on) _root.SetResourceReference(Border.BackgroundProperty, "ButtonBackground");
+            else _root.Background = Brushes.Transparent; // replaces the reference; transparent keeps the row hit-testable
+        }
+
+        static TextBlock Number() => new()
+        {
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, CellInset, 0),
+        };
+
+        /// Active speeds use the accent colour, idle ones the dimmed text colour. Only re-pointed when the state flips.
         static void ApplyRate(TextBlock cell, long bytesPerSecond)
         {
             cell.Text = UsageReport.NowText(bytesPerSecond);
-            cell.SetResourceReference(TextBlock.ForegroundProperty, bytesPerSecond > 0 ? "Accent" : "TextSecondary");
+            var key = bytesPerSecond > 0 ? "Accent" : "TextSecondary";
+            if (!ReferenceEquals(cell.Tag, key))
+            {
+                cell.Tag = key;
+                cell.SetResourceReference(TextBlock.ForegroundProperty, key);
+            }
         }
 
         void Place(UIElement element, int column)
