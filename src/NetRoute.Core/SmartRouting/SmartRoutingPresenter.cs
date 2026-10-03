@@ -35,7 +35,9 @@ public static class SmartRoutingPresenter
         SmartState.Faulted => new(string.IsNullOrEmpty(s.Detail) ? $"⚠ {s.Message}" : $"⚠ {s.Message} — {s.Detail}", SmartTone.Warning),
         _ when s.Waiting => new("⏸ LAN-only traffic waiting (LAN offline)", SmartTone.Warning),
         _ when s.LanRulesOnPhone => new("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
-        _ => new($"⚡ Smart routing ON · {s.RuleCount} rules · {ByteFormat.Human(s.Today.Total)} kept off 4G today", SmartTone.Normal),
+        _ when s.Profile == RouteExit.Lan =>
+            new($"⚡ Smart routing ON · LAN + exceptions · {s.RuleCount} rules", SmartTone.Normal),
+        _ => new($"⚡ Smart routing ON · Phone + exceptions · {s.RuleCount} rules · {ByteFormat.Human(s.Today.Total)} kept off 4G today", SmartTone.Normal),
     };
 
     public static string WaitingText(IReadOnlyList<string> names) =>

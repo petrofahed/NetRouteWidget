@@ -6,7 +6,7 @@ public enum SmartState { Off, Unavailable, Starting, Running, Faulted }
 
 public sealed record SmartRoutingStatus(
     SmartState State, string? Message, RouteExit DefaultExit, bool LanRulesOnPhone, bool LanOnline,
-    IReadOnlyList<string> WaitingNames, int RuleCount, DailyStats Today, string? Detail = null)
+    IReadOnlyList<string> WaitingNames, int RuleCount, DailyStats Today, string? Detail = null, RouteExit Profile = RouteExit.Phone)
 {
     public bool IsActive => State == SmartState.Running;
     public bool Waiting => WaitingNames.Count > 0;
@@ -145,7 +145,7 @@ public sealed class SmartRoutingController
                     _lanBackToastPending = false;
                 }
                 _lastEnabled = smart.Enabled;
-                _rules = RuleSet.Build(_catalog, smart);
+                _rules = RuleSet.Build(_catalog, smart, ProfileOf(net));
                 _attribution = UsageAttribution.Build(_catalog, smart);
                 UpdateLanHealth(net);
 
@@ -439,6 +439,9 @@ public sealed class SmartRoutingController
         _ => net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone,
     };
 
+    /// The Smart routing profile is the routing mode: LAN mode = "LAN + exceptions", Phone (and Auto, which pauses) = "Phone + exceptions".
+    static RouteExit ProfileOf(NetworkStatus? net) => net?.Mode == RoutingMode.Lan ? RouteExit.Lan : RouteExit.Phone;
+
     /// A saved or last-known name equal to the phone's would bind the "lan" outbound to the phone: use the placeholder instead.
     string LanName(NetworkStatus net)
     {
@@ -614,7 +617,7 @@ public sealed class SmartRoutingController
             : [];
 
         Status = new SmartRoutingStatus(state, message, _appliedExit, _lanRulesOnPhone, _lanOnline, waiting,
-            _rules.Entries.Count, _usage.TodayKept(Today()), state == SmartState.Faulted ? _lastCrashDetail : null);
+            _rules.Entries.Count, _usage.TodayKept(Today()), state == SmartState.Faulted ? _lastCrashDetail : null, ProfileOf(_net));
         Raise(StatusChanged, Status);
 
         if (waiting.Count == 0 || _popupRaised || _keepWaiting) return;

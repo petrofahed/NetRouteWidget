@@ -27,7 +27,7 @@ public class SmartRoutingPresenterTests
     {
         var stats = new DailyStats(NoStats.Day, new Dictionary<string, long> { ["youtube"] = 1_288_490_189 });
 
-        Assert.Equal(new SmartRow("⚡ Smart routing ON · 4 rules · 1.2 GB kept off 4G today", SmartTone.Normal),
+        Assert.Equal(new SmartRow("⚡ Smart routing ON · Phone + exceptions · 4 rules · 1.2 GB kept off 4G today", SmartTone.Normal),
             SmartRoutingPresenter.Row(Status(today: stats)));
         Assert.Equal(new SmartRow("⚡ Smart routing off", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Off)));
         Assert.Equal(new SmartRow("⚡ Smart routing starting…", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Starting)));
@@ -40,6 +40,15 @@ public class SmartRoutingPresenterTests
         Assert.Equal(new SmartRow("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(lanRulesOnPhone: true)));
     }
+
+    [Fact]
+    public void The_lan_profile_row_names_the_profile_and_omits_the_kept_figure()
+    {
+        Assert.Equal(new SmartRow("⚡ Smart routing ON · LAN + exceptions · 9 rules", SmartTone.Normal), SmartRoutingPresenter.Row(LanProfileStatus(9)));
+    }
+
+    static SmartRoutingStatus LanProfileStatus(int rules) =>
+        new(SmartState.Running, null, RouteExit.Lan, false, true, [], rules, new DailyStats(new DateOnly(2026, 10, 3), new Dictionary<string, long>()), Profile: RouteExit.Lan);
 
     [Fact]
     public void Faulted_row_appends_the_detail_when_there_is_one()

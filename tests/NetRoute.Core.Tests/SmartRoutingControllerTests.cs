@@ -16,9 +16,17 @@ public class SmartRoutingControllerTests
     readonly List<string> _notes = new();
     readonly List<string> _logs = new();
 
-    SmartRoutingController Create(Func<int>? freePort = null, IAdapterCounters? counters = null, UsageSnapshot? restored = null)
+    static readonly IReadOnlyList<RuleItem> V4Catalog =
+    [
+        new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true),
+        new("claude", "ai", "AI", "Claude", ["claude.exe"], ["claude.ai"], true, RouteExit.Phone),
+        new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
+    ];
+
+    SmartRoutingController Create(Func<int>? freePort = null, IAdapterCounters? counters = null, UsageSnapshot? restored = null,
+                                  IReadOnlyList<RuleItem>? catalog = null)
     {
-        var c = new SmartRoutingController(Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters);
+        var c = new SmartRoutingController(catalog ?? Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters);
         c.WaitingDetected += _popups.Add;
         c.Notify += _notes.Add;
         return c;
@@ -896,15 +904,16 @@ public class SmartRoutingControllerTests
     [Fact]
     public async Task Lan_only_waiting_still_works_in_lan_mode()
     {
-        var c = Create();
+        // The LAN-only traffic in the LAN profile is the carve-out (rule index 3, matched before the phone entries).
+        var c = Create(catalog: V4Catalog);
         await c.ApplyAsync(Net(RoutingMode.Lan), On());
         await c.ApplyAsync(Net(RoutingMode.Lan, lanMs: null), On());
         _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
 
-        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync("+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[3] domain_suffix=update.code.visualstudio.com => route(lan-only)");
         await c.ProcessLineAsync(FailLanOnly);
 
-        Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
+        Assert.Equal(new[] { "VS Code updates" }, Assert.Single(_popups));
         Assert.Empty(_api.Selects); // nothing was moved to the phone
     }
 
@@ -1202,5 +1211,81 @@ public class SmartRoutingControllerTests
 
         Assert.Equal(700, c.Status.Today.Total);
         Assert.Equal(700, c.Status.Today.BytesByEntry["youtube"]);
+    }
+
+    // ---- profiles (v4) ----
+
+    [Fact]
+    public async Task Phone_mode_runs_the_lan_exceptions_and_the_carve_outs()
+    {
+        var c = Create(catalog: V4Catalog);
+
+        await c.ApplyAsync(Net(RoutingMode.Phone), On());
+
+        var json = Assert.Single(_host.Starts);
+        Assert.Contains("youtube.com", json);
+        Assert.Contains("update.code.visualstudio.com", json);
+        Assert.DoesNotContain("claude.ai", json);
+        Assert.Equal(RouteExit.Phone, c.Status.Profile);
+        Assert.Equal(2, c.Status.RuleCount);
+    }
+
+    [Fact]
+    public async Task Switching_to_lan_mode_restarts_with_the_phone_rules()
+    {
+        var c = Create(catalog: V4Catalog);
+        await c.ApplyAsync(Net(RoutingMode.Phone), On());
+
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+
+        Assert.Equal(2, _host.Starts.Count);
+        var json = _host.Starts[^1];
+        Assert.Contains("claude.ai", json);
+        Assert.Contains("update.code.visualstudio.com", json); // the carve-out is active in both profiles
+        Assert.DoesNotContain("youtube.com", json);            // a LAN exception is pointless when everything is LAN
+        Assert.Equal(RouteExit.Lan, c.Status.Profile);
+        Assert.Equal(SmartState.Running, c.Status.State);
+    }
+
+    [Fact]
+    public async Task Switching_back_to_phone_mode_restores_the_lan_rules()
+    {
+        var c = Create(catalog: V4Catalog);
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+
+        await c.ApplyAsync(Net(RoutingMode.Phone), On());
+
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Contains("youtube.com", _host.Starts[^1]);
+        Assert.DoesNotContain("claude.ai", _host.Starts[^1]);
+    }
+
+    [Fact]
+    public async Task Lan_profile_with_the_lan_unplugged_heals_to_the_phone_and_never_waits()
+    {
+        var c = Create(catalog: V4Catalog);
+
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false), On());
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay + TimeSpan.FromSeconds(1));
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false), On());
+
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit); // unmatched traffic heals onto the phone, as LAN mode does today
+        Assert.Contains("claude.ai", _host.Starts[^1]);       // the phone exceptions are still there
+        Assert.Empty(_popups);
+        Assert.Empty(c.Status.WaitingNames);
+    }
+
+    [Fact]
+    public async Task A_rule_edit_in_the_inactive_list_does_not_restart_sing_box()
+    {
+        var c = Create(catalog: V4Catalog);
+        var settings = On();
+        await c.ApplyAsync(Net(RoutingMode.Phone), settings);
+
+        var edited = new AppSettings { SmartRouting = settings.SmartRouting.WithPhoneUserRule(new UserRule(UserRuleType.App, "x.exe")) };
+        await c.ApplyAsync(Net(RoutingMode.Phone), edited);
+
+        Assert.Single(_host.Starts); // the phone list is inactive in the Phone profile
     }
 }
