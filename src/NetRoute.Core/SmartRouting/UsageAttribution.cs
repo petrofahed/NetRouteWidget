@@ -52,6 +52,11 @@ public sealed class UsageAttribution
         return key.StartsWith(UserWebsitePrefix, StringComparison.Ordinal) ? key[UserWebsitePrefix.Length..] : key;
     }
 
+    /// The usage row key of a user rule, as Resolve counts it: an App rule is the application row ("app:x.exe"), a Website
+    /// rule keeps its own id.
+    public static string RowKeyOf(UserRule rule) =>
+        rule.Type == UserRuleType.App ? AppPrefix + rule.Value.ToLowerInvariant() : UserRule.IdOf(rule);
+
     /// A user App rule shares the application row's key, so assigning or unassigning it never splits the history.
     static string KeyOf(RuleEntry entry) =>
         entry.Id.StartsWith(UserAppPrefix, StringComparison.Ordinal) ? AppPrefix + entry.Id[UserAppPrefix.Length..] : entry.Id;

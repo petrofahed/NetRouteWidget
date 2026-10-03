@@ -107,6 +107,22 @@ public class SmartRoutingPresenterTests
     }
 
     [Fact]
+    public void Page_shows_user_app_rule_bytes_under_the_usage_row_key_and_website_rules_under_theirs()
+    {
+        var settings = new SmartRoutingSettings { Enabled = true }
+            .WithUserRule(new UserRule(UserRuleType.App, "qBittorrent.exe"))
+            .WithUserRule(new UserRule(UserRuleType.Website, "dropbox.com"));
+        var stats = new DailyStats(NoStats.Day, new Dictionary<string, long>
+        {
+            ["app:qbittorrent.exe"] = 700, ["user:website:dropbox.com"] = 7, ["user:app:qbittorrent.exe"] = 99999,
+        });
+
+        var page = SmartRoutingPage.Build(Catalog, settings, Status(today: stats));
+
+        Assert.Equal(new[] { 700L, 7L }, page.UserRules.Select(r => r.TodayBytes));
+    }
+
+    [Fact]
     public void Can_use_phone_only_while_running_with_lan_offline()
     {
         var offline = Status() with { LanOnline = false };

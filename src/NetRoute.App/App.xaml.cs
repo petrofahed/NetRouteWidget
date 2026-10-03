@@ -303,7 +303,16 @@ public partial class App : Application
                 if (suppressed > 0) log.Info($"sing-box: {suppressed} more error/warning lines suppressed");
                 log.Info("sing-box: " + line);
             };
-            var usage = UsageStore.Load(AppPaths.UsageFile, DateOnly.FromDateTime(DateTime.Now));
+            UsageLoadResult usage;
+            try
+            {
+                usage = UsageStore.Load(AppPaths.UsageFile, DateOnly.FromDateTime(DateTime.Now));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.Error("usage.json could not be loaded", ex); // a usage-file problem must never disable Smart routing
+                usage = new UsageLoadResult(UsageSnapshot.Empty, true); // as unreadable: never overwritten this session
+            }
             _usageUnreadable = usage.Unreadable;
             if (usage.Unreadable) log.Error("usage.json could not be read; usage is kept in memory only this session and NOT saved");
             var smart = new SmartRoutingController(

@@ -70,7 +70,7 @@ public partial class UsageTab : UserControl
             view.Apply(row);
         }
 
-        var freeze = !_forceReorder && (Rows.IsMouseOver || Rows.IsKeyboardFocusWithin || _rows.Values.Any(v => v.DropDownOpen));
+        var freeze = !_forceReorder && (RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin || _rows.Values.Any(v => v.DropDownOpen));
         _forceReorder = false;
         var next = UsageRowOrder.Next(_order, model.Rows.Select(r => r.Key).ToList(), freeze);
         if (!next.SequenceEqual(_order))

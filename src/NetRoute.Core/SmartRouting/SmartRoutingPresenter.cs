@@ -65,7 +65,7 @@ public static class SmartRoutingPage
             bool? on = items.All(i => i.On) ? true : items.Any(i => i.On) ? null : false;
             return new PageGroup(g.Key.GroupId, g.Key.GroupName, on, items.Sum(i => i.TodayBytes), items);
         }).ToList();
-        var rules = settings.UserRules.Select(r => new PageUserRule(r, Bytes(UserRule.IdOf(r)))).ToList();
+        var rules = settings.UserRules.Select(r => new PageUserRule(r, Bytes(UsageAttribution.RowKeyOf(r)))).ToList();
 
         return new PageModel(
             settings.Enabled, SmartRoutingPresenter.Row(status),
