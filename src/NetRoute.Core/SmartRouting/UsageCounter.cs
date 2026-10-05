@@ -43,8 +43,9 @@ public sealed class UsageCounter
 
     readonly SortedDictionary<DateOnly, DayData> _days = new();
     readonly Dictionary<string, (long Up, long Down)> _lastSeen = new();
-    readonly Dictionary<string, Queue<(DateTimeOffset At, RouteExit Exit, long Bytes)>> _recent = new();
+    readonly Dictionary<string, Queue<(DateTimeOffset At, RouteExit Exit, long Bytes, long Up)>> _recent = new();
     Dictionary<string, UsageRate> _rates = new();
+    Dictionary<string, UsageUpRate> _upRates = new();
     readonly Queue<(DateTimeOffset At, long Phone, long Lan)> _liveSamples = new();
     long? _lastUp, _lastDown, _lastAdapter;
     long _phoneCarry; // <= 0: phone bytes already booked that the adapter has not counted yet
@@ -102,7 +103,7 @@ public sealed class UsageCounter
             var key = attribution.Resolve(c.ProcessName, c.Host);
             var kept = exit == RouteExit.Lan && c.IsLanOnly && poll.PhoneIsDefault ? up + down : 0;
             Add(rows, key, exit, new Traffic(up, down), kept);
-            AddRate(key, exit, up + down, poll.Now);
+            AddRate(key, exit, up + down, up, poll.Now);
             seenUp += up;
             seenDown += down;
             if (exit == RouteExit.Phone) seenPhone += up + down;
@@ -182,7 +183,7 @@ public sealed class UsageCounter
                 r => new UsageRow(new Traffic(r.Value.PhoneUp, r.Value.PhoneDown), new Traffic(r.Value.LanUp, r.Value.LanDown), r.Value.Kept));
             days[day] = new UsageDay(rows, data.PhoneAdapterBytes, data.Gaps);
         }
-        return new UsageSnapshot(days, new Dictionary<string, UsageRate>(_rates));
+        return new UsageSnapshot(days, new Dictionary<string, UsageRate>(_rates), new Dictionary<string, UsageUpRate>(_upRates));
     }
 
     /// Today's kept-off-4G bytes per row (the card's "kept off 4G today" figure).
@@ -237,6 +238,7 @@ public sealed class UsageCounter
     {
         _recent.Clear();
         _rates = new Dictionary<string, UsageRate>();
+        _upRates = new Dictionary<string, UsageUpRate>();
         _liveSamples.Clear();
         Live = new UsageRate(0, 0);
     }
@@ -309,15 +311,16 @@ public sealed class UsageCounter
         _dirty = true;
     }
 
-    void AddRate(string key, RouteExit exit, long bytes, DateTimeOffset at)
+    void AddRate(string key, RouteExit exit, long bytes, long up, DateTimeOffset at)
     {
         if (!_recent.TryGetValue(key, out var queue)) _recent[key] = queue = new();
-        queue.Enqueue((at, exit, bytes));
+        queue.Enqueue((at, exit, bytes, up));
     }
 
     void RebuildRates(DateTimeOffset now)
     {
         var rates = new Dictionary<string, UsageRate>();
+        var upRates = new Dictionary<string, UsageUpRate>();
         foreach (var (key, queue) in _recent.ToList())
         {
             // Samples stamped after "now" come from a clock that has since stepped back: they are stale too.
@@ -332,20 +335,35 @@ public sealed class UsageCounter
                 _recent.Remove(key);
                 continue;
             }
-            long phone = 0, lan = 0;
+            long phone = 0, lan = 0, phoneUp = 0, lanUp = 0;
             foreach (var entry in queue)
             {
-                if (entry.Exit == RouteExit.Lan) lan += entry.Bytes;
-                else phone += entry.Bytes;
+                if (entry.Exit == RouteExit.Lan)
+                {
+                    lan += entry.Bytes;
+                    lanUp += entry.Up;
+                }
+                else
+                {
+                    phone += entry.Bytes;
+                    phoneUp += entry.Up;
+                }
             }
             var seconds = (long)RateWindow.TotalSeconds;
             var phoneRate = phone / seconds;
             var lanRate = lan / seconds;
-            if (phoneRate < ActiveBytesPerSecond) phoneRate = 0;
-            if (lanRate < ActiveBytesPerSecond) lanRate = 0;
-            if (phoneRate > 0 || lanRate > 0) rates[key] = new UsageRate(phoneRate, lanRate);
+            var phoneUpRate = phoneUp / seconds;
+            var lanUpRate = lanUp / seconds;
+            if (phoneRate < ActiveBytesPerSecond) phoneRate = phoneUpRate = 0; // an idle side reads 0 in both directions
+            if (lanRate < ActiveBytesPerSecond) lanRate = lanUpRate = 0;
+            if (phoneRate > 0 || lanRate > 0)
+            {
+                rates[key] = new UsageRate(phoneRate, lanRate);
+                upRates[key] = new UsageUpRate(phoneUpRate, lanUpRate);
+            }
         }
         _rates = rates;
+        _upRates = upRates;
     }
 
     /// Not from the future of a stepped-back clock, and younger than the window minus the jitter margin.

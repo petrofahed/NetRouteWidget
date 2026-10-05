@@ -16,12 +16,14 @@ public partial class UsageTab : UserControl
 {
     // Column widths and the inner gutters: text sits NameInset from the left edge of the name cell and CellInset from the right edge
     // of a number cell, in the header, the rows and the totals alike, so the three line up.
-    const double ByteWidth = 92, NowWidth = 108, NameInset = 10, CellInset = 14;
+    // Column order: Name | Phone up, down, total | LAN up, down, total | Now phone | Now LAN.
+    const double ByteWidth = 84, NowWidth = 150, NameMinWidth = 270, NameInset = 10, CellInset = 14;
 
     readonly Dictionary<int, ToggleButton> _rangeButtons = new();
     readonly Dictionary<UsageSortColumn, Button> _headers = new();
     readonly Dictionary<string, RowView> _rows = new();
-    readonly TextBlock _totalLabel = new(), _totalPhone = new(), _totalLan = new();
+    readonly TextBlock _totalLabel = new();
+    readonly TextBlock[] _totals = [new(), new(), new(), new(), new(), new()]; // Phone up, down, total, LAN up, down, total
     List<string> _order = [];
     UsageSort _sort = UsageSort.Default;
     UsageSort? _headerSort; // the sort the header labels currently show
@@ -31,6 +33,7 @@ public partial class UsageTab : UserControl
     {
         InitializeComponent();
         BuildRangeBar();
+        BuildGroups();
         BuildHeader();
         BuildTotals();
         RowScroll.ScrollChanged += (_, _) => MatchScrollBarWidth();
@@ -108,8 +111,9 @@ public partial class UsageTab : UserControl
         for (var i = 0; i < _order.Count; i++) _rows[_order[i]].SetLast(i == _order.Count - 1);
 
         _totalLabel.Text = model.Filtered ? "Total (filtered)" : "Total";
-        _totalPhone.Text = ByteFormat.Human(model.PhoneTotal);
-        _totalLan.Text = ByteFormat.Human(model.LanTotal);
+        SetTotals(model);
+        PhoneText.Text = $"Phone in this period{(model.Filtered ? " (filtered)" : "")}: ↑ {ByteFormat.Human(model.PhoneUpTotal)} · "
+            + $"↓ {ByteFormat.Human(model.PhoneTotal - model.PhoneUpTotal)} · total {ByteFormat.Human(model.PhoneTotal)}";
         KeptText.Text = $"Kept off 4G in this period: {(model.KeptOffIsLowerBound ? "at least " : "")}{ByteFormat.Human(model.KeptOff)}";
         KeptText.ToolTip = model.KeptOffIsLowerBound
             ? "Smart routing was stopped or restarted during this period; the bytes just before each stop were not recorded."
@@ -122,7 +126,7 @@ public partial class UsageTab : UserControl
     void MatchScrollBarWidth()
     {
         var bar = Math.Max(0, RowScroll.ActualWidth - RowScroll.ViewportWidth);
-        HeaderGrid.Margin = new Thickness(0, 0, bar, 0);
+        GroupGrid.Margin = HeaderGrid.Margin = new Thickness(0, 0, bar, 0);
         TotalGrid.Margin = new Thickness(0, 0, bar, 0);
     }
 
@@ -155,12 +159,34 @@ public partial class UsageTab : UserControl
         AddHeader(UsageSortColumn.Name, 0, HorizontalAlignment.Left,
             "Each connection counts under one row: an application that has its own rule, otherwise the site rule it matches " +
             "(YouTube traffic from Chrome counts under YouTube), otherwise the application.");
-        AddHeader(UsageSortColumn.Phone, 1, HorizontalAlignment.Right, null);
-        AddHeader(UsageSortColumn.Lan, 2, HorizontalAlignment.Right, null);
-        AddHeader(UsageSortColumn.NowPhone, 3, HorizontalAlignment.Right,
-            "Current speed over the last few seconds on the phone connection, shown only above 1 KB/s.");
-        AddHeader(UsageSortColumn.NowLan, 4, HorizontalAlignment.Right,
-            "Current speed over the last few seconds on the LAN connection, shown only above 1 KB/s.");
+        AddHeader(UsageSortColumn.PhoneUp, 1, HorizontalAlignment.Right, "Data sent (uploaded) through the phone.");
+        AddHeader(UsageSortColumn.PhoneDown, 2, HorizontalAlignment.Right, "Data received (downloaded) through the phone.");
+        AddHeader(UsageSortColumn.Phone, 3, HorizontalAlignment.Right, "Uploaded + downloaded through the phone.");
+        AddHeader(UsageSortColumn.LanUp, 4, HorizontalAlignment.Right, "Data sent (uploaded) through the LAN.");
+        AddHeader(UsageSortColumn.LanDown, 5, HorizontalAlignment.Right, "Data received (downloaded) through the LAN.");
+        AddHeader(UsageSortColumn.Lan, 6, HorizontalAlignment.Right, "Uploaded + downloaded through the LAN.");
+        AddHeader(UsageSortColumn.NowPhone, 7, HorizontalAlignment.Right,
+            "Current upload and download speed over the last few seconds on the phone connection, shown only above 1 KB/s.");
+        AddHeader(UsageSortColumn.NowLan, 8, HorizontalAlignment.Right,
+            "Current upload and download speed over the last few seconds on the LAN connection, shown only above 1 KB/s.");
+    }
+
+    /// The "Phone" and "LAN" labels above their three columns each.
+    void BuildGroups()
+    {
+        DefineColumns(GroupGrid);
+        AddGroup("Phone", 1);
+        AddGroup("LAN", 4);
+    }
+
+    void AddGroup(string text, int firstColumn)
+    {
+        var label = Secondary(new TextBlock { Text = text, FontSize = 11, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center });
+        var line = new Border { BorderThickness = new Thickness(0, 0, 0, 1), Margin = new Thickness(8, 0, 8, 2), Padding = new Thickness(0, 0, 0, 2), Child = label };
+        line.SetResourceReference(Border.BorderBrushProperty, "CardBorder");
+        Grid.SetColumn(line, firstColumn);
+        Grid.SetColumnSpan(line, 3);
+        GroupGrid.Children.Add(line);
     }
 
     void AddHeader(UsageSortColumn column, int index, HorizontalAlignment align, string? tooltip)
@@ -194,8 +220,9 @@ public partial class UsageTab : UserControl
             var label = column switch
             {
                 UsageSortColumn.Name => "Application / site",
-                UsageSortColumn.Phone => "Phone",
-                UsageSortColumn.Lan => "LAN",
+                UsageSortColumn.PhoneUp or UsageSortColumn.LanUp => "↑ Up",
+                UsageSortColumn.PhoneDown or UsageSortColumn.LanDown => "↓ Down",
+                UsageSortColumn.Phone or UsageSortColumn.Lan => "Total",
                 UsageSortColumn.NowPhone => "Now phone",
                 _ => "Now LAN",
             };
@@ -210,22 +237,32 @@ public partial class UsageTab : UserControl
         _totalLabel.Text = "Total";
         _totalLabel.FontWeight = FontWeights.SemiBold;
         _totalLabel.Margin = new Thickness(NameInset, 0, 0, 0);
-        _totalPhone.HorizontalAlignment = _totalLan.HorizontalAlignment = HorizontalAlignment.Right;
-        _totalPhone.Margin = _totalLan.Margin = new Thickness(0, 0, CellInset, 0);
-        _totalPhone.FontWeight = _totalLan.FontWeight = FontWeights.SemiBold;
-        Grid.SetColumn(_totalPhone, 1);
-        Grid.SetColumn(_totalLan, 2);
         TotalGrid.Children.Add(_totalLabel);
-        TotalGrid.Children.Add(_totalPhone);
-        TotalGrid.Children.Add(_totalLan);
+        for (var i = 0; i < _totals.Length; i++)
+        {
+            _totals[i].HorizontalAlignment = HorizontalAlignment.Right;
+            _totals[i].Margin = new Thickness(0, 0, CellInset, 0);
+            _totals[i].FontWeight = FontWeights.SemiBold;
+            Grid.SetColumn(_totals[i], i + 1);
+            TotalGrid.Children.Add(_totals[i]);
+        }
     }
 
-    /// Name | Phone | LAN | Now phone | Now LAN. Fixed widths so the header, the rows and the totals line up.
+    void SetTotals(UsageReportModel model)
+    {
+        _totals[0].Text = ByteFormat.Human(model.PhoneUpTotal);
+        _totals[1].Text = ByteFormat.Human(model.PhoneTotal - model.PhoneUpTotal);
+        _totals[2].Text = ByteFormat.Human(model.PhoneTotal);
+        _totals[3].Text = ByteFormat.Human(model.LanUpTotal);
+        _totals[4].Text = ByteFormat.Human(model.LanTotal - model.LanUpTotal);
+        _totals[5].Text = ByteFormat.Human(model.LanTotal);
+    }
+
+    /// Name | Phone up, down, total | LAN up, down, total | Now phone | Now LAN. Fixed widths so the header, the rows and the totals line up.
     static void DefineColumns(Grid grid)
     {
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 120 });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = NameMinWidth }); // wide enough for the longest built-in names: the name is never cut
+        for (var i = 0; i < 6; i++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ByteWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NowWidth) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NowWidth) });
     }
@@ -252,7 +289,8 @@ public partial class UsageTab : UserControl
             Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
         };
         readonly MenuItem _menuItem = new();
-        readonly TextBlock _phone = Number(), _lan = Number(), _nowPhone = Number(), _nowLan = Number();
+        readonly TextBlock[] _bytes = [Number(), Number(), Number(), Number(), Number(), Number()]; // Phone up, down, total, LAN up, down, total
+        readonly TextBlock _nowPhone = Number(), _nowLan = Number();
         bool _hovered;
         bool _sendOn; // what the menu item does: true = send to the exception list, false = exclude (the displayed state)
 
@@ -279,11 +317,10 @@ public partial class UsageTab : UserControl
             _root.ContextMenu = menu;
             _root.MouseEnter += (_, _) => UpdateHover();
             _root.MouseLeave += (_, _) => UpdateHover();
-            Place(_phone, 1);
-            Place(_lan, 2);
-            Place(_nowPhone, 3);
-            Place(_nowLan, 4);
-            Grid.SetColumnSpan(_separator, 5);
+            for (var i = 0; i < _bytes.Length; i++) Place(_bytes[i], i + 1);
+            Place(_nowPhone, 7);
+            Place(_nowLan, 8);
+            Grid.SetColumnSpan(_separator, 9);
             _grid.Children.Add(_separator);
         }
 
@@ -305,10 +342,14 @@ public partial class UsageTab : UserControl
             _sendOn = !row.Exception.InException;
             _menuItem.Header = UsageReport.MenuText(row.Exception);
             _menuItem.IsEnabled = row.CanChange;
-            _phone.Text = ByteFormat.Human(row.PhoneBytes);
-            _lan.Text = ByteFormat.Human(row.LanBytes);
-            ApplyRate(_nowPhone, row.Now?.PhoneBytesPerSecond ?? 0);
-            ApplyRate(_nowLan, row.Now?.LanBytesPerSecond ?? 0);
+            _bytes[0].Text = ByteFormat.Human(row.PhoneUp);
+            _bytes[1].Text = ByteFormat.Human(row.PhoneDown);
+            _bytes[2].Text = ByteFormat.Human(row.PhoneBytes);
+            _bytes[3].Text = ByteFormat.Human(row.LanUp);
+            _bytes[4].Text = ByteFormat.Human(row.LanDown);
+            _bytes[5].Text = ByteFormat.Human(row.LanBytes);
+            ApplyRate(_nowPhone, row.Now?.PhoneBytesPerSecond ?? 0, row.NowPhoneUp);
+            ApplyRate(_nowLan, row.Now?.LanBytesPerSecond ?? 0, row.NowLanUp);
         }
 
         /// The row is highlighted while the mouse is over it or its menu is open.
@@ -327,9 +368,9 @@ public partial class UsageTab : UserControl
         };
 
         /// Active speeds use the accent colour, idle ones the dimmed text colour. Only re-pointed when the state flips.
-        static void ApplyRate(TextBlock cell, long bytesPerSecond)
+        static void ApplyRate(TextBlock cell, long bytesPerSecond, long uploadBytesPerSecond)
         {
-            cell.Text = UsageReport.NowText(bytesPerSecond);
+            cell.Text = UsageReport.NowSplitText(bytesPerSecond, uploadBytesPerSecond);
             var key = bytesPerSecond > 0 ? "Accent" : "TextSecondary";
             if (!ReferenceEquals(cell.Tag, key))
             {

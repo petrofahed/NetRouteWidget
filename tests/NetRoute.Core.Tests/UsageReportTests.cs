@@ -112,10 +112,69 @@ public class UsageReportTests
     static UsageSnapshot ThreeRows() => Snap(
         (Today, "app:alpha.exe", 100, 5, 0), (Today, "app:bravo.exe", 300, 1, 0), (Today, "app:charlie.exe", 200, 9, 0));
 
+    /// Up and down set apart: alpha 50 up / 10 down on the phone, bravo 5 / 400, charlie 20 / 0; LAN: bravo 7 / 3, charlie 0 / 90.
+    static UsageSnapshot SplitRows() => new(
+        new Dictionary<DateOnly, UsageDay>
+        {
+            [Today] = new UsageDay(new Dictionary<string, UsageRow>
+            {
+                ["app:alpha.exe"] = new(new Traffic(50, 10), default, 0),
+                ["app:bravo.exe"] = new(new Traffic(5, 400), new Traffic(7, 3), 0),
+                ["app:charlie.exe"] = new(new Traffic(20, 0), new Traffic(0, 90), 0),
+            }, 0),
+        },
+        new Dictionary<string, UsageRate>());
+
     [Fact]
-    public void The_default_sort_is_phone_largest_first()
+    public void The_default_sort_is_phone_upload_largest_first()
     {
-        Assert.Equal(new[] { "bravo", "charlie", "alpha" }, Build(ThreeRows()).Rows.Select(r => r.Name));
+        Assert.Equal(new UsageSort(UsageSortColumn.PhoneUp, true), UsageSort.Default);
+        Assert.Equal(new[] { "alpha", "charlie", "bravo" }, Build(SplitRows()).Rows.Select(r => r.Name));
+    }
+
+    [Fact]
+    public void Rows_and_totals_carry_the_upload_part_and_the_download_is_the_rest()
+    {
+        var model = Build(SplitRows());
+        var bravo = model.Rows.Single(r => r.Name == "bravo");
+
+        Assert.Equal((5, 400, 405), (bravo.PhoneUp, bravo.PhoneDown, bravo.PhoneBytes));
+        Assert.Equal((7, 3, 10), (bravo.LanUp, bravo.LanDown, bravo.LanBytes));
+        Assert.Equal((75, 410, 485), (model.PhoneUpTotal, model.PhoneTotal - model.PhoneUpTotal, model.PhoneTotal));
+        Assert.Equal((7, 93, 100), (model.LanUpTotal, model.LanTotal - model.LanUpTotal, model.LanTotal));
+    }
+
+    [Theory]
+    [InlineData(UsageSortColumn.PhoneDown, true, new[] { "bravo", "alpha", "charlie" })]
+    [InlineData(UsageSortColumn.PhoneUp, false, new[] { "bravo", "charlie", "alpha" })]
+    [InlineData(UsageSortColumn.LanUp, true, new[] { "bravo", "alpha", "charlie" })]
+    [InlineData(UsageSortColumn.LanDown, true, new[] { "charlie", "bravo", "alpha" })]
+    [InlineData(UsageSortColumn.Phone, true, new[] { "bravo", "alpha", "charlie" })]
+    public void Rows_sort_by_each_upload_and_download_column(UsageSortColumn column, bool descending, string[] expected)
+    {
+        Assert.Equal(expected, Build(SplitRows(), sort: new UsageSort(column, descending)).Rows.Select(r => r.Name));
+    }
+
+    [Fact]
+    public void A_rows_live_speed_is_split_into_upload_and_download()
+    {
+        var usage = SplitRows() with
+        {
+            Rates = new Dictionary<string, UsageRate> { ["app:bravo.exe"] = new(9_000, 0) },
+            UpRates = new Dictionary<string, UsageUpRate> { ["app:bravo.exe"] = new(2_000, 0) },
+        };
+
+        var row = Build(usage).Rows.Single(r => r.Name == "bravo");
+
+        Assert.Equal((2_000, 0), (row.NowPhoneUp, row.NowLanUp));
+        Assert.Equal("↑ 2 KB/s ↓ 7 KB/s", UsageReport.NowSplitText(row.Now!.PhoneBytesPerSecond, row.NowPhoneUp));
+    }
+
+    [Fact]
+    public void The_split_speed_text_is_an_en_dash_when_idle_and_never_shows_a_negative_download()
+    {
+        Assert.Equal("–", UsageReport.NowSplitText(0, 0));
+        Assert.Equal("↑ 3 MB/s ↓ 0 KB/s", UsageReport.NowSplitText(3 * 1024 * 1024, 5 * 1024 * 1024));
     }
 
     [Theory]
@@ -170,9 +229,10 @@ public class UsageReportTests
     [Fact]
     public void A_header_click_flips_the_same_column_and_starts_a_new_one_largest_first()
     {
-        var phone = UsageSort.Default;
+        var phone = new UsageSort(UsageSortColumn.Phone, true);
 
         Assert.Equal(new UsageSort(UsageSortColumn.Phone, false), phone.Click(UsageSortColumn.Phone));
+        Assert.Equal(new UsageSort(UsageSortColumn.PhoneUp, true), phone.Click(UsageSortColumn.PhoneUp));
         Assert.Equal(new UsageSort(UsageSortColumn.Lan, true), phone.Click(UsageSortColumn.Lan));
         Assert.Equal(new UsageSort(UsageSortColumn.Name, false), phone.Click(UsageSortColumn.Name));
         Assert.Equal(new UsageSort(UsageSortColumn.Name, true), phone.Click(UsageSortColumn.Name).Click(UsageSortColumn.Name));

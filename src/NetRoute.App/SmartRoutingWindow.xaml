@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:NetRoute.App"
         Icon="Assets/NetRouteWidget.ico"
-        Title="NetRoute — Smart routing" Width="780" Height="720" MinWidth="640" MinHeight="460"
+        Title="NetRoute — Smart routing" Width="1300" Height="720" MinWidth="1170" MinHeight="460"
         WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="13" ThemeMode="System"
         Background="{DynamicResource WindowBackground}" Foreground="{DynamicResource TextPrimary}">
     <TabControl x:Name="Tabs" Margin="12" SelectedIndex="0">

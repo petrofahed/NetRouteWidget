@@ -16,15 +16,18 @@
                    Foreground="{DynamicResource Warning}" Visibility="Collapsed" />
         <!-- The kept-off / adapter / explanation lines: a calm secondary block under the list. -->
         <StackPanel DockPanel.Dock="Bottom" Margin="4,12,4,0" TextElement.FontSize="12">
-            <TextBlock x:Name="KeptText" />
+            <TextBlock x:Name="PhoneText" />
+            <TextBlock x:Name="KeptText" Margin="0,2,0,0" />
             <TextBlock x:Name="AdapterText" Margin="0,2,0,0" Foreground="{DynamicResource TextSecondary}" />
             <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                        Text="Numbers are what Smart routing saw. Short connections it missed are shown as “Unattributed”, so the totals stay right." />
         </StackPanel>
         <!-- The list card: header, rows and totals share one set of columns (DefineColumns). -->
+        <!-- Nine columns: the window's MinWidth keeps them from being clipped; the Name column takes all the rest. -->
         <Border Margin="0,12,0,0" Padding="8,4,8,6" CornerRadius="8" BorderThickness="1"
                 Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
             <DockPanel>
+                <Grid x:Name="GroupGrid" DockPanel.Dock="Top" />
                 <Border DockPanel.Dock="Top" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource CardBorder}" Padding="0,2,0,4" Margin="0,0,0,4">
                     <Grid x:Name="HeaderGrid" />
                 </Border>

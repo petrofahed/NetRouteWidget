@@ -367,6 +367,31 @@ public class UsageCounterTests
     }
 
     [Fact]
+    public void A_rows_rate_also_says_how_much_of_it_is_upload()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [
+            Conn("1", 3_000_000, 6_000_000, exit: "phone", process: "chrome.exe"),
+            Conn("2", 0, 3_000_000, process: "chrome.exe", lanOnly: true)]), Attr);
+
+        var snapshot = counter.Snapshot();
+
+        Assert.Equal(new UsageRate(3_000_000, 1_000_000), snapshot.Rates["app:chrome.exe"]); // up and down together, as before
+        Assert.Equal(new UsageUpRate(1_000_000, 0), snapshot.UpRates!["app:chrome.exe"]);
+    }
+
+    [Fact]
+    public void A_side_below_one_kilobyte_per_second_has_no_upload_rate_either()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [
+            Conn("1", 0, 3_000_000, exit: "phone", process: "chrome.exe"),
+            Conn("2", 3000, 0, process: "chrome.exe", lanOnly: true)]), Attr); // LAN: 1000 B/s, all upload
+
+        Assert.Equal(new UsageUpRate(0, 0), counter.Snapshot().UpRates!["app:chrome.exe"]);
+    }
+
+    [Fact]
     public void A_row_with_only_LAN_traffic_has_a_LAN_rate_and_a_zero_phone_rate()
     {
         var counter = new UsageCounter(null, D0);

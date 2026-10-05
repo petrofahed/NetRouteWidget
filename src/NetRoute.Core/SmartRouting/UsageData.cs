@@ -33,8 +33,14 @@ public sealed record UsageRate(long PhoneBytesPerSecond, long LanBytesPerSecond)
     public long Total => PhoneBytesPerSecond + LanBytesPerSecond;
 }
 
-/// An immutable copy of everything the counter knows. Safe to hand to the UI thread.
-public sealed record UsageSnapshot(IReadOnlyDictionary<DateOnly, UsageDay> Days, IReadOnlyDictionary<string, UsageRate> Rates)
+/// The upload part of a row's live speed, per exit (UsageRate holds up and down together; the rest of it is download).
+public sealed record UsageUpRate(long PhoneBytesPerSecond, long LanBytesPerSecond);
+
+/// An immutable copy of everything the counter knows. Safe to hand to the UI thread. UpRates covers the same rows as
+/// Rates (a row with no upload has no entry).
+public sealed record UsageSnapshot(
+    IReadOnlyDictionary<DateOnly, UsageDay> Days, IReadOnlyDictionary<string, UsageRate> Rates,
+    IReadOnlyDictionary<string, UsageUpRate>? UpRates = null)
 {
     /// Today plus the 34 days before it.
     public const int RetentionDays = 35;

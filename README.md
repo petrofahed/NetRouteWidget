@@ -14,9 +14,9 @@ A small Windows tray widget for PCs that are connected to **two networks at once
 
 | | |
 |---|---|
-| **Routing modes** (v1) | One-click **Phone / LAN / Auto**, local devices always stay on the LAN, auto-heal when a connection has no internet, break-glass restore. |
+| **Routing modes** (v1) | One-click **Phone / LAN** plus a **⚡ Smart** switch on the card, local devices always stay on the LAN, auto-heal when a connection has no internet, break-glass restore. |
 | **Smart routing** (v2) | Keeps data-hungry traffic (Windows Update, cloud sync, game downloads, YouTube/social, your own apps and sites) off 4G by sending it over the LAN; waits for the LAN instead of falling onto mobile data; on-demand speed test. |
-| **Usage tab** (v3) | Who used how much data: Phone and LAN per application or site for Today / 3 / 7 / 15 / 30 days, live **Now phone** and **Now LAN** speeds, filter box, accurate counting reconciled with Windows' own phone-adapter counter. |
+| **Usage tab** (v3) | Who used how much data: Phone and LAN (upload, download and total) per application or site for Today / 3 / 7 / 15 / 30 days, live **Now phone** and **Now LAN** speeds, filter box, accurate counting reconciled with Windows' own phone-adapter counter. |
 | **Profiles** (v4) | **Phone + exceptions** and **LAN + exceptions**: choose which connection carries everything else; AI tools (Claude, ChatGPT, Codex, VS Code, Copilot, Gemini, Cursor, Perplexity) and `*.omantel.om` can use the phone while the rest uses the LAN; update downloads always use the LAN. |
 | **On the card** | The live speed through each connection next to its latency, and today's total data through each connection at the right edge. |
 | **Your own lists** | Right-click a row in the Usage tab to *Send to exception* / *Exclude from exception* (a tag marks exceptions), edit either profile's list on the Config tab, or manage the lists from JSON in `%AppData%\NetRouteWidget\rules.user.json`. |
@@ -29,7 +29,7 @@ The widget only changes **interface metrics**, Windows' priority numbers for eac
 |---|---|
 | **Phone** | phone metric 5, LAN 50 |
 | **LAN** | phone 50, LAN 5 |
-| **Auto** | restores Windows' own automatic metrics |
+| **Windows default** (tray menu only) | restores Windows' own automatic metrics (what Restore-Network.cmd does); the card has no Auto button, and Smart routing pauses while it is active |
 
 It never deletes routes, so the other connection always remains a working fallback. LAN-subnet traffic always uses the LAN, because Windows has a direct route for it.
 
@@ -54,7 +54,7 @@ Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box)
 
 ## Profiles (v4)
 
-Smart routing has two **profiles**, and the card's **Phone** and **LAN** buttons switch between them (the tooltips say "Phone + exceptions" and "LAN + exceptions"). **Auto** still pauses Smart routing.
+Smart routing has two **profiles**, and the card's **Phone** and **LAN** buttons switch between them (the tooltips say "Phone + exceptions" and "LAN + exceptions"). The card's **⚡ Smart** button is the on/off switch: on, the selected side takes everything except the exceptions list; off, everything goes through the selected side only.
 
 - **Phone + exceptions** (Phone button): everything uses the phone, except the items on the first list (updates, cloud sync, video, game launchers, your own LAN rules), which go through the LAN. This is the Smart routing described above.
 - **LAN + exceptions** (LAN button): everything uses the LAN, except the items on the second list, which go through the **phone**. If the LAN is unplugged, other traffic falls back to the phone, as in plain LAN mode. Your LAN list (the first list) stays active here too: it is not an exception of this profile, but it makes those downloads wait for the LAN instead of falling onto 4G. Explicit phone rules win over it for the same connection.
@@ -80,7 +80,7 @@ A missing file changes nothing. A broken file (bad JSON, a bad `exit`, a duplica
 The ⚙ window has two tabs, **Usage** and **Config**. Config is the Smart routing page described above; Usage shows who is using your data.
 
 - **Measured through Smart routing,** so history only grows while it is running. Traffic to your home devices and anything while Smart routing is off is not counted.
-- **Phone and LAN columns** per application or site, for **Today, 3, 7, 15 or 30 days** (click a column header to sort; the default is Phone, largest first). Two live columns, **Now phone** and **Now LAN**, show the current speed on each connection over the last ~3 seconds (shown only above 1 KB/s, otherwise a dash).
+- **Phone and LAN, each split into ↑ Up, ↓ Down and Total**, per application or site, for **Today, 3, 7, 15 or 30 days** (click a column header to sort; the default is Phone ↑, largest first, so the heaviest uploaders over 4G are on top). Upload is data your PC sent; download is data it received. Two live columns, **Now phone** and **Now LAN**, show the current upload and download speed on each connection over the last ~3 seconds (shown only above 1 KB/s, otherwise a dash). Each connection is counted under exactly one row, so the Total row is a plain sum with nothing counted twice. The window opens wide (about 1250 px) and scrolls sideways when it is narrower.
 - **Filter box:** type part of a name (for example `youtube`) to narrow the list and its totals to the matching applications and sites; Esc clears it.
 - **Right-click a row** to **Send to exception** or **Exclude from exception** for the active profile (in Phone + exceptions that keeps it off 4G, in LAN + exceptions it makes it use the phone). Rows that are exceptions show a tag (`→ LAN` or `→ phone`). Rules can also be changed on the Config tab, and the numbers themselves are never changed.
 - **Unattributed:** connections that open and close between two one-second checks cannot be tied to an application, so they appear in an **Unattributed** row and the column totals stay right. The footer also shows the **exact phone adapter total** from Windows, to compare with the Phone column.
