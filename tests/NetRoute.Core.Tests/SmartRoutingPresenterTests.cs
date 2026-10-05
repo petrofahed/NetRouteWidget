@@ -27,9 +27,13 @@ public class SmartRoutingPresenterTests
     {
         var stats = new DailyStats(NoStats.Day, new Dictionary<string, long> { ["youtube"] = 1_288_490_189 });
 
-        Assert.Equal(new SmartRow("⚡ Smart routing ON · Phone + exceptions · 4 rules · 1.2 GB kept off 4G today", SmartTone.Normal),
+        Assert.Equal(new SmartRow("Phone + exceptions · 4 rules · 1.2 GB kept off 4G today", SmartTone.Normal),
             SmartRoutingPresenter.Row(Status(today: stats)));
         Assert.Equal(new SmartRow("⚡ Smart routing off", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Off)));
+        Assert.Equal(new SmartRow("Smart routing off · everything via the phone", SmartTone.Muted),
+            SmartRoutingPresenter.Row(Status(SmartState.Off), RoutingMode.Phone));
+        Assert.Equal(new SmartRow("Smart routing off · everything via the LAN", SmartTone.Muted),
+            SmartRoutingPresenter.Row(Status(SmartState.Off), RoutingMode.Lan));
         Assert.Equal(new SmartRow("⚡ Smart routing starting…", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Starting)));
         Assert.Equal(new SmartRow("⚡ Smart routing paused — Needs both phone and LAN connected", SmartTone.Muted),
             SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Needs both phone and LAN connected")));
@@ -44,7 +48,7 @@ public class SmartRoutingPresenterTests
     [Fact]
     public void The_lan_profile_row_names_the_profile_and_omits_the_kept_figure()
     {
-        Assert.Equal(new SmartRow("⚡ Smart routing ON · LAN + exceptions · 9 rules", SmartTone.Normal), SmartRoutingPresenter.Row(LanProfileStatus(9)));
+        Assert.Equal(new SmartRow("LAN + exceptions · 9 rules", SmartTone.Normal), SmartRoutingPresenter.Row(LanProfileStatus(9)));
     }
 
     static SmartRoutingStatus LanProfileStatus(int rules) =>

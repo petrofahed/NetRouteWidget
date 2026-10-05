@@ -30,6 +30,7 @@ public partial class CardWindow : Window
     public event Action? RestartAsAdminRequested;
     public event Action? QuitRequested;
     public event Action? SmartSettingsRequested;
+    public event Action<bool>? SmartToggleRequested;
     public event Action? SpeedTestRequested;
 
     /// Shows the card at its saved spot, or bottom-right when that spot is no longer on screen.
@@ -60,14 +61,15 @@ public partial class CardWindow : Window
         RenderRow(view.Phone, PhoneDot, PhoneLabel, PhoneAddress, PhoneLatency);
         RenderRow(view.Lan, LanDot, LanLabel, LanAddress, LanLatency);
         SyncModeButtons();
-        PhoneButton.IsEnabled = LanButton.IsEnabled = AutoButton.IsEnabled = canModify;
+        PhoneButton.IsEnabled = LanButton.IsEnabled = SmartButton.IsEnabled = canModify;
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
     }
 
-    public void RenderSmart(SmartRow row)
+    public void RenderSmart(SmartRow row, bool smartOn)
     {
+        SmartButton.IsChecked = smartOn;
         SmartText.Text = row.Text;
         SmartText.SetResourceReference(TextBlock.ForegroundProperty, row.Tone == SmartTone.Warning ? "Warning" : "TextSecondary");
         SmartText.Opacity = row.Tone == SmartTone.Muted ? 0.7 : 1.0;
@@ -137,7 +139,6 @@ public partial class CardWindow : Window
     {
         PhoneButton.IsChecked = _mode == RoutingMode.Phone;
         LanButton.IsChecked = _mode == RoutingMode.Lan;
-        AutoButton.IsChecked = _mode == RoutingMode.Auto;
     }
 
     void OnMode(object sender, RoutedEventArgs e)
@@ -145,6 +146,13 @@ public partial class CardWindow : Window
         var mode = Enum.Parse<RoutingMode>((string)((FrameworkElement)sender).Tag);
         SyncModeButtons(); // undo the click's own toggle; Render shows the new mode once applied
         ModeRequested?.Invoke(mode);
+    }
+
+    void OnSmart(object sender, RoutedEventArgs e)
+    {
+        var turnOn = SmartButton.IsChecked == true; // the click already toggled it
+        SmartButton.IsChecked = !turnOn; // undo; RenderSmart shows the new state once applied
+        SmartToggleRequested?.Invoke(turnOn);
     }
 
     void OnDrag(object sender, MouseButtonEventArgs e)

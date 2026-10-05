@@ -23,10 +23,14 @@ public sealed record SmartRow(string Text, SmartTone Tone);
 
 public static class SmartRoutingPresenter
 {
-    public static SmartRow Row(SmartRoutingStatus s) => s.State switch
+    /// The card's footer line. The card's Smart button already says whether Smart routing is on, so the running texts
+    /// start with the profile. With Smart routing off, the routing mode says where everything goes.
+    public static SmartRow Row(SmartRoutingStatus s, RoutingMode mode = RoutingMode.Auto) => s.State switch
     {
         // A message while Off/Starting is a warning from the controller (e.g. sing-box could not be stopped): show it.
         SmartState.Off or SmartState.Starting when !string.IsNullOrEmpty(s.Message) => new($"⚠ {s.Message}", SmartTone.Warning),
+        SmartState.Off when mode == RoutingMode.Phone => new("Smart routing off · everything via the phone", SmartTone.Muted),
+        SmartState.Off when mode == RoutingMode.Lan => new("Smart routing off · everything via the LAN", SmartTone.Muted),
         SmartState.Off => new("⚡ Smart routing off", SmartTone.Muted),
         SmartState.Starting => new("⚡ Smart routing starting…", SmartTone.Muted),
         SmartState.Unavailable when s.Message?.StartsWith("Paused ", StringComparison.Ordinal) == true =>
@@ -36,8 +40,8 @@ public static class SmartRoutingPresenter
         _ when s.Waiting => new("⏸ LAN-only traffic waiting (LAN offline)", SmartTone.Warning),
         _ when s.LanRulesOnPhone => new("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
         _ when s.Profile == RouteExit.Lan =>
-            new($"⚡ Smart routing ON · LAN + exceptions · {s.RuleCount} rules", SmartTone.Normal),
-        _ => new($"⚡ Smart routing ON · Phone + exceptions · {s.RuleCount} rules · {ByteFormat.Human(s.Today.Total)} kept off 4G today", SmartTone.Normal),
+            new($"LAN + exceptions · {s.RuleCount} rules", SmartTone.Normal),
+        _ => new($"Phone + exceptions · {s.RuleCount} rules · {ByteFormat.Human(s.Today.Total)} kept off 4G today", SmartTone.Normal),
     };
 
     public static string WaitingText(IReadOnlyList<string> names) =>

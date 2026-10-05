@@ -96,6 +96,7 @@ public partial class App : Application
             _card.QuitRequested += Quit;
             _card.SpeedTestRequested += RunSpeedTest;
             _card.SmartSettingsRequested += OpenSmartRouting;
+            _card.SmartToggleRequested += on => { if (_smart is not null) ChangeSmart(s => s with { Enabled = on }); };
 
             _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
 
@@ -201,6 +202,13 @@ public partial class App : Application
         var view = StatusPresenter.Present(status);
         _tray?.Update(view, status.Mode, status.CanModify, _startupEnabled);
         _card?.Render(view, status.Mode, status.CanModify, _startupEnabled);
+        if (_smart is { } smart) RenderSmartCard(smart.Status); // the Smart-off line names the mode, which just changed
+    }
+
+    void RenderSmartCard(SmartRoutingStatus status)
+    {
+        if (_card is null || _controller is not { } controller) return;
+        _card.RenderSmart(SmartRoutingPresenter.Row(status, controller.Status.Mode), controller.Settings.SmartRouting.Enabled);
     }
 
     void ShowCard()
@@ -405,7 +413,7 @@ public partial class App : Application
 
     void RenderSmart(SmartRoutingStatus status)
     {
-        _card?.RenderSmart(SmartRoutingPresenter.Row(status));
+        RenderSmartCard(status);
         if (status.State is not (SmartState.Running or SmartState.Starting)) _card?.RenderSpeeds("", "");
         RenderSmartWindow();
         if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone
@@ -589,6 +597,7 @@ public partial class App : Application
     void ChangeSmart(Func<SmartRoutingSettings, SmartRoutingSettings> change)
     {
         UpdateSmart(change);
+        if (_smart is { } smart) RenderSmartCard(smart.Status); // the card's Smart button follows the setting at once
         RenderSmartWindow(); // immediate feedback; the controller's StatusChanged re-renders again once applied
     }
 

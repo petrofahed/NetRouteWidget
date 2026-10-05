@@ -13,7 +13,7 @@ sealed class TrayIcon : IDisposable
     readonly Dictionary<(TrayColor, bool), Icon> _icons = new();
     readonly Forms.ToolStripMenuItem _phone = new("Phone");
     readonly Forms.ToolStripMenuItem _lan = new("LAN");
-    readonly Forms.ToolStripMenuItem _auto = new("Auto");
+    readonly Forms.ToolStripMenuItem _auto = new("Windows default (restore)");
     readonly Forms.ToolStripMenuItem _show = new("Show card");
     readonly Forms.ToolStripMenuItem _startup = new("Start with Windows");
     readonly Forms.ToolStripMenuItem _quit = new("Quit");

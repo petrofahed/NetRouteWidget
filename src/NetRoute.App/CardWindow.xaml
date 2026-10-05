@@ -137,10 +137,11 @@
 
             <UniformGrid Columns="3">
                 <ToggleButton x:Name="PhoneButton" Content="Phone" Tag="Phone" Style="{StaticResource ModeButton}" Click="OnMode"
-                              ToolTip="Phone + exceptions: everything through the phone; your LAN list (and update downloads) through the LAN" />
+                              ToolTip="Everything through the phone. With Smart on: your LAN list (and update downloads) go through the LAN" />
                 <ToggleButton x:Name="LanButton" Content="LAN" Tag="Lan" Style="{StaticResource ModeButton}" Click="OnMode"
-                              ToolTip="LAN + exceptions: everything through the LAN; your phone list (AI tools, Omantel) through the phone" />
-                <ToggleButton x:Name="AutoButton" Content="Auto" Tag="Auto" Style="{StaticResource ModeButton}" Click="OnMode" />
+                              ToolTip="Everything through the LAN. With Smart on: your phone list (AI tools, Omantel) goes through the phone" />
+                <ToggleButton x:Name="SmartButton" Content="⚡ Smart" Style="{StaticResource ModeButton}" Click="OnSmart"
+                              ToolTip="Smart on: the exceptions list goes the other way. Smart off: everything through the selected side only" />
             </UniformGrid>
 
             <Border Height="1" Margin="0,8" Background="{DynamicResource CardBorder}" />
