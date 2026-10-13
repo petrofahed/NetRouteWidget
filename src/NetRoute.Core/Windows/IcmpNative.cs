@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace NetRoute.Core.Windows;
 
-/// iphlpapi.dll ICMP interop (icmpapi.h / ipexport.h). The reply struct is 40 bytes on x64; IcmpLayoutTests guards it.
+/// iphlpapi.dll ICMP interop (icmpapi.h / ipexport.h). The reply struct is 40 bytes on x64; IcmpPathProbeTests.Echo_reply_struct_matches_the_native_layout_on_x64 guards it.
 internal static class IcmpNative
 {
     public const uint IP_SUCCESS = 0;

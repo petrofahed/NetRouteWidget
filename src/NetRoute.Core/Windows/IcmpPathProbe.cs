@@ -16,20 +16,30 @@ public sealed class IcmpPathProbe : IPathProbe
     {
         if (ct.IsCancellationRequested) return Task.FromResult(new EchoResult(ProbeOutcome.Unavailable));
         // IcmpSendEcho2Ex blocks for up to the timeout; keep it off the caller's thread.
-        return Task.Run(() => Send(source, target, ttl, timeout), CancellationToken.None);
+        return Task.Run(() =>
+        {
+            if (ct.IsCancellationRequested) return new EchoResult(ProbeOutcome.Unavailable);
+            var result = Send(source, target, ttl, timeout);
+            // A check cancelled while it was in flight was superseded: its answer must not count as a loss or a reply.
+            return ct.IsCancellationRequested ? new EchoResult(ProbeOutcome.Unavailable) : result;
+        }, CancellationToken.None);
     }
 
     static EchoResult Send(IPAddress source, IPAddress target, int ttl, TimeSpan timeout)
     {
         if (source.AddressFamily != AddressFamily.InterNetwork || target.AddressFamily != AddressFamily.InterNetwork)
             return new EchoResult(ProbeOutcome.Unavailable);
+        // An out-of-range TTL is a caller bug, not a measurement: it is not clamped into a different probe.
+        if (ttl < 1 || ttl > 255) return new EchoResult(ProbeOutcome.Unavailable);
 
-        var handle = IcmpNative.IcmpCreateFile();
-        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return new EchoResult(ProbeOutcome.Unavailable);
-        var reply = Marshal.AllocHGlobal(ReplyBufferSize);
+        var handle = IntPtr.Zero;
+        var reply = IntPtr.Zero;
         try
         {
-            var options = new IcmpNative.IP_OPTION_INFORMATION { Ttl = (byte)Math.Clamp(ttl, 1, 255) };
+            handle = IcmpNative.IcmpCreateFile();
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return new EchoResult(ProbeOutcome.Unavailable);
+            reply = Marshal.AllocHGlobal(ReplyBufferSize);
+            var options = new IcmpNative.IP_OPTION_INFORMATION { Ttl = (byte)ttl };
             var replies = IcmpNative.IcmpSendEcho2Ex(
                 handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero,
                 Address(source), Address(target),
@@ -40,10 +50,16 @@ public sealed class IcmpPathProbe : IPathProbe
             var r = Marshal.PtrToStructure<IcmpNative.ICMP_ECHO_REPLY>(reply);
             return Interpret(replies, r.Status, r.Address, r.RoundTripTime, 0, target);
         }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or MarshalDirectiveException
+                                       or OutOfMemoryException or InvalidOperationException)
+        {
+            // A local problem (missing iphlpapi entry point, marshalling failure) did not measure the network.
+            return new EchoResult(ProbeOutcome.Unavailable);
+        }
         finally
         {
-            Marshal.FreeHGlobal(reply);
-            IcmpNative.IcmpCloseHandle(handle);
+            if (reply != IntPtr.Zero) Marshal.FreeHGlobal(reply);
+            if (handle != IntPtr.Zero && handle != new IntPtr(-1)) IcmpNative.IcmpCloseHandle(handle);
         }
     }
 

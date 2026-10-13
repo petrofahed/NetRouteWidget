@@ -113,6 +113,17 @@ public class IcmpPathProbeTests
         Assert.True(r.TargetReached);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(256)]
+    public async Task A_ttl_outside_1_to_255_is_unavailable_not_clamped(int ttl)
+    {
+        var r = await new IcmpPathProbe().EchoAsync(IPAddress.Loopback, IPAddress.Loopback, ttl, TimeSpan.FromSeconds(1), CancellationToken.None);
+
+        Assert.Equal(ProbeOutcome.Unavailable, r.Outcome);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task A_source_address_this_pc_does_not_have_is_unavailable_not_lost()
