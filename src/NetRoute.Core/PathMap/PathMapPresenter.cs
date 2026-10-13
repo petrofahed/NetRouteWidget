@@ -181,7 +181,6 @@ public static class PathMapPresenter
     static HopDisplay InternetState(LaneDiagnosis diag, bool connected)
     {
         if (!connected) return HopDisplay.Hidden;
-        if (diag.Status == LaneStatus.Unavailable) return HopDisplay.Unavailable;
         return diag.Endpoint switch
         {
             Observation.Answering => HopDisplay.Answering,
@@ -235,9 +234,12 @@ public static class PathMapPresenter
     static IReadOnlyList<string> Describe(Analysed lan, Analysed phone, PathThresholds t)
     {
         if (lan.Diagnosis.Status == LaneStatus.Healthy && phone.Diagnosis.Status == LaneStatus.Healthy)
-            return ["Both connections reach the internet."];
+            return ["Both connections reach the internet." + string.Concat(new[] { lan, phone }
+                .Where(a => a.Diagnosis.TraceStatus == TraceStatus.Unavailable).Select(a => $" {a.Name}: the {NotMeasured}"))];
         return [Line(lan, t), Line(phone, t)];
     }
+
+    const string NotMeasured = "devices on the way could not be measured.";
 
     static string Line(Analysed a, PathThresholds t)
     {
@@ -248,7 +250,8 @@ public static class PathMapPresenter
             case LaneStatus.NotConnected: return $"{name}: not connected.";
             case LaneStatus.Measuring: return $"{name}: measuring… {Math.Min(10, d.EndpointStats.Valid * 2)} of 10 s.";
             case LaneStatus.Unavailable: return $"{name}: measurement unavailable on this PC. That says nothing about the connection.";
-            case LaneStatus.Healthy: return $"{name} reaches the internet.";
+            case LaneStatus.Healthy:
+                return $"{name} reaches the internet." + (d.TraceStatus == TraceStatus.Unavailable ? $" The {NotMeasured}" : "");
             case LaneStatus.Blip:
                 var n = d.EndpointStats.Lost;
                 return $"{name}: {n} internet check{(n == 1 ? "" : "s")} failed in the last {t.Window.TotalSeconds.ToString("0", Inv)} s. That is not enough to call a fault.";

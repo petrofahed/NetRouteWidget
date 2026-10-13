@@ -150,6 +150,50 @@ public class PathMapPresenterTests
         Assert.DoesNotContain(view.Lan.Nodes, n => n.State is HopDisplay.Broken or HopDisplay.Suspect);
     }
 
+    static readonly PathTrace NoTrace = new(Ip("192.168.86.42"), Ip("1.1.1.1"), [], TraceStatus.Unavailable);
+
+    [Fact]
+    public void When_only_the_trace_is_unavailable_the_internet_check_still_decides_and_the_row_shows_it()
+    {
+        var view = Present(Lan(NoTrace, Every(2, AllReply)), HealthyPhone());
+
+        Assert.Equal(["Both connections reach the internet. LAN: the devices on the way could not be measured."], view.Diagnosis);
+        Assert.Equal(HopDisplay.Answering, view.Lan.Internet.State);
+        Assert.Equal("20 ms", view.Lan.Internet.Metric);
+        Assert.Equal([LinkState.Healthy], view.Lan.Links);
+    }
+
+    [Fact]
+    public void An_unavailable_trace_on_one_lane_gets_the_sentence_after_its_own_line()
+    {
+        var view = Present(Lan(NoTrace, Every(2, AllReply)), new LaneSnapshot("Phone", null, null, [], []));
+
+        Assert.Equal("LAN reaches the internet. The devices on the way could not be measured.", view.Diagnosis[0]);
+        Assert.Equal("Phone: not connected.", view.Diagnosis[1]);
+    }
+
+    [Fact]
+    public void Both_lanes_without_a_trace_each_get_a_prefixed_sentence()
+    {
+        var phone = new LaneSnapshot("Phone", TestAdapters.Phone(), NoTrace with { Source = Ip("192.168.42.11") }, [], Every(2, AllReply));
+
+        var view = Present(Lan(NoTrace, Every(2, AllReply)), phone);
+
+        Assert.Equal(
+            ["Both connections reach the internet. LAN: the devices on the way could not be measured. Phone: the devices on the way could not be measured."],
+            view.Diagnosis);
+    }
+
+    [Fact]
+    public void An_unavailable_trace_with_a_failing_check_shows_the_internet_row_failing_and_blames_nobody()
+    {
+        var view = Present(Lan(NoTrace, FailingEndpoint()));
+
+        Assert.Equal("LAN: the internet check is failing, but there is not enough data yet to say where.", view.Diagnosis[0]);
+        Assert.Equal(HopDisplay.Broken, view.Lan.Internet.State);
+        Assert.Equal([LinkState.Neutral], view.Lan.Links);
+    }
+
     [Fact]
     public void A_new_lane_reports_measuring_progress()
     {

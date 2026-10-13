@@ -208,14 +208,44 @@ public class PathDiagnoserTests
         Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
     }
 
-    [Fact]
-    public void An_unavailable_trace_is_unavailable_not_a_broken_connection()
-    {
-        var trace = new PathTrace(Ip("192.168.86.42"), Ip("1.1.1.1"), [], TraceStatus.Unavailable);
+    static readonly PathTrace NoTrace = new(Ip("192.168.86.42"), Ip("1.1.1.1"), [], TraceStatus.Unavailable);
 
-        var d = Diagnose(Lane(trace, Every(2, AllReply)));
+    [Fact]
+    public void An_unavailable_trace_with_an_answering_internet_check_is_healthy()
+    {
+        // ICMP cannot run here (e.g. security software), but the internet check works and says the connection is fine
+        var d = Diagnose(Lane(NoTrace, Every(2, AllReply)));
+
+        Assert.Equal(LaneStatus.Healthy, d.Status);
+        Assert.Equal(TraceStatus.Unavailable, d.TraceStatus);
+        Assert.Empty(d.Hops);
+    }
+
+    [Fact]
+    public void An_unavailable_trace_with_a_failing_internet_check_is_a_fault_with_nothing_to_examine()
+    {
+        var d = Diagnose(Lane(NoTrace, FailingEndpoint()));
+
+        Assert.Equal(LaneStatus.Fault, d.Status);
+        Assert.Equal(Localization.NotEnoughData, d.Where);
+        Assert.Null(d.FirstBadHop);
+        Assert.Null(d.LastAnsweringHop);
+    }
+
+    [Fact]
+    public void An_unavailable_trace_with_one_failed_check_is_a_blip_and_with_too_few_checks_is_measuring()
+    {
+        Assert.Equal(LaneStatus.Blip, Diagnose(Lane(NoTrace, Every(2, LostDuring(28)))).Status);
+        Assert.Equal(LaneStatus.Measuring, Diagnose(Lane(NoTrace, Every(2, AllReply).Take(2).ToList())).Status);
+    }
+
+    [Fact]
+    public void An_unavailable_trace_with_an_unavailable_internet_check_is_unavailable_not_a_broken_connection()
+    {
+        var d = Diagnose(Lane(NoTrace, Every(2, AllUnavailable)));
 
         Assert.Equal(LaneStatus.Unavailable, d.Status);
+        Assert.Equal(Localization.None, d.Where);
     }
 
     [Fact]

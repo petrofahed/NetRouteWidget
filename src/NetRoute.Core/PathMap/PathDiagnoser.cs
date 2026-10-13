@@ -66,7 +66,9 @@ public static class PathDiagnoser
             _ => HopDisplay.Quiet, // silent or lossy, with nothing pointing at it
         };
 
-        if (trace.Status == TraceStatus.Unavailable || endpoint == Observation.Unavailable)
+        // The lane's health is the internet check's verdict. An unavailable trace (ICMP cannot run here) only means there are no
+        // devices to examine; it never hides a working or a failing internet check.
+        if (endpoint == Observation.Unavailable)
             return Build(LaneStatus.Unavailable, Localization.None, Calm);
         if (endpoint == Observation.Measuring)
             return Build(LaneStatus.Measuring, Localization.None, i => observed[i] is Observation.Hidden or Observation.Unavailable ? Calm(i) : HopDisplay.Measuring);
@@ -74,6 +76,8 @@ public static class PathDiagnoser
             return Build(LaneStatus.Healthy, Localization.None, Calm);
         if (endpointStats.Lost < t.MinFailedChecks)
             return Build(LaneStatus.Blip, Localization.None, Calm);
+        if (trace.Status == TraceStatus.Unavailable)
+            return Build(LaneStatus.Fault, Localization.NotEnoughData, Calm);
 
         return Localize(lane, trace, observed, t, Build, Calm);
     }
