@@ -1,0 +1,266 @@
+using NetRoute.Core.PathMap;
+using static NetRoute.Core.Tests.PathKit;
+
+namespace NetRoute.Core.Tests;
+
+public class PathDiagnoserTests
+{
+    static LaneDiagnosis Diagnose(LaneInput lane) => PathDiagnoser.Diagnose(lane, T);
+
+    static HopDisplay[] Displays(LaneDiagnosis d) => d.Hops.Select(h => h.Display).ToArray();
+
+    /// The internet check fails from second 14 to the end of the window.
+    static List<Sample> FailingEndpoint() => Every(2, LostDuring(14));
+
+    [Fact]
+    public void Healthy_lane_shows_a_hop_that_ignores_probes_as_quiet_not_broken()
+    {
+        var d = Diagnose(Lane(Four, Every(2, AllReply),
+            Every(1, AllReply), Every(1, AllLost), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(LaneStatus.Healthy, d.Status);
+        Assert.Equal(Localization.None, d.Where);
+        Assert.Equal([HopDisplay.Answering, HopDisplay.Quiet, HopDisplay.Answering, HopDisplay.Answering], Displays(d));
+    }
+
+    [Fact]
+    public void One_late_failed_check_is_a_blip_not_a_fault()
+    {
+        // only the newest check was lost: lossy by the numbers, but one failure is not enough to call a fault
+        var d = Diagnose(Lane(Four, Every(2, LostDuring(28)),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(LaneStatus.Blip, d.Status);
+        Assert.Equal(Localization.None, d.Where);
+        Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
+    }
+
+    [Fact]
+    public void Located_break_names_the_first_silent_device_after_the_last_one_that_answered()
+    {
+        var d = Diagnose(Lane(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(14)), Every(1, LostDuring(14))));
+
+        Assert.Equal(LaneStatus.Fault, d.Status);
+        Assert.Equal(Localization.Located, d.Where);
+        Assert.Equal(1, d.LastAnsweringHop);
+        Assert.Equal(2, d.FirstBadHop);
+        Assert.Equal([HopDisplay.Answering, HopDisplay.Answering, HopDisplay.Broken, HopDisplay.Silent], Displays(d));
+    }
+
+    [Fact]
+    public void Located_break_at_the_first_device_has_no_answering_device_before_it()
+    {
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+            Every(1, LostDuring(14)), Every(1, LostDuring(14))));
+
+        Assert.Equal(Localization.Located, d.Where);
+        Assert.Null(d.LastAnsweringHop);
+        Assert.Equal(0, d.FirstBadHop);
+    }
+
+    [Fact]
+    public void A_device_losing_part_of_its_probes_during_the_failure_is_suspect_not_broken()
+    {
+        // lost every second probe from second 14: 50% during the failure, 0% before it
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, sec => sec >= 14 && sec % 2 == 0 ? ProbeOutcome.NoReply : ProbeOutcome.Reply)));
+
+        Assert.Equal(Localization.Located, d.Where);
+        Assert.Equal(HopDisplay.Suspect, d.Hops[2].Display);
+    }
+
+    [Fact]
+    public void A_quiet_device_before_one_that_answers_is_not_blamed()
+    {
+        // hop 2 ignores probes all the time; hop 3 keeps answering while the check fails; only hop 4 goes silent with it
+        var d = Diagnose(Lane(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllLost), Every(1, AllReply), Every(1, LostDuring(14))));
+
+        Assert.Equal(Localization.Located, d.Where);
+        Assert.Equal(2, d.LastAnsweringHop);
+        Assert.Equal(3, d.FirstBadHop);
+        Assert.Equal(HopDisplay.Quiet, d.Hops[1].Display);
+        Assert.Equal(HopDisplay.Broken, d.Hops[3].Display);
+    }
+
+    [Fact]
+    public void A_device_that_went_silent_during_the_failure_is_not_blamed_when_a_later_one_answers()
+    {
+        // hop 2 loses probes during the failure, but hop 3 and 4 answer throughout: hop 2 is only ignoring probes
+        var d = Diagnose(Lane(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, LostDuring(14)), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(LaneStatus.Fault, d.Status);
+        Assert.Equal(Localization.Narrowed, d.Where);
+        Assert.Equal(3, d.LastAnsweringHop);
+        Assert.Equal([HopDisplay.Answering, HopDisplay.Quiet, HopDisplay.Answering, HopDisplay.Answering], Displays(d));
+    }
+
+    [Fact]
+    public void Devices_that_answer_are_never_greyed_after_a_located_break()
+    {
+        var d = Diagnose(Lane(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(14)), Every(1, LostDuring(14))));
+
+        foreach (var hop in d.Hops.Where(h => h.Observed == Observation.Answering))
+            Assert.Equal(HopDisplay.Answering, hop.Display);
+    }
+
+    [Fact]
+    public void Loss_that_does_not_line_up_with_the_failure_is_not_blamed()
+    {
+        // hop 3 is silent in good periods too: it just ignores probes, so the break cannot be pinned on it
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllLost)));
+
+        Assert.Equal(LaneStatus.Fault, d.Status);
+        Assert.Equal(Localization.Narrowed, d.Where);
+        Assert.Null(d.FirstBadHop);
+        Assert.Equal(1, d.LastAnsweringHop);
+        Assert.Equal(HopDisplay.Quiet, d.Hops[2].Display);
+    }
+
+    [Fact]
+    public void Every_visible_device_answering_while_the_check_fails_blames_none_of_them()
+    {
+        var d = Diagnose(Lane(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(Localization.Narrowed, d.Where);
+        Assert.Equal(3, d.LastAnsweringHop);
+        Assert.All(d.Hops, h => Assert.Equal(HopDisplay.Answering, h.Display));
+    }
+
+    [Fact]
+    public void Too_little_evidence_refuses_to_name_a_hop()
+    {
+        // the failure is 3 checks old and the hops have only 4 probes since: below the 5 needed
+        var d = Diagnose(Lane(Four, Every(2, LostDuring(24)),
+            Every(1, AllReply, fromSecond: 26), Every(1, AllReply, fromSecond: 26),
+            Every(1, AllLost, fromSecond: 26), Every(1, AllLost, fromSecond: 26)));
+
+        Assert.Equal(LaneStatus.Fault, d.Status);
+        Assert.Equal(Localization.NotEnoughData, d.Where);
+        Assert.Null(d.FirstBadHop);
+        Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
+        Assert.DoesNotContain(HopDisplay.Suspect, Displays(d));
+    }
+
+    [Fact]
+    public void Evidence_comes_only_from_probes_in_the_same_buckets_as_the_failed_checks()
+    {
+        // hop 3 was silent only before the internet check began to fail: that loss is not evidence against it now
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, sec => sec < 10 ? ProbeOutcome.NoReply : ProbeOutcome.Reply)));
+
+        Assert.NotEqual(HopDisplay.Broken, d.Hops[2].Display);
+        Assert.Null(d.FirstBadHop);
+    }
+
+    [Fact]
+    public void Unavailable_probes_are_not_evidence_either_way()
+    {
+        // hop 3's probes could not run during the failure: it must not be implicated by them
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, sec => sec >= 14 ? ProbeOutcome.Unavailable : ProbeOutcome.Reply)));
+
+        Assert.Null(d.FirstBadHop);
+        Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
+    }
+
+    [Fact]
+    public void A_new_lane_is_measuring_until_the_internet_check_has_enough_samples()
+    {
+        var d = Diagnose(Lane(Four, Every(2, AllReply).Take(2).ToList(),
+            Every(1, AllReply).Take(2).ToList(), Every(1, AllReply).Take(2).ToList(),
+            Every(1, AllReply).Take(2).ToList(), Every(1, AllReply).Take(2).ToList()));
+
+        Assert.Equal(LaneStatus.Measuring, d.Status);
+        Assert.All(d.Hops, h => Assert.Equal(HopDisplay.Measuring, h.Display));
+    }
+
+    [Fact]
+    public void A_trace_that_has_not_finished_yet_is_measuring_with_no_devices()
+    {
+        var d = Diagnose(Lane(null, []));
+
+        Assert.Equal(LaneStatus.Measuring, d.Status);
+        Assert.Empty(d.Hops);
+    }
+
+    [Fact]
+    public void Local_measurement_errors_are_unavailable_never_a_fault()
+    {
+        var d = Diagnose(Lane(Four, Every(2, AllUnavailable),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(LaneStatus.Unavailable, d.Status);
+        Assert.Equal(Localization.None, d.Where);
+        Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
+    }
+
+    [Fact]
+    public void An_unavailable_trace_is_unavailable_not_a_broken_connection()
+    {
+        var trace = new PathTrace(Ip("192.168.86.42"), Ip("1.1.1.1"), [], TraceStatus.Unavailable);
+
+        var d = Diagnose(Lane(trace, Every(2, AllReply)));
+
+        Assert.Equal(LaneStatus.Unavailable, d.Status);
+    }
+
+    [Fact]
+    public void An_incomplete_trace_is_not_a_fault_when_the_internet_check_answers()
+    {
+        var trace = new PathTrace(Ip("192.168.86.42"), Ip("1.1.1.1"),
+            Four.Hops, TraceStatus.Incomplete);
+
+        var d = Diagnose(Lane(trace, Every(2, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(LaneStatus.Healthy, d.Status);
+        Assert.Equal(TraceStatus.Incomplete, d.TraceStatus);
+    }
+
+    [Fact]
+    public void Hidden_hops_are_never_blamed_and_never_block_a_located_break()
+    {
+        var trace = Trace("192.168.42.129", null, "172.26.242.30");
+        var d = Diagnose(Lane(trace, FailingEndpoint(),
+            Every(1, AllReply), [], Every(1, LostDuring(14))));
+
+        Assert.Equal(Localization.Located, d.Where);
+        Assert.Equal(HopDisplay.Hidden, d.Hops[1].Display);
+        Assert.Equal(2, d.FirstBadHop);
+    }
+
+    [Fact]
+    public void A_lane_that_is_not_connected_says_so()
+    {
+        var d = Diagnose(new LaneInput("Phone", false, null, [], [], Now));
+
+        Assert.Equal(LaneStatus.NotConnected, d.Status);
+    }
+
+    [Fact]
+    public void A_recovered_internet_check_clears_the_fault()
+    {
+        // failed from 4 to 14, then replies at 16..28 (7 in a row): healthy again, and the hops are calm
+        var d = Diagnose(Lane(Four, Every(2, sec => sec is >= 4 and < 16 ? ProbeOutcome.NoReply : ProbeOutcome.Reply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(4, 16)), Every(1, LostDuring(4, 16))));
+
+        Assert.Equal(LaneStatus.Healthy, d.Status);
+        Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
+    }
+
+    [Fact]
+    public void Fewer_sample_lists_than_hops_are_treated_as_no_samples_yet()
+    {
+        // a re-trace added devices after the samples were copied: the missing lists must not crash and must read as measuring
+        var d = Diagnose(Lane(Four, Every(2, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(4, d.Hops.Count);
+        Assert.Equal(HopDisplay.Measuring, d.Hops[3].Display);
+    }
+}

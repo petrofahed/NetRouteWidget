@@ -40,6 +40,8 @@ static class PathKit
         Ip("192.168.86.42"), Ip("1.1.1.1"),
         hops.Select((a, i) => new PathHop(i + 1, a is null ? null : Ip(a))).ToList(), TraceStatus.Complete);
 
+    public static LaneInput Lane(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
+        new("LAN", true, trace, hops.Select(h => (IReadOnlyList<Sample>)h).ToList(), endpoint, Now);
 }
 
 /// Answers each TTL from a script; unknown TTLs time out.
