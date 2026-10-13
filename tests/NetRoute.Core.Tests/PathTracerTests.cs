@@ -76,6 +76,45 @@ public class PathTracerTests
     }
 
     [Fact]
+    public async Task An_unavailable_first_ttl_makes_the_trace_unavailable_even_when_the_rest_would_complete()
+    {
+        var probe = new FakePathProbe { Default = Target() };
+        probe.ByTtl[1] = new EchoResult(ProbeOutcome.Unavailable);
+        probe.ByTtl[2] = Hop("192.168.1.1");
+
+        var trace = await Trace(probe);
+
+        Assert.Equal(TraceStatus.Unavailable, trace.Status);
+        Assert.Empty(trace.Hops);
+    }
+
+    [Fact]
+    public async Task Half_the_ttls_unavailable_make_the_trace_unavailable()
+    {
+        var probe = new FakePathProbe();
+        probe.ByTtl[1] = Hop("192.168.86.1");
+        for (var ttl = 2; ttl <= 7; ttl++) probe.ByTtl[ttl] = new EchoResult(ProbeOutcome.Unavailable);
+
+        var trace = await Trace(probe);
+
+        Assert.Equal(TraceStatus.Unavailable, trace.Status);
+        Assert.Empty(trace.Hops);
+    }
+
+    [Fact]
+    public async Task Fewer_than_half_the_ttls_unavailable_do_not()
+    {
+        var probe = new FakePathProbe();
+        probe.ByTtl[1] = Hop("192.168.86.1");
+        for (var ttl = 2; ttl <= 6; ttl++) probe.ByTtl[ttl] = new EchoResult(ProbeOutcome.Unavailable);
+
+        var trace = await Trace(probe);
+
+        Assert.Equal(TraceStatus.Incomplete, trace.Status);
+        Assert.Equal(1, trace.Hops.Count);
+    }
+
+    [Fact]
     public async Task Target_answering_at_the_first_ttl_gives_an_empty_complete_path()
     {
         var probe = new FakePathProbe { Default = Target() };
