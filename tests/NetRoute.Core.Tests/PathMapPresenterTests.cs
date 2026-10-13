@@ -529,6 +529,38 @@ public class PathMapPresenterTests
     }
 
     [Fact]
+    public void Narrowed_with_the_last_answering_device_inside_a_collapsed_box_does_not_draw_the_amber_link_before_the_box()
+    {
+        var view = Present(Lan(Six, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllLost)));
+
+        var box = view.Lan.Nodes[3];
+        Assert.Equal("lan:4-6", box.Id);
+        Assert.Equal(HopDisplay.Answering, box.State);
+        Assert.Equal("2 of 3 answering", box.StateLabel);
+        Assert.Equal(LinkState.Healthy, view.Lan.Links[3]);
+        Assert.Equal(LinkState.Suspect, view.Lan.Links[^1]);
+        Assert.DoesNotContain(LinkState.Broken, view.Lan.Links);
+    }
+
+    [Fact]
+    public void Narrowed_with_the_last_answering_device_last_in_a_collapsed_box_draws_the_amber_link_out_of_it()
+    {
+        var view = Present(Lan(Six, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        var box = view.Lan.Nodes[3];
+        Assert.Equal("lan:4-6", box.Id);
+        Assert.Equal(HopDisplay.Answering, box.State);
+        Assert.Equal("Answering", box.StateLabel);
+        Assert.Equal(LinkState.Healthy, view.Lan.Links[3]);
+        Assert.Equal(LinkState.Suspect, view.Lan.Links[^1]);
+        Assert.DoesNotContain(LinkState.Broken, view.Lan.Links);
+    }
+
+    [Fact]
     public void Too_little_evidence_draws_a_neutral_internet_link_and_blames_nobody()
     {
         var view = Present(Lan(Four, Every(2, LostDuring(24)),

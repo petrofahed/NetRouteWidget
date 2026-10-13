@@ -83,13 +83,15 @@ public static class PathMapPresenter
         return new Analysed(id, name, snap, diag, view, groups);
     }
 
-    /// Index of the link leaving the last answering device: the link into the first box holding a later hop,
-    /// or the link at index 'onward' (the ghost box, or the Internet card) when no drawn box follows it.
+    /// Index of the link leaving the last answering device: the link into the box after the one that holds it,
+    /// or the link at index 'onward' (the ghost box, or the Internet card) when it sits in the last drawn box.
+    /// A device inside a collapsed box answers for that box, so the link never lands before the box.
     static int LeavingLink(LaneDiagnosis diag, List<Group> groups, int onward)
     {
         if (diag.LastAnsweringHop is not { } p) return -1;
-        var next = groups.FindIndex(g => g.Hops.Any(h => h > p));
-        return next >= 0 ? next : onward;
+        var own = groups.FindIndex(g => g.Hops.Contains(p));
+        if (own < 0) return -1;
+        return own + 1 < groups.Count ? own + 1 : onward;
     }
 
     /// Consecutive hidden hops share one box; anything beyond the drawn limit collapses into "+N more".
