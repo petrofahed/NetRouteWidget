@@ -111,7 +111,7 @@ public class PathTracerTests
         var trace = await Trace(probe);
 
         Assert.Equal(TraceStatus.Incomplete, trace.Status);
-        Assert.Equal(1, trace.Hops.Count);
+        Assert.Single(trace.Hops);
     }
 
     [Fact]
