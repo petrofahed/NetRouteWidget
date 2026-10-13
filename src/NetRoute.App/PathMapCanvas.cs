@@ -1,3 +1,4 @@
+using System.Text;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -21,6 +22,8 @@ sealed class PathMapCanvas : Canvas
     readonly List<(Shape Shape, double Speed)> _flows = [];
     readonly List<Shape> _halos = [];
     readonly List<Ellipse> _rings = [];
+    readonly List<FrameworkElement> _clickables = [];
+    string? _signature;
     double _phase;
     TimeSpan _lastFrame;
 
@@ -37,12 +40,21 @@ sealed class PathMapCanvas : Canvas
 
     public event Action<string>? NodeClicked;
 
+    /// Rebuilds the shapes only when what they show has changed. A rebuild every tick would destroy keyboard focus and open
+    /// tooltips; the animations are driven by OnFrame, so they keep running when nothing is rebuilt.
     public void Render(PathMapView view, string? selectedId)
     {
+        var signature = Signature(view, selectedId);
+        if (signature == _signature) return;
+        _signature = signature;
+
+        var focusedId = Keyboard.FocusedElement is FrameworkElement { Tag: string id } focused && _clickables.Contains(focused) ? id : null;
+
         Children.Clear();
         _flows.Clear();
         _halos.Clear();
         _rings.Clear();
+        _clickables.Clear();
 
         var pc = new Rect(20, MidY - PcH / 2, PcW, PcH);
         var net = new Rect(CanvasWidth - 12 - NetW, MidY - NetH / 2, NetW, NetH);
@@ -50,6 +62,27 @@ sealed class PathMapCanvas : Canvas
         DrawLane(view.Phone, PhoneY, pc, net, selectedId);
         DrawPc(pc, view);
         DrawInternet(net, view, selectedId);
+
+        if (focusedId is not null && _clickables.FirstOrDefault(e => (string?)e.Tag == focusedId) is { } again && !again.Focus())
+            Dispatcher.BeginInvoke(() => again.Focus(), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// Everything Render draws, plus the colour theme, as one string.
+    string Signature(PathMapView view, string? selectedId)
+    {
+        var sb = new StringBuilder();
+        sb.Append(selectedId).Append('|').Append((B("NodeBackground") as SolidColorBrush)?.Color);
+        foreach (var lane in new[] { view.Lan, view.Phone })
+        {
+            sb.Append('|').Append(lane.Caption).Append('/').Append(lane.AdapterName).Append('/').Append(lane.Connected);
+            foreach (var n in lane.Nodes)
+                sb.Append('|').Append(n.Id).Append('/').Append(n.Kind).Append('/').Append(n.Title).Append('/').Append(n.Address)
+                  .Append('/').Append(n.Metric).Append('/').Append(n.State).Append('/').Append(n.StateLabel);
+            foreach (var l in lane.Links) sb.Append('|').Append(l);
+            var i = lane.Internet;
+            sb.Append('|').Append(i.Id).Append('/').Append(i.Label).Append('/').Append(i.Metric).Append('/').Append(i.State);
+        }
+        return sb.ToString();
     }
 
     void OnFrame(object? sender, EventArgs e)
@@ -77,9 +110,10 @@ sealed class PathMapCanvas : Canvas
 
     void DrawLane(LaneView lane, double y, Rect pc, Rect net, string? selectedId)
     {
-        Text(lane.Caption.ToUpperInvariant(), 10.5, FontWeights.SemiBold, "TextSecondary", pc.Right + 50, y - NodeH / 2 - 22);
+        var captionY = y - NodeH / 2 - 22;
         if (!lane.Connected)
         {
+            Text(lane.Caption.ToUpperInvariant(), 10.5, FontWeights.SemiBold, "TextSecondary", pc.Right + 50, captionY);
             Text("Not connected", 12, FontWeights.Normal, "TextSecondary", pc.Right + 60, y - 8);
             return;
         }
@@ -90,6 +124,8 @@ sealed class PathMapCanvas : Canvas
         var gap = (available - n * width) / (n + 1);
         var rects = Enumerable.Range(0, n)
             .Select(i => new Rect(pc.Right + gap * (i + 1) + width * i, y - NodeH / 2, width, NodeH)).ToList();
+        // The caption starts at the first box so it stays clear of the curve leaving This PC.
+        Text(lane.Caption.ToUpperInvariant(), 10.5, FontWeights.SemiBold, "TextSecondary", n > 0 ? rects[0].Left : pc.Right + 50, captionY);
 
         var from = new Point(pc.Right, MidY);
         for (var i = 0; i < n; i++)
@@ -214,13 +250,15 @@ sealed class PathMapCanvas : Canvas
         box.Children.Add(new Rectangle { RadiusX = 12, RadiusY = 12, Fill = B("NodeBackground"), Stroke = B("NodeBorder"), StrokeThickness = 1 });
         var panel = new StackPanel { Margin = new Thickness(12, 10, 8, 6) };
         panel.Children.Add(new TextBlock { Text = "This PC", FontSize = 12.5, FontWeight = FontWeights.SemiBold, Foreground = B("TextPrimary") });
-        panel.Children.Add(PcRow("LAN · Ethernet", view.Lan.Connected ? view.Lan.Internet.State : HopDisplay.Hidden, 8));
-        panel.Children.Add(PcRow("Phone · Ethernet 5", view.Phone.Connected ? view.Phone.Internet.State : HopDisplay.Hidden, 5));
+        panel.Children.Add(PcRow(PcLabel("LAN", view.Lan), view.Lan.Connected ? view.Lan.Internet.State : HopDisplay.Hidden, 8));
+        panel.Children.Add(PcRow(PcLabel("Phone", view.Phone), view.Phone.Connected ? view.Phone.Internet.State : HopDisplay.Hidden, 5));
         box.Children.Add(panel);
         SetLeft(box, r.Left);
         SetTop(box, r.Top);
         Children.Add(box);
     }
+
+    static string PcLabel(string lane, LaneView view) => view.AdapterName.Length > 0 ? $"{lane} · {view.AdapterName}" : lane;
 
     StackPanel PcRow(string text, HopDisplay state, double top)
     {
@@ -271,6 +309,8 @@ sealed class PathMapCanvas : Canvas
     void Clickable(FrameworkElement element, string id, string name)
     {
         AutomationProperties.SetName(element, name);
+        element.Tag = id;
+        _clickables.Add(element);
         element.MouseLeftButtonUp += (_, _) => NodeClicked?.Invoke(id);
         element.KeyDown += (_, e) =>
         {
@@ -286,7 +326,7 @@ sealed class PathMapCanvas : Canvas
         Children.Add(block);
     }
 
-    static string StateBrush(HopDisplay state) => state switch
+    internal static string StateBrush(HopDisplay state) => state switch
     {
         HopDisplay.Answering => "DotGreen",
         HopDisplay.Suspect => "DotAmber",

@@ -43,6 +43,17 @@ public class PathMapPresenterTests
     }
 
     [Fact]
+    public void Each_lane_carries_the_name_of_its_adapter_for_the_pc_card()
+    {
+        var view = Present(HealthyLan());
+
+        Assert.Equal(TestAdapters.Lan().Name, view.Lan.AdapterName);
+        Assert.Equal("Ethernet", view.Lan.AdapterName);
+        Assert.Equal(TestAdapters.Phone().Name, view.Phone.AdapterName);
+        Assert.Equal("Ethernet 31", view.Phone.AdapterName);
+    }
+
+    [Fact]
     public void Located_break_is_named_with_the_devices_on_both_sides()
     {
         var view = Present(Lan(Four, FailingEndpoint(),
@@ -159,6 +170,7 @@ public class PathMapPresenterTests
         Assert.Equal("LAN: not connected.", view.Diagnosis[0]);
         Assert.False(view.Lan.Connected);
         Assert.Equal("LAN path · not connected", view.Lan.Caption);
+        Assert.Equal("", view.Lan.AdapterName);
         Assert.Empty(view.Lan.Nodes);
     }
 

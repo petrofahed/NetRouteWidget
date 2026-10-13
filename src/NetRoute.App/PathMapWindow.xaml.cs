@@ -41,13 +41,25 @@ public partial class PathMapWindow : Window
 
     void Refresh()
     {
-        var view = _present(_selected);
-        // With nothing selected yet, show the first device that looks like trouble.
-        if (_selected is null && FirstProblem(view) is { } id)
+        PathMapView view;
+        try
         {
-            _selected = id;
-            view = _present(id);
+            view = _present(_selected);
+            // With nothing selected yet, show the first device that looks like trouble.
+            if (_selected is null && FirstProblem(view) is { } id)
+            {
+                _selected = id;
+                view = _present(id);
+            }
         }
+        catch (Exception)
+        {
+            // Keep the last view on screen; a throw out of a timer tick would log every 500 ms.
+            Footer.Text = "Could not update the map";
+            return;
+        }
+        // A selection that no longer resolves to anything is dropped, so the first-problem pick can re-arm.
+        if (_selected is not null && view.Detail is null) _selected = null;
 
         Headline.Text = "🌐 " + view.Headline;
         Headline.SetResourceReference(TextBlock.ForegroundProperty, view.HeadlineWarning ? "Warning" : "TextPrimary");
@@ -80,14 +92,7 @@ public partial class PathMapWindow : Window
         DetailTitle.Text = detail.Title;
         DetailAddress.Text = detail.Address;
         DetailChip.Text = detail.Chip;
-        var brush = detail.State switch
-        {
-            HopDisplay.Answering => "DotGreen",
-            HopDisplay.Suspect => "DotAmber",
-            HopDisplay.Broken => "DotRed",
-            HopDisplay.Measuring => "DotMeasuring",
-            _ => "DotGray",
-        };
+        var brush = PathMapCanvas.StateBrush(detail.State);
         DetailChip.SetResourceReference(TextBlock.ForegroundProperty, brush);
         DetailChipBox.SetResourceReference(Border.BorderBrushProperty, brush);
 

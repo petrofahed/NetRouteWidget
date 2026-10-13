@@ -18,7 +18,8 @@ public sealed record InternetRowView(string Id, string Label, string Metric, Hop
 
 /// Links has one entry per node plus one: the link into each node, then the link into the Internet card.
 public sealed record LaneView(
-    string Name, string Caption, bool Connected, IReadOnlyList<NodeView> Nodes, IReadOnlyList<LinkState> Links, InternetRowView Internet);
+    string Name, string Caption, bool Connected, IReadOnlyList<NodeView> Nodes, IReadOnlyList<LinkState> Links, InternetRowView Internet,
+    string AdapterName);
 
 public sealed record DetailView(
     string Id, string Title, string Address, string Chip, HopDisplay State,
@@ -75,7 +76,8 @@ public static class PathMapPresenter
 
         var view = new LaneView(
             name, connected ? $"{name} path · from {source}" : $"{name} path · not connected", connected,
-            nodes, links, new InternetRowView($"{id}:net", name, InternetMetric(diag, internet), internet));
+            nodes, links, new InternetRowView($"{id}:net", name, InternetMetric(diag, internet), internet),
+            snap.Adapter?.Name ?? "");
         return new Analysed(id, name, snap, diag, view, groups);
     }
 
