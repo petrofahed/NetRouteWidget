@@ -232,6 +232,22 @@ public class PathDiagnoserTests
     }
 
     [Fact]
+    public void A_whole_window_outage_cannot_name_a_device_because_there_is_no_good_period_to_compare_with()
+    {
+        // the internet check lost every check in the window: hop 2 lost every probe too, but it could be a device that
+        // ignores probes, and without a single good bucket there is nothing to tell the two apart
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1"), Every(2, AllLost),
+            Every(1, AllReply), Every(1, AllLost)));
+
+        Assert.Equal(LaneStatus.Fault, d.Status);
+        Assert.Equal(Localization.Narrowed, d.Where);
+        Assert.Equal(0, d.LastAnsweringHop);
+        Assert.Null(d.FirstBadHop);
+        Assert.DoesNotContain(HopDisplay.Broken, Displays(d));
+        Assert.DoesNotContain(HopDisplay.Suspect, Displays(d));
+    }
+
+    [Fact]
     public void Hidden_hops_are_never_blamed_and_never_block_a_located_break()
     {
         var trace = Trace("192.168.42.129", null, "172.26.242.30");

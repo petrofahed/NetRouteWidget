@@ -29,7 +29,8 @@ public sealed record PathThresholds
     /// Failed internet checks in the window needed before a fault (not just a blip) is declared.
     public int MinFailedChecks { get; init; } = 3;
 
-    /// Hop probes needed in the failing buckets before a hop can be cleared or implicated.
+    /// Hop probes needed in the failing buckets before a hop can be cleared or implicated. A hop can only be implicated when
+    /// this many probes also fell in good buckets (the baseline it is compared with); without them it can still be cleared.
     public int MinEvidenceProbes { get; init; } = 5;
     public double ImplicatedLossPercent { get; init; } = 50;
     public double ImplicatedMarginPoints { get; init; } = 30;

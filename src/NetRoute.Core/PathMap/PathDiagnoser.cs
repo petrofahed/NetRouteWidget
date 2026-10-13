@@ -103,11 +103,13 @@ public static class PathDiagnoser
             if (nFailing == 0) continue;
 
             var lossFailing = 100.0 * lostFailing / nFailing;
-            // With too little data from good periods, the trace itself (the hop answered it) counts as a good reply.
-            var lossGood = nGood < t.MinEvidenceProbes ? 0.0 : 100.0 * lostGood / nGood;
             failureLoss[i] = lossFailing;
             if (nFailing < t.MinEvidenceProbes) continue;
             cleared[i] = lossFailing <= t.ClearedLossPercent;
+            // Blaming a device needs a baseline: without enough probes from good periods (e.g. the window is all outage) a device
+            // that simply ignores probes cannot be told from a broken one, so it can be cleared but never implicated.
+            if (nGood < t.MinEvidenceProbes) continue;
+            var lossGood = 100.0 * lostGood / nGood;
             implicated[i] = lossFailing >= t.ImplicatedLossPercent && lossFailing - lossGood >= t.ImplicatedMarginPoints;
         }
 
