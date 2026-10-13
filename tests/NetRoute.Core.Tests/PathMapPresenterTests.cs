@@ -328,4 +328,60 @@ public class PathMapPresenterTests
 
         Assert.Equal(["lan:1", "lan:2"], view.Lan.Nodes.Select(n => n.Id));
     }
+
+    [Fact]
+    public void Narrowed_with_every_visible_device_answering_draws_the_link_into_the_internet_amber()
+    {
+        var view = Present(Lan(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(LinkState.Suspect, view.Lan.Links[^1]);
+        Assert.DoesNotContain(LinkState.Broken, view.Lan.Links);
+    }
+
+    [Fact]
+    public void Narrowed_with_a_device_after_the_last_answering_one_draws_the_link_leaving_it_amber()
+    {
+        var view = Present(Lan(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllLost)));
+
+        Assert.Equal(LinkState.Suspect, view.Lan.Links[2]);
+        Assert.Equal(LinkState.Muted, view.Lan.Links[^1]);
+        Assert.DoesNotContain(LinkState.Broken, view.Lan.Links);
+    }
+
+    [Fact]
+    public void Too_little_evidence_draws_a_neutral_internet_link_and_blames_nobody()
+    {
+        var view = Present(Lan(Four, Every(2, LostDuring(24)),
+            Every(1, AllReply, fromSecond: 26), Every(1, AllReply, fromSecond: 26),
+            Every(1, AllLost, fromSecond: 26), Every(1, AllLost, fromSecond: 26)));
+
+        Assert.Equal(LinkState.Neutral, view.Lan.Links[^1]);
+        Assert.DoesNotContain(LinkState.Broken, view.Lan.Links);
+    }
+
+    [Fact]
+    public void The_note_for_the_located_first_bad_device_agrees_with_the_diagnosis()
+    {
+        var detail = Present(Lan(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply),
+            Every(1, sec => sec >= 14 && sec % 2 == 0 ? ProbeOutcome.NoReply : ProbeOutcome.Reply)),
+            selected: "lan:3").Detail;
+
+        Assert.NotNull(detail);
+        Assert.StartsWith("The first device after the last one that answered", detail.Note);
+    }
+
+    [Fact]
+    public void The_note_for_a_break_at_the_first_device_does_not_claim_a_device_before_it()
+    {
+        var detail = Present(Lan(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+            Every(1, LostDuring(14)), Every(1, LostDuring(14))),
+            selected: "lan:1").Detail;
+
+        Assert.NotNull(detail);
+        Assert.Contains("first device on the way out", detail.Note);
+        Assert.DoesNotContain("device before it", detail.Note);
+    }
 }

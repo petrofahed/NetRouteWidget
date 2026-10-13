@@ -68,12 +68,24 @@ public static class PathMapPresenter
 
         var internet = InternetState(diag, connected);
         var links = nodes.Select(n => LinkInto(n, diag)).ToList();
+        var leaving = diag.Where == Localization.Narrowed ? LeavingLink(diag, groups, links.Count) : -1;
         links.Add(InternetLink(internet, diag));
+        // Narrowed: the fault is somewhere after the last device that answered, so the link leaving it is amber.
+        if (leaving >= 0) links[leaving] = LinkState.Suspect;
 
         var view = new LaneView(
             name, connected ? $"{name} path · from {source}" : $"{name} path · not connected", connected,
             nodes, links, new InternetRowView($"{id}:net", name, InternetMetric(diag, internet), internet));
         return new Analysed(id, name, snap, diag, view, groups);
+    }
+
+    /// Index of the link leaving the last answering device: the link into the first box holding a later hop,
+    /// or the link into the Internet card (index = internetLink) when no drawn box follows it.
+    static int LeavingLink(LaneDiagnosis diag, List<Group> groups, int internetLink)
+    {
+        if (diag.LastAnsweringHop is not { } p) return -1;
+        var next = groups.FindIndex(g => g.Hops.Any(h => h > p));
+        return next >= 0 ? next : internetLink;
     }
 
     /// Consecutive hidden hops share one box; anything beyond the drawn limit collapses into "+N more".
@@ -185,8 +197,14 @@ public static class PathMapPresenter
         HopDisplay.Measuring => LinkState.Measuring,
         HopDisplay.Unavailable => LinkState.Unavailable,
         HopDisplay.Suspect => LinkState.Suspect,
-        // After a located break the red link is already drawn into the broken device.
-        HopDisplay.Broken => diag.Where == Localization.Located ? LinkState.Muted : LinkState.Broken,
+        // After a located break the red link is already drawn into the broken device; without a located break nobody is blamed.
+        HopDisplay.Broken => diag.Where switch
+        {
+            Localization.Located => LinkState.Muted,
+            Localization.NotEnoughData => LinkState.Neutral,
+            Localization.Narrowed => LinkState.Muted,
+            _ => LinkState.Broken,
+        },
         _ => LinkState.Neutral,
     };
 
@@ -276,9 +294,11 @@ public static class PathMapPresenter
             return new DetailView(id, "Trace incomplete", "", "Trace incomplete", HopDisplay.Hidden, [], [],
                 $"The trace did not reach 1.1.1.1 within {t.MaxHops} hops, so devices further on are not listed. That says nothing about the connection: the internet check decides that.");
 
-        var node = lane.View.Nodes.FirstOrDefault(n => n.Id == id);
-        var group = lane.Groups.FirstOrDefault(g => NodeIdOf(lane, g) == id);
-        if (node is null || group is null) return null;
+        // Nodes and Groups are built from the same list in the same order (the trace ghost is appended after them).
+        var index = lane.View.Nodes.ToList().FindIndex(n => n.Id == id);
+        if (index < 0 || index >= lane.Groups.Count) return null;
+        var node = lane.View.Nodes[index];
+        var group = lane.Groups[index];
 
         if (group.Hops.Count > 1 || group.Kind == NodeKind.Collapsed)
         {
@@ -292,14 +312,7 @@ public static class PathMapPresenter
 
         var hop = lane.Diagnosis.Hops[group.Hops[0]];
         return new DetailView(id, node.Title, node.Address, node.StateLabel, node.State,
-            StatsOf(hop.Stats, t), lane.Snap.HopSamples.Count > group.Hops[0] ? lane.Snap.HopSamples[group.Hops[0]] : [], NoteFor(hop, lane));
-    }
-
-    static string NodeIdOf(Analysed lane, Group g)
-    {
-        var first = lane.Diagnosis.Hops[g.Hops[0]].Hop.Ttl;
-        var last = lane.Diagnosis.Hops[g.Hops[^1]].Hop.Ttl;
-        return g.Hops.Count == 1 ? $"{lane.Id}:{first}" : $"{lane.Id}:{first}-{last}";
+            StatsOf(hop.Stats, t), lane.Snap.HopSamples.Count > group.Hops[0] ? lane.Snap.HopSamples[group.Hops[0]] : [], NoteFor(hop, lane, group.Hops[0]));
     }
 
     static IReadOnlyList<(string, string)> StatsOf(SampleStats s, PathThresholds t) =>
@@ -311,17 +324,24 @@ public static class PathMapPresenter
         ("Window", $"{t.Window.TotalSeconds.ToString("0", Inv)} s"),
     ];
 
-    static string NoteFor(HopDiagnosis hop, Analysed lane) => hop.Display switch
+    static string NoteFor(HopDiagnosis hop, Analysed lane, int hopIndex)
     {
-        HopDisplay.Measuring => "Not enough checks yet to judge this device.",
-        HopDisplay.Unavailable => "The checks could not run on this PC, so nothing is known about this device.",
-        HopDisplay.Hidden => "This device never answered the trace. Many carriers and routers do this; it is not a failure.",
-        HopDisplay.Quiet => "It answers probes badly, but there is no evidence against it. Devices often ignore probes while still passing traffic.",
-        HopDisplay.Suspect => "It lost some probes while the internet check was failing, but not clearly enough to call it the break.",
-        HopDisplay.Broken => "Its probes were lost in the same moments the internet check failed, while the device before it kept answering.",
-        HopDisplay.Silent => "It does not answer, and it is after the located break.",
-        _ => hop.Hop.Ttl == 1 && lane.Id == "lan"
-            ? "Your router: the first device on the way out."
-            : "Answering its probes normally.",
-    };
+        var firstBad = lane.Diagnosis.FirstBadHop == hopIndex;
+        var hasDeviceBefore = lane.Diagnosis.LastAnsweringHop is not null;
+        return hop.Display switch
+        {
+            HopDisplay.Measuring => "Not enough checks yet to judge this device.",
+            HopDisplay.Unavailable => "The checks could not run on this PC, so nothing is known about this device.",
+            HopDisplay.Hidden => "This device never answered the trace. Many carriers and routers do this; it is not a failure.",
+            HopDisplay.Quiet => "It answers probes badly, but there is no evidence against it. Devices often ignore probes while still passing traffic.",
+            HopDisplay.Suspect when firstBad => "The first device after the last one that answered. It lost some of its probes while the internet check was failing, so it is the most likely break, though not every probe was lost.",
+            HopDisplay.Suspect => "It lost some probes while the internet check was failing, but not clearly enough to call it the break.",
+            HopDisplay.Broken when !hasDeviceBefore => "Its probes were lost in the same moments the internet check failed, and it is the first device on the way out.",
+            HopDisplay.Broken => "Its probes were lost in the same moments the internet check failed, while the device before it kept answering.",
+            HopDisplay.Silent => "It does not answer, and it is after the located break.",
+            _ => hop.Hop.Ttl == 1 && lane.Id == "lan"
+                ? "Your router: the first device on the way out."
+                : "Answering its probes normally.",
+        };
+    }
 }
