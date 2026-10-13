@@ -1,6 +1,6 @@
 # NetRoute Widget v5 — Network path map (design)
 
-**Status:** Draft 2 for review. Nothing is implemented yet. Draft 2 folds in the review of draft 1 (fault rule, evidence thresholds, startup, recovery, refresh rates, measurement-unavailable and trace-incomplete states).
+**Status:** Implemented on branch feat/v5-path-map (PR #3); waiting for the user's on-machine verification.
 **Builds on:** v4 (profiles) and v1's adapter detection and auto-heal.
 **Mockup:** [`docs/superpowers/mockups/2026-10-13-path-map-mockup.html`](../mockups/2026-10-13-path-map-mockup.html), interactive, sample numbers. It shows the layout, the look and the two failure situations (loss, break). The calmer states in this spec (measuring, quiet, unavailable, trace incomplete) are specified in the tables below and get their visual treatment in the plan's UI task.
 
