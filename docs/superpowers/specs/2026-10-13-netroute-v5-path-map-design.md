@@ -48,7 +48,7 @@ From the review of draft 1:
 | **Measurement unavailable** | grey hatched, "Measurement unavailable" | the checks could not run on this PC (see outcomes). Says nothing about the network |
 | **Trace incomplete** | a dashed ghost box "Not traced", labelled "Trace incomplete", after the last known device | the trace did not reach `1.1.1.1` within 12 hops. Says nothing about the network |
 
-- A lane shows at most four boxes between the PC and the Internet card. Consecutive hidden hops collapse into one "N hidden hops" box, and anything beyond the fourth box collapses into "+N more" (it takes the worst state of its members and lists them in the detail panel).
+- A lane shows at most four boxes between the PC and the Internet card. Consecutive hidden hops share one box titled "Hops 2–3" (or "Hop 2"), labelled "Hidden hop", and anything beyond the fourth box collapses into "+N more" (it takes the worst state of its members and lists them in the detail panel). The "Not traced" ghost box of an incomplete trace is drawn in addition to the four.
 - The detail panel for a device shows latency (average, best, worst), packets lost, checks that could not be measured, a 30-second sparkline, and a plain-language note.
 - The window follows the Windows light/dark theme. Animations stop when Windows' animation setting is off or the user pauses.
 
@@ -154,7 +154,7 @@ Raw observations are not conclusions. A lane gets one of these statuses from the
 ### Diagnosis text (templated and unit-tested)
 
 - Healthy, both lanes: "Both connections reach the internet." A missing lane: "LAN: not connected."
-- Measuring: "Measuring… 6 of 10 s."
+- Measuring: "LAN: measuring… 6 of 10 s." (one line per connection, lane-prefixed).
 - Unavailable: "LAN: measurement unavailable on this PC. That says nothing about the connection."
 - Blip: "LAN: 1 internet check failed in the last 30 s. That is not enough to call a fault."
 - Located: "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 lost 38% of its probes." (P is "this PC" when none is cleared; "did not answer" replaces the percentage when it lost every probe.)
