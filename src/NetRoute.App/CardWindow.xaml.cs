@@ -32,6 +32,7 @@ public partial class CardWindow : Window
     public event Action? SmartSettingsRequested;
     public event Action<bool>? SmartToggleRequested;
     public event Action? SpeedTestRequested;
+    public event Action? PathMapRequested;
 
     /// Shows the card at its saved spot, or bottom-right when that spot is no longer on screen.
     public void ShowAndPlace(double? savedLeft, double? savedTop)
@@ -158,8 +159,11 @@ public partial class CardWindow : Window
     void OnDrag(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState != MouseButtonState.Pressed) return;
+        var (left, top) = (Left, Top);
         DragMove();
         Moved?.Invoke(Left, Top);
+        // Pressing and releasing on the status line without moving the card is a click on it: open the path map.
+        if (ReferenceEquals(e.OriginalSource, Header) && Left == left && Top == top) PathMapRequested?.Invoke();
     }
 
     void OnMenu(object sender, RoutedEventArgs e)
@@ -186,6 +190,8 @@ public partial class CardWindow : Window
     void OnSmartTextClick(object sender, MouseButtonEventArgs e) => SmartSettingsRequested?.Invoke();
 
     void OnSpeedTest(object sender, RoutedEventArgs e) => SpeedTestRequested?.Invoke();
+
+    void OnPathMap(object sender, RoutedEventArgs e) => PathMapRequested?.Invoke();
 
     void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
