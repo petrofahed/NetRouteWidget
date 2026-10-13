@@ -21,6 +21,7 @@ public sealed class TcpEndpointProbe(IReadOnlyList<IPEndPoint> targets, TimeSpan
         var sawUnavailable = false;
         foreach (var target in targets)
         {
+            if (ct.IsCancellationRequested) return new EndpointResult(ProbeOutcome.Unavailable);
             var result = await ConnectAsync(source, target, ct);
             if (result.Outcome == ProbeOutcome.Reply) return result;
             if (result.Outcome == ProbeOutcome.Unavailable) sawUnavailable = true;
@@ -30,11 +31,13 @@ public sealed class TcpEndpointProbe(IReadOnlyList<IPEndPoint> targets, TimeSpan
 
     async Task<EndpointResult> ConnectAsync(IPAddress source, IPEndPoint target, CancellationToken ct)
     {
-        using var socket = new Socket(target.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeout);
+        Socket? socket = null;
         try
         {
+            // Created inside the try: exhausted sockets and unsupported families can fail at construction, not only at connect.
+            socket = new Socket(target.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             socket.Bind(new IPEndPoint(source, 0));
             var stopwatch = Stopwatch.StartNew();
             await socket.ConnectAsync(target, timeoutCts.Token);
@@ -48,6 +51,15 @@ public sealed class TcpEndpointProbe(IReadOnlyList<IPEndPoint> targets, TimeSpan
         catch (SocketException e)
         {
             return new EndpointResult(Classify(e.SocketErrorCode));
+        }
+        catch (Exception e) when (e is ObjectDisposedException or InvalidOperationException or ArgumentException
+                                      or NotSupportedException or PlatformNotSupportedException)
+        {
+            return new EndpointResult(ProbeOutcome.Unavailable);
+        }
+        finally
+        {
+            socket?.Dispose();
         }
     }
 
