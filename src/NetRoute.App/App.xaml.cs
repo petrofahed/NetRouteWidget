@@ -524,7 +524,7 @@ public partial class App : Application
         };
         var initial = controller.Status.Adapters;
         monitor.SetAdapters(initial.Lan, initial.Phone);
-        _ = monitor.RunAsync(cts.Token);
+        _ = Task.Run(() => monitor.RunAsync(cts.Token)); // off the UI thread: its loops, probe continuations, locks and the log callback must not run there
         window.Show();
     }
 

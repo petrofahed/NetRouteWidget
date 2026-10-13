@@ -30,6 +30,12 @@ public partial class PathMapWindow : Window
         _timer.Tick += (_, _) =>
         {
             if (!_paused) Refresh();
+            else
+            {
+                // Paused: nothing is drawn, but the monitor keeps following the adapters (the present callback updates them).
+                try { _present(_selected); }
+                catch (Exception) { }
+            }
         };
         Loaded += (_, _) =>
         {
