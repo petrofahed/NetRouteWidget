@@ -524,7 +524,11 @@ public partial class App : Application
         };
         var initial = controller.Status.Adapters;
         monitor.SetAdapters(initial.Lan, initial.Phone);
-        _ = Task.Run(() => monitor.RunAsync(cts.Token)); // off the UI thread: its loops, probe continuations, locks and the log callback must not run there
+        var token = cts.Token; // read before queuing: the Closed handler may dispose cts before the pool runs the lambda
+        var run = Task.Run(() => monitor.RunAsync(token)); // off the UI thread: its loops, probe continuations, locks and the log callback must not run there
+        // Last resort: the monitor swallows cancellation and logs its own errors, but an unobserved fault here would vanish silently.
+        _ = run.ContinueWith(t => _log?.Error("Path map monitor stopped unexpectedly", t.Exception?.GetBaseException()),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         window.Show();
     }
 
