@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-13-netroute-v5-path-map-design.md` (draft 2). Mockup: `docs/superpowers/mockups/2026-10-13-path-map-mockup.html`. Read the spec's "The outcome of one check", "Per-device observation" and "The fault rule" sections before Tasks 2 and 4.
 
+**Execution note (added after the plan was run):** the plan was executed task by task with a review after each task and a whole-branch review at the end. The reviews found real defects in the code below, which were fixed in follow-up commits (fix rounds per task and one final fix wave). The code blocks in this document are therefore the starting point, not the final code: **the code in the repository is the truth**, and the spec was amended to match (hidden hops are not probed between traces, no Implicated verdict without a good-period baseline, a degraded re-trace is not adopted on first sight, samples are stamped with the probe's send time, an unavailable trace no longer hides the internet check). The `PathKit.Lane` helper moved from Task 1 to Task 4 because it needs `LaneInput`.
+
 **Provenance of the code below:** every code block in Tasks 1–10 was compiled and its tests were run in a throwaway copy of the repo before this plan was written (135 new Core tests, all passing; the solution built; the window was rendered to PNG for six scenarios and inspected). The copy was not committed. Treat the code as reviewed and tested, but still run each task's tests as written: they are the executor's evidence.
 
 ## Global Constraints
