@@ -53,12 +53,14 @@ sealed class FakePathProbe : IPathProbe
 
     /// When set, every echo waits for it: holds a probe in flight.
     public TaskCompletionSource? Gate { get; set; }
+    /// When set together with Gate, only the echoes it accepts (by TTL) wait. It may be stateful, e.g. to hold only the first call.
+    public Func<int, bool>? GateWhen { get; set; }
     public Exception? Throw { get; set; }
 
     public async Task<EchoResult> EchoAsync(IPAddress source, IPAddress target, int ttl, TimeSpan timeout, CancellationToken ct)
     {
         lock (Calls) Calls.Add(ttl);
-        if (Gate is { } gate) await gate.Task;
+        if (Gate is { } gate && (GateWhen?.Invoke(ttl) ?? true)) await gate.Task;
         if (Throw is { } ex) throw ex;
         return ByTtl.TryGetValue(ttl, out var r) ? r : Default;
     }
@@ -72,6 +74,12 @@ sealed class FakeEndpointProbe : IEndpointProbe
     public EndpointResult Result { get; set; } = new(ProbeOutcome.Reply, 20);
     public Exception? Throw { get; set; }
 
-    public Task<EndpointResult> CheckAsync(IPAddress source, CancellationToken ct) =>
-        Throw is { } ex ? throw ex : Task.FromResult(Result);
+    /// When set, every check waits for it: holds a check in flight.
+    public TaskCompletionSource? Gate { get; set; }
+
+    public async Task<EndpointResult> CheckAsync(IPAddress source, CancellationToken ct)
+    {
+        if (Gate is { } gate) await gate.Task;
+        return Throw is { } ex ? throw ex : Result;
+    }
 }

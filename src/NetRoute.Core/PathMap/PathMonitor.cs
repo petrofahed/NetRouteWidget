@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 
 namespace NetRoute.Core.PathMap;
 
@@ -11,6 +12,9 @@ public sealed class PathMonitor
     public static readonly TimeSpan EndpointPeriod = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan RetraceEvery = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan RetraceMinGap = TimeSpan.FromSeconds(10);
+    /// Rounds are started on a fixed rate even while earlier ones wait for a timeout; this many of one kind may be outstanding.
+    public const int MaxOutstandingRounds = 3;
+    const int MaxLoggedMessages = 20;
 
     readonly IPathProbe _hopProbe;
     readonly IEndpointProbe _endpointProbe;
@@ -21,7 +25,7 @@ public sealed class PathMonitor
     readonly Lock _gate = new();
     readonly Lane _lan, _phone;
     DateTimeOffset? _lastSampleAt;
-    string? _lastError;
+    readonly HashSet<string> _logged = [];
 
     public PathMonitor(IPathProbe hopProbe, IEndpointProbe endpointProbe, TimeProvider time, PathThresholds thresholds, Action<string> log)
     {
@@ -61,9 +65,10 @@ public sealed class PathMonitor
 
     void Apply(Lane lane, AdapterInfo? adapter)
     {
-        var source = adapter?.IPv4 is { } text && IPAddress.TryParse(text, out var ip) ? ip : null;
-        if (adapter?.Index == lane.Adapter?.Index && Equals(source, lane.Source)) return;
-        lane.Adapter = adapter;
+        var source = adapter?.IPv4 is { } text && IPAddress.TryParse(text, out var ip) && ip.AddressFamily == AddressFamily.InterNetwork ? ip : null;
+        var unchanged = adapter?.Index == lane.Adapter?.Index && Equals(source, lane.Source);
+        lane.Adapter = adapter; // the details (name, gateway, link state) stay fresh even when the lane keeps its samples
+        if (unchanged) return;
         lane.Source = source;
         lane.Generation++;
         lane.Trace = null;
@@ -81,7 +86,11 @@ public sealed class PathMonitor
         {
             var now = _time.GetUtcNow();
             foreach (var lane in new[] { _lan, _phone })
-                if (lane.Source is { } source && (force || RetraceDue(lane, now))) due.Add((lane, lane.Generation, source));
+                if (lane.Source is { } source && (force || RetraceDue(lane, now)))
+                {
+                    lane.LastTrace = now; // stamped at the start, so a tracer that throws is retried after the minimum gap, not every second
+                    due.Add((lane, lane.Generation, source));
+                }
         }
 
         await Task.WhenAll(due.Select(async d =>
@@ -95,13 +104,12 @@ public sealed class PathMonitor
                 if (!sameHops) d.Lane.Hops = trace.Hops.Select(_ => new PathSamples(_t.Window)).ToList();
                 d.Lane.Trace = trace;
                 d.Lane.NeedsRetrace = trace.Status == TraceStatus.Unavailable;
-                d.Lane.LastTrace = _time.GetUtcNow();
             }
         }));
     }
 
     bool RetraceDue(Lane lane, DateTimeOffset now) =>
-        lane.Trace is null || now - lane.LastTrace >= (lane.NeedsRetrace ? RetraceMinGap : RetraceEvery);
+        now - lane.LastTrace >= (lane.NeedsRetrace ? RetraceMinGap : RetraceEvery);
 
     /// One echo per non-hidden device of each traced lane, in parallel.
     public async Task HopRoundAsync(CancellationToken ct)
@@ -139,13 +147,14 @@ public sealed class PathMonitor
             if (generation != lane.Generation || !ReferenceEquals(lane.Trace, trace)) return; // the lane was reset or re-traced meanwhile
             store.Add(new Sample(sentAt, result.Outcome, result.RttMs));
             _lastSampleAt = _time.GetUtcNow(); // when data last arrived, not when it was sent
-            if (result.Outcome == ProbeOutcome.Reply && PathChanged(trace, hop, result)) lane.NeedsRetrace = true;
+            if (result.Outcome == ProbeOutcome.Reply && PathChanged(hop, result)) lane.NeedsRetrace = true;
         }
     }
 
-    /// A reply from another address, from the target at a TTL that used to be a device, or from a hop that used to be silent.
-    static bool PathChanged(PathTrace trace, PathHop hop, EchoResult result) =>
-        result.TargetReached || hop.Address is null || !Equals(result.From, hop.Address);
+    /// A reply from another address, or from the target at a TTL that used to be a device. (Hidden hops are not probed, so a
+    /// silent hop that starts answering is picked up by the periodic retrace.)
+    static bool PathChanged(PathHop hop, EchoResult result) =>
+        result.TargetReached || !Equals(result.From, hop.Address);
 
     /// One internet check per connected lane.
     public async Task EndpointRoundAsync(CancellationToken ct)
@@ -185,13 +194,17 @@ public sealed class PathMonitor
         catch (OperationCanceledException) { return onError; }
         catch (Exception ex)
         {
-            if (_lastError != ex.Message)
-            {
-                _lastError = ex.Message;
-                _log($"Path map: a check failed to run: {ex.Message}");
-            }
+            LogOnce(ex.Message);
             return onError;
         }
+    }
+
+    /// Logs each distinct message once (and at most a few distinct ones), outside the lock.
+    void LogOnce(string message)
+    {
+        bool fresh;
+        lock (_gate) fresh = _logged.Count < MaxLoggedMessages && _logged.Add(message);
+        if (fresh) _log($"Path map: a check failed to run: {message}");
     }
 
     public PathSnapshot Snapshot()
@@ -211,29 +224,55 @@ public sealed class PathMonitor
         return new LaneSnapshot(lane.Name, lane.Adapter, lane.Trace, hopSamples, lane.Endpoint.Snapshot(now));
     }
 
-    /// Runs both loops until cancelled. The hop loop also retraces when due; the internet check has its own loop because it can take longer than a second.
+    /// Runs both loops until cancelled, then waits for the rounds still out (they watch the same token). The hop loop also retraces
+    /// when due; the internet check has its own loop because it can take longer than a second.
     public async Task RunAsync(CancellationToken ct)
     {
         try { await Task.WhenAll(HopLoop(ct), EndpointLoop(ct)); }
         catch (OperationCanceledException) { }
     }
 
+    /// Fixed rate: a new round starts every period whether or not the previous one has finished (during an outage a round waits
+    /// for its timeouts, and the 30 s window must still fill at the stated rate). The retrace runs beside the rounds, never in front of them.
     async Task HopLoop(CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        var rounds = new List<Task>();
+        Task? retrace = null;
+        try
         {
-            await RetraceAsync(ct);
-            await HopRoundAsync(ct);
-            await Task.Delay(HopPeriod, _time, ct);
+            while (!ct.IsCancellationRequested)
+            {
+                var tick = Task.Delay(HopPeriod, _time, ct); // started first, so the rate does not drift with the work
+                if (retrace is not { IsCompleted: false }) retrace = Launched(() => RetraceAsync(ct));
+                rounds.RemoveAll(t => t.IsCompleted);
+                if (rounds.Count < MaxOutstandingRounds) rounds.Add(Launched(() => HopRoundAsync(ct)));
+                await tick;
+            }
         }
+        finally { await Task.WhenAll(retrace is null ? rounds : rounds.Append(retrace)); }
     }
 
     async Task EndpointLoop(CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        var rounds = new List<Task>();
+        try
         {
-            await EndpointRoundAsync(ct);
-            await Task.Delay(EndpointPeriod, _time, ct);
+            while (!ct.IsCancellationRequested)
+            {
+                var tick = Task.Delay(EndpointPeriod, _time, ct);
+                rounds.RemoveAll(t => t.IsCompleted);
+                if (rounds.Count < MaxOutstandingRounds) rounds.Add(Launched(() => EndpointRoundAsync(ct)));
+                await tick;
+            }
         }
+        finally { await Task.WhenAll(rounds); }
+    }
+
+    /// Starts work without awaiting it. The returned task never faults: an exception is logged (once per message) and the loop carries on.
+    async Task Launched(Func<Task> work)
+    {
+        try { await work(); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { LogOnce(ex.Message); }
     }
 }

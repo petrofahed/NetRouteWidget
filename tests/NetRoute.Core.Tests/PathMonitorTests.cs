@@ -87,7 +87,9 @@ public class PathMonitorTests
         await rig.Monitor.EndpointRoundAsync(CancellationToken.None);
         await rig.Monitor.EndpointRoundAsync(CancellationToken.None);
 
-        Assert.All(rig.Monitor.Snapshot().Lan.EndpointSamples, s => Assert.Equal(ProbeOutcome.Unavailable, s.Outcome));
+        var samples = rig.Monitor.Snapshot().Lan.EndpointSamples;
+        Assert.Equal(2, samples.Count);
+        Assert.All(samples, s => Assert.Equal(ProbeOutcome.Unavailable, s.Outcome));
         Assert.Single(rig.Log);
         Assert.Contains("boom", rig.Log[0]);
     }
@@ -123,6 +125,42 @@ public class PathMonitorTests
         var lan = rig.Monitor.Snapshot().Lan;
         Assert.Null(lan.Trace);
         Assert.Empty(lan.HopSamples);
+        Assert.Null(rig.Monitor.Snapshot().LastSampleAt); // the stale sample was not stored anywhere
+    }
+
+    [Fact]
+    public async Task A_check_in_flight_when_the_adapter_changes_is_dropped()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Endpoint.Gate = new TaskCompletionSource();
+
+        var round = rig.Monitor.EndpointRoundAsync(CancellationToken.None);
+        rig.Monitor.SetAdapters(TestAdapters.Lan(index: 11), null);
+        rig.Endpoint.Gate.SetResult();
+        await round;
+
+        Assert.Empty(rig.Monitor.Snapshot().Lan.EndpointSamples);
+        Assert.Null(rig.Monitor.Snapshot().LastSampleAt);
+    }
+
+    [Fact]
+    public async Task A_probe_in_flight_while_an_unchanged_path_is_retraced_is_dropped()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        var held = 0;
+        rig.Hops.Gate = new TaskCompletionSource();
+        rig.Hops.GateWhen = ttl => ttl == 1 && Interlocked.Increment(ref held) == 1; // hold only the hop probe, not the tracer's echo
+
+        var round = rig.Monitor.HopRoundAsync(CancellationToken.None);
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true); // same addresses: the history stays, but the trace is a new object
+        rig.Hops.Gate.SetResult();
+        await round;
+
+        var lan = rig.Monitor.Snapshot().Lan;
+        Assert.Empty(lan.HopSamples[0]); // answered for the old trace: dropped
+        Assert.Single(lan.HopSamples[1]); // not held: stored before the retrace, kept by it
     }
 
     [Fact]
@@ -275,5 +313,102 @@ public class PathMonitorTests
         var snapshot = rig.Monitor.Snapshot();
         Assert.Equal(sentAt, Assert.Single(snapshot.Lan.HopSamples[0]).At);
         Assert.Equal(completedAt, snapshot.LastSampleAt);
+    }
+
+    [Fact]
+    public async Task A_check_is_stamped_with_the_time_it_was_sent()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Endpoint.Gate = new TaskCompletionSource();
+        var sentAt = rig.Time.GetUtcNow();
+
+        var round = rig.Monitor.EndpointRoundAsync(CancellationToken.None);
+        rig.Time.Advance(TimeSpan.FromSeconds(3)); // a slow check
+        var completedAt = rig.Time.GetUtcNow();
+        rig.Endpoint.Gate.SetResult();
+        await round;
+
+        var snapshot = rig.Monitor.Snapshot();
+        Assert.Equal(sentAt, Assert.Single(snapshot.Lan.EndpointSamples).At);
+        Assert.Equal(completedAt, snapshot.LastSampleAt);
+    }
+
+    [Fact]
+    public async Task The_adapter_details_stay_fresh_while_the_samples_are_kept()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+
+        rig.Monitor.SetAdapters(TestAdapters.Lan() with { Name = "Ethernet (renamed)" }, null);
+
+        var lan = rig.Monitor.Snapshot().Lan;
+        Assert.Equal("Ethernet (renamed)", lan.Adapter!.Name);
+        Assert.Single(lan.HopSamples[0]);
+    }
+
+    [Fact]
+    public async Task An_adapter_with_only_an_ipv6_address_is_not_probed()
+    {
+        var rig = new Rig();
+        rig.Monitor.SetAdapters(TestAdapters.Lan() with { IPv4 = "fe80::1" }, null);
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        await rig.Monitor.EndpointRoundAsync(CancellationToken.None);
+
+        Assert.Empty(rig.Hops.Calls);
+        Assert.Null(rig.Monitor.Snapshot().Lan.Trace);
+    }
+
+    [Fact]
+    public async Task A_tracer_that_throws_is_retried_after_the_minimum_gap_not_every_round()
+    {
+        var rig = new Rig();
+        rig.Hops.Throw = new InvalidOperationException("no tracer");
+        await rig.Ready();
+        var calls = rig.Hops.Calls.Count;
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // right away: not due
+        Assert.Equal(calls, rig.Hops.Calls.Count);
+
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.True(rig.Hops.Calls.Count > calls);
+        Assert.Single(rig.Log);
+    }
+
+    [Fact]
+    public async Task Rounds_start_every_period_even_while_a_probe_is_still_in_flight()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.Gate = new TaskCompletionSource(); // every probe stays out until released
+        using var cts = new CancellationTokenSource();
+        int CallsAtTtl1() { lock (rig.Hops.Calls) return rig.Hops.Calls.Count(c => c == 1); }
+        var baseline = CallsAtTtl1();
+
+        var run = rig.Monitor.RunAsync(cts.Token);
+        await WaitUntil(() => CallsAtTtl1() == baseline + 1);
+        for (var step = 2; step <= 3; step++)
+        {
+            rig.Time.Advance(PathMonitor.HopPeriod);
+            await WaitUntil(() => CallsAtTtl1() == baseline + step); // a new round while the earlier ones are still blocked
+        }
+
+        rig.Time.Advance(PathMonitor.HopPeriod); // a fourth tick: three rounds are out, so none is added
+        await Task.Delay(100);
+        Assert.Equal(baseline + PathMonitor.MaxOutstandingRounds, CallsAtTtl1());
+
+        rig.Hops.Gate.SetResult();
+        cts.Cancel();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(run.IsCompletedSuccessfully);
+    }
+
+    static async Task WaitUntil(Func<bool> condition)
+    {
+        for (var i = 0; i < 200 && !condition(); i++) await Task.Delay(10); // bounded: at most about 2 s
+        Assert.True(condition(), "the condition was not met in time");
     }
 }
