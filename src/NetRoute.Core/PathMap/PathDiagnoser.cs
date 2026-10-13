@@ -123,7 +123,7 @@ public static class PathDiagnoser
             var after = candidates.ToHashSet();
             return build(LaneStatus.Fault, Localization.Located,
                 i => i == first ? (observed[i] == Observation.Silent ? HopDisplay.Broken : HopDisplay.Suspect)
-                    : after.Contains(i) ? HopDisplay.Silent
+                    : after.Contains(i) ? (observed[i] == Observation.Silent ? HopDisplay.Silent : calm(i))
                     : cleared[i] ? HopDisplay.Answering : calm(i),
                 failureLoss, furthestCleared, first);
         }

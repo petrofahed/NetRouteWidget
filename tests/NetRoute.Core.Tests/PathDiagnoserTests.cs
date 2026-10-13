@@ -100,11 +100,17 @@ public class PathDiagnoserTests
     [Fact]
     public void Devices_that_answer_are_never_greyed_after_a_located_break()
     {
-        var d = Diagnose(Lane(Four, FailingEndpoint(),
-            Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(14)), Every(1, LostDuring(14))));
+        // the check fails 12..20 and recovers (lossy overall, in Fault); both hops lose probes 12..16 (implicated by the
+        // failing buckets) but have answered every probe since, so both are observed Answering and must not be drawn Silent
+        var lostThenRecovered = (Func<int, ProbeOutcome>)(sec => sec >= 12 && sec <= 16 ? ProbeOutcome.NoReply : ProbeOutcome.Reply);
+        var d = Diagnose(Lane(Trace("192.168.86.1", "192.168.1.1"),
+            Every(2, sec => sec >= 12 && sec <= 20 ? ProbeOutcome.NoReply : ProbeOutcome.Reply),
+            Every(1, lostThenRecovered), Every(1, lostThenRecovered)));
 
-        foreach (var hop in d.Hops.Where(h => h.Observed == Observation.Answering))
-            Assert.Equal(HopDisplay.Answering, hop.Display);
+        Assert.Equal(Localization.Located, d.Where);
+        Assert.All(d.Hops, h => Assert.Equal(Observation.Answering, h.Observed));
+        Assert.DoesNotContain(HopDisplay.Silent, Displays(d));
+        Assert.Equal(HopDisplay.Answering, d.Hops[1].Display);
     }
 
     [Fact]
@@ -156,6 +162,8 @@ public class PathDiagnoserTests
 
         Assert.NotEqual(HopDisplay.Broken, d.Hops[2].Display);
         Assert.Null(d.FirstBadHop);
+        Assert.Equal(Localization.Narrowed, d.Where);
+        Assert.Equal(2, d.LastAnsweringHop);
     }
 
     [Fact]
