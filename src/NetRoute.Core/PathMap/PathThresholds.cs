@@ -41,6 +41,10 @@ public sealed record PathThresholds
 
     public int MaxHops { get; init; } = 12;
 
+    /// TTL of the direct ping to a device's own address. High enough to never expire on the way; a reply proves only that the
+    /// device answers, not that it forwards traffic.
+    public int DirectTtl { get; init; } = 64;
+
     /// A device answering from another address than the traced one this many times in a row asks for a new trace
     /// (a single odd reply is usually a load-balanced hop).
     public int HopAddressChangeReplies { get; init; } = 3;

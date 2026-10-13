@@ -10,7 +10,7 @@ On 2026-10-13 the LAN kept dropping for 5–8 seconds every 30–60 seconds whil
 
 ## Goal
 
-Click the card and see a drawn map of the route from this PC to the internet over **both** connections (LAN and phone). Each device on the way shows live health. When a connection is failing, the map says where the break is when the evidence supports it, narrows it when it only partly does, and says "not enough data" when it does not.
+Click the card and see a drawn map of the route from this PC to the internet over **both** connections (LAN and phone). Each device on the way shows live health. When a connection is failing, the map says where the break is when the evidence supports it, narrows it when it only partly does, and says "location uncertain" when it does not.
 
 ## Decisions made
 
@@ -25,14 +25,18 @@ From the conversation:
 From the review of draft 1:
 
 - **An intermediate device that ignores probes is never called broken while the destination still responds**, and nothing that answers is greyed out.
-- **A hop is blamed only with evidence from the same observation period as the endpoint failure**, and the wording says exactly how far the evidence goes (located / narrowed / not enough data).
+- **A hop is blamed only with evidence from the same observation period as the endpoint failure**, and the wording says exactly how far the evidence goes (located / narrowed / location uncertain).
+- **A device that stops returning route probes is not thereby broken.** A route probe is an ICMP echo with a small TTL; the device answers it with a "time exceeded" message, which many routers rate-limit or drop while still forwarding (observed on this network in a real unplug test: TTL 1 and 2 went silent for the whole outage while TTL 3 and a direct ping kept answering, and the map named the first device). So a **direct ping** (an echo to the device's own address, TTL 64) is sent to every visible device as a second, separate kind of evidence. It is **additional evidence, never proof that the device forwards traffic**: a device that answers a direct ping is *reachable*, nothing more.
+- **Missing route probes alone never name a device.** A device can be named as the break only when its direct pings were lost in step with the failure too. When the evidence conflicts or is missing, the window says "location uncertain" and draws no broken link.
+- **Routing and reachability are different statements and are labelled so.** The headline is "Routing: …" (which connection Windows sends traffic through; "LAN not routing" means it is not the preferred route). The lines below it are headed "Reachability" (can each connection reach the internet on its own).
+- **A route seen earlier is history, not the map.** When a degraded trace replaces a better one, the better route is kept and listed as "last known route (stale, seen N s ago, not the current route)" until a trace at least as good comes back.
 - **A local measurement problem is "measurement unavailable", never packet loss.** A trace that hits the hop limit is "trace incomplete", never a broken connection.
 - Thresholds below are **initial defaults**, all in one record (`PathThresholds`) so they can be tuned after real use.
 
 ## What the user sees
 
 - **Card:** the header text opens the window; so does the new footer icon. Both raise the same single window (a second click brings it forward).
-- **Window:** the card's own status line as the headline (`StatusPresenter`), one diagnosis line per connection, the map, a detail panel for the selected device, and a footer with a live indicator, a legend and a Pause display button.
+- **Window:** the card's own status line as the headline, prefixed "Routing:" (`StatusPresenter`), a "Reachability — can each connection reach the internet on its own, whichever one Windows uses" heading with one diagnosis line per connection (and a stale last-known-route line when there is one), the map, a detail panel for the selected device, and a footer with a live indicator, a legend and a Pause display button.
 - **Map:** **This PC** on the left; a LAN lane on top and a phone lane below, each a chain of devices; both end at one **Internet** card with a LAN row and a Phone row. Links are drawn as pipes with flowing dashes when healthy. A lane whose adapter is missing or has no IPv4 is drawn dim with "Not connected" and is not probed.
 - **Device and link states** (every device and link is in exactly one):
 
@@ -89,7 +93,8 @@ A trace repeats every 30 s, and sooner (at most once per 10 s) when a probe's re
 
 | What | How often | Notes |
 |---|---|---|
-| Hop probes | **every 1 s** per device, all devices of a lane in parallel | ICMP, TTL = the device's hop number |
+| Hop probes | **every 1 s** per device, all devices of a lane in parallel | ICMP, TTL = the device's hop number (the "route probe") |
+| Direct pings | **every 1 s** per visible device, in the same round | ICMP echo to the device's own address, TTL 64 (`DirectTtl`), same source address and the same 1 s timeout. Hidden devices (no address) are not pinged. Kept as a separate 30 s series per device |
 | Internet check | **every 2 s** per lane | TCP; half the hop rate on purpose, so it adds little ephemeral-port churn (the incident logged port exhaustion) |
 | Trace | every 30 s, and on change | see above |
 | Screen refresh | **at most every 500 ms** | a UI timer takes the monitor's latest immutable snapshot and re-renders. Probe results never trigger a redraw themselves |
@@ -137,20 +142,22 @@ Raw observations are not conclusions. A lane gets one of these statuses from the
 **Localisation (only in a Fault).** All evidence comes from the same trailing window as the failure:
 
 1. Cut the window into **2 s buckets**. A bucket is *failing* if the internet check lost in it, *good* if it replied. Buckets with only Unavailable checks are ignored.
-2. For each non-hidden device, count its valid probes in failing buckets (`nF`, `lostF`) and in good buckets (`nG`, `lostG`). Its loss during failures is `lostF / nF`. Its loss during good periods is `lostG / nG`. A device can be Implicated only when `nG` ≥ **5**: without a real good-period baseline (for example when the window is opened during an outage) a device that ignores or rate-limits probes cannot be told from a broken one, so it is never implicated; it can still be Cleared.
-3. A device is **Cleared** when `nF` ≥ **5** and its loss during failures ≤ **10%**: it answered while the internet check was failing, so traffic reaches at least that far.
-4. A device is **Implicated** when `nF` ≥ **5**, its loss during failures ≥ **50%**, and it is at least **30 points** worse during failures than during good periods. A device that is silent during good periods too is just quiet; it is not implicated.
+2. For each non-hidden device, count its valid probes in failing buckets (`nF`, `lostF`) and in good buckets (`nG`, `lostG`). This is done twice: once for its **route probes** and once for its **direct pings**. Its loss during failures is `lostF / nF`. Its loss during good periods is `lostG / nG`. A device can be Implicated only when `nG` ≥ **5**: without a real good-period baseline (for example when the window is opened during an outage) a device that ignores or rate-limits probes cannot be told from a broken one, so it is never implicated; it can still be Cleared.
+3. A device is **Cleared** when, for its route probes **or** its direct pings, `nF` ≥ **5** and the loss during failures is ≤ **10%**: it answered while the internet check was failing, so traffic reaches at least that far. That says it is *reachable*; it does not say it passes traffic on, so the fault stays "at or beyond" it.
+4. A device is **Implicated** only when **both** its route probes **and** its direct pings meet this: `nF` ≥ **5**, loss during failures ≥ **50%**, at least **30 points** worse during failures than during good periods. A device that is silent during good periods too is just quiet; it is not implicated. A device with no direct-ping evidence (none sent, Unavailable, or too few) can be Cleared but never Implicated, so lost route probes alone name nobody.
 5. Everything else is **Unknown** (too little evidence, or not correlated).
 6. Let **P** be the furthest Cleared device (or "this PC" when none is). The fault is after P. Let the **candidates** be the non-hidden devices after P.
    - **Located:** there is at least one candidate and **all** candidates are Implicated. The break is between P and the first candidate N.
    - **Narrowed:** P exists, but the candidates are mixed or Unknown, or there are no candidates (P is the last visible device). The fault is after P; no device is named as the break.
-   - **Not enough data:** no device is Cleared and the candidates are not all Implicated.
+   - **Location uncertain** (`Uncertain`): no device is Cleared, the candidates are not all Implicated, and at least one device lost its route probes in step with the failure without its direct pings agreeing (so the only sign against it is missing route probes).
+   - **Not enough data:** no device is Cleared, the candidates are not all Implicated, and there is no such device either.
 
 **What each result draws:**
 
 - **Located:** N is **Broken** (red, with the ✕ link) if it is Silent, otherwise **Suspect** (amber). Later candidates are **After the break** (grey dashed). Devices up to P are Answering, or Quiet when they ignore probes. A device that answers is never greyed.
 - **Narrowed:** Implicated devices are Suspect; Cleared devices Answering; the rest Quiet. The link leaving P is amber dashed ("fault somewhere after here").
-- **Not enough data:** every device keeps its calm display (Silent or Lossy shown as Quiet). No device is blamed.
+- **Location uncertain / not enough data:** every device keeps its calm display (Silent or Lossy shown as Quiet). No device is blamed and no link is drawn red or amber.
+- A device that answers direct pings but not route probes is drawn **Answering** with the metric "answers ping" (its route-probe loss figure would contradict the green state); its detail panel says it is reachable, not proven to pass traffic on, and adds a "Direct ping, lost" row.
 - The Internet card's row for the lane shows the internet check's own state (no reply, losing, answering, measuring, unavailable).
 
 ### Diagnosis text (templated and unit-tested)
@@ -159,9 +166,11 @@ Raw observations are not conclusions. A lane gets one of these statuses from the
 - Measuring: "LAN: measuring… 6 of 10 s." (one line per connection, lane-prefixed).
 - Unavailable: "LAN: measurement unavailable on this PC. That says nothing about the connection."
 - Blip: "LAN: 1 internet check failed in the last 30 s. That is not enough to call a fault."
-- Located: "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 lost 38% of its probes." (P is "this PC" when none is cleared; "did not answer" replaces the percentage when it lost every probe.)
-- Narrowed: "LAN: the internet check is failing. The last device that answered during the failures is 192.168.1.1, so the fault is after it, but the evidence does not say exactly where." When P is the last visible device: "…so the fault is beyond it or on the internet side."
-- Not enough data: "LAN: the internet check is failing, but there is not enough data yet to say where."
+- Located: "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 lost 38% of its probes and of its direct pings." (P is "this PC" when none is cleared; "did not answer, not even a direct ping" replaces the percentage when it lost every probe.)
+- Narrowed: "LAN: the internet check is failing. The last device that answered during the failures is 192.168.1.1. Answering shows it is reachable, not that it passes traffic on, so the fault is at or beyond it, but the evidence does not say exactly where." When every device after P is hidden: "…at or beyond it, possibly on the internet side."
+- Location uncertain: "LAN: the internet check is failing, but the location is uncertain. Some devices stopped returning route probes, which alone does not show that they are broken."
+- Not enough data: "LAN: the internet check is failing, but the location is uncertain: there is not enough data yet."
+- Stale route: "LAN: last known route (stale, seen 40 s ago, not the current route): this PC → 192.168.86.1 → 192.168.1.1 → internet." (also in the Trace incomplete detail)
 - Incomplete trace adds one sentence to the detail panel and the ghost device's note, never to a fault claim: "The trace did not reach 1.1.1.1 within 12 hops, so devices further on are not listed."
 
 ## Components
@@ -200,13 +209,14 @@ The monitor takes its adapters from the controller's latest `NetworkStatus.Adapt
 - A probe that fails to run is an **Unavailable** sample, never loss (see outcomes). An exception in a monitor loop is logged once per distinct message and the loop continues.
 - ICMP needs no administrator rights, so the window works when the widget is read-only.
 - IPv4 only.
-- Closing the window cancels all probes within one timeout; cancelled samples are discarded.
+- Closing the window cancels all probes (route probes, direct pings and internet checks share one token) within one timeout; cancelled samples are discarded. Every probe has a 1 s timeout and at most 3 rounds of each kind are outstanding.
+- The last-known route is kept per lane and forgotten when the lane's adapter or address changes; it is replaced only by a better route (the best one seen is kept), and cleared when a trace at least as good as it is adopted.
 - A sample whose lane was re-traced while the probe was in flight is dropped (stale generation).
 - Smart routing's sing-box tunnel may be running; the feasibility check below ran with it on.
 
 ## Testing
 
-- **Core, pure and fake-probe tests:** outcome statistics (Unavailable never counts as loss), the observation table, the recovery rule, the tracer (complete, incomplete at the hop limit, unavailable, hidden hops), the diagnoser (healthy with a quiet hop, blip, located, narrowed, not enough data, a downstream device that answers is not greyed, correlation uses the same window, insufficient evidence refuses to name a hop, measuring, unavailable), the presenter (collapsing, link states, every diagnosis sentence), and the monitor (rounds with a `FakeTimeProvider`, stale generation, cancellation discards).
+- **Core, pure and fake-probe tests:** outcome statistics (Unavailable never counts as loss), the observation table, the recovery rule, the tracer (complete, incomplete at the hop limit, unavailable, hidden hops), the diagnoser (healthy with a quiet hop, blip, located, narrowed, not enough data, **the observed outage (route probes silent, direct ping answering), silent early hops with an answering later hop, a router that answers ping while the connection beyond it fails, missing route probes alone never naming a device**, a downstream device that answers is not greyed, correlation uses the same window, insufficient evidence refuses to name a hop, measuring, unavailable), the presenter (collapsing, link states, every diagnosis sentence), and the monitor (rounds with a `FakeTimeProvider`, stale generation, cancellation discards, direct pings aimed at each visible device's address and kept apart, direct pings discarded on close, the stale last-known route).
 - **Windows layer:** `IcmpLayoutTests` (`ICMP_ECHO_REPLY` is 40 bytes on x64), the ICMP classifier table, the TCP classifier table, and one integration test (an echo from `127.0.0.1` to `127.0.0.1` returns a Reply).
 - **App:** builds clean; on-machine checks listed in the plan (real traces match the feasibility table's shape; unplugging the LAN cable shows "Not connected"; the window uses no CPU after it closes).
 
@@ -230,4 +240,13 @@ Both lanes trace independently, with status 11013 (TTL expired) at each hop. The
 
 ## Defaults to tune after real use
 
-All in `PathThresholds`: 30 s window, 10 and 5 minimum samples, 5% loss, 3 consecutive lost checks, 10 and 5 recovery replies, 3 failed checks for a fault, 5 evidence probes, 10% / 50% / 30-point evidence cut-offs, 2 s buckets, 12 hops, 4 drawn boxes.
+All in `PathThresholds`: 30 s window, 10 and 5 minimum samples, 5% loss, 3 consecutive lost checks, 10 and 5 recovery replies, 3 failed checks for a fault, 5 evidence probes, 10% / 50% / 30-point evidence cut-offs, 2 s buckets, 12 hops, 4 drawn boxes, a direct-ping TTL of 64.
+
+## Known limits of the diagnosis
+
+- A direct ping and a route probe are both ICMP handled by the device's own processor. A device that rate-limits or filters all ICMP only during load can still look unreachable to both; the rule then needs the failure to line up with the internet check in time, and a good period to compare with, before it names anything.
+- Direct ping doubles the ICMP rate (about two echoes per visible device per second per lane). Each echo is synchronous and runs on a thread-pool thread for up to its 1 s timeout; with three rounds outstanding this is bounded, but not free.
+- A device that answers a direct ping while the internet check fails is only known to be reachable. If it is itself failing to pass traffic on, the window says the fault is "at or beyond" it, not that it is the break.
+- A device behind an access list that drops ICMP echo to it (but passes time-exceeded) is cleared by its route probes and never implicated, which is the safe direction.
+- The stale last-known route is only the previous trace's device list; it is not re-probed while it is stale.
+- The fix is verified by unit and harness tests and a harness render. It has **not** been re-run against a real unplug on this network; that test needs the user's hands and is arranged with them first.

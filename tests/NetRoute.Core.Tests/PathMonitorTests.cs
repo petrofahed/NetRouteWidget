@@ -579,6 +579,111 @@ public class PathMonitorTests
         Assert.Equal(calls, rig.Hops.Calls.Count); // 2 + 2 odd replies, never 3 in a row
     }
 
+    // ----- direct pings and the stale last-known route -----
+
+    [Fact]
+    public async Task A_round_also_pings_each_device_at_its_own_address_and_keeps_those_samples_apart()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        var lan = rig.Monitor.Snapshot().Lan;
+
+        Assert.Equal(
+            [Ip("192.168.1.1"), Ip("192.168.86.1")],
+            rig.Hops.Sent.Where(s => s.Ttl == T.DirectTtl).Select(s => s.Target).OrderBy(a => a.ToString()).ToArray());
+        Assert.All(lan.HopSamples, s => Assert.Single(s));
+        Assert.All(lan.DirectSamples!, s => Assert.Equal(ProbeOutcome.Reply, Assert.Single(s).Outcome));
+    }
+
+    [Fact]
+    public async Task A_hidden_hop_is_not_pinged_directly()
+    {
+        var rig = new Rig();
+        rig.Hops.ByTtl[2] = new EchoResult(ProbeOutcome.NoReply); // a device that never answers the trace
+        rig.Hops.ByTtl[3] = Hop("172.17.18.1");
+        await rig.Ready();
+        Assert.Contains(rig.Monitor.Snapshot().Lan.Trace!.Hops, h => h.Hidden);
+
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+
+        var direct = rig.Hops.Sent.Where(s => s.Ttl == T.DirectTtl).Select(s => s.Target.ToString()).ToArray();
+        Assert.Equal(["172.17.18.1", "192.168.86.1"], direct.OrderBy(a => a).ToArray());
+    }
+
+    [Fact]
+    public async Task A_direct_ping_is_lost_or_unavailable_on_its_own_without_touching_the_route_probe_series()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.ByTtl[T.DirectTtl] = new EchoResult(ProbeOutcome.NoReply);
+
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        var lan = rig.Monitor.Snapshot().Lan;
+
+        Assert.All(lan.HopSamples, s => Assert.Equal(ProbeOutcome.Reply, Assert.Single(s).Outcome));
+        Assert.All(lan.DirectSamples!, s => Assert.Equal(ProbeOutcome.NoReply, Assert.Single(s).Outcome));
+    }
+
+    [Fact]
+    public async Task Direct_pings_in_flight_when_the_window_closes_store_nothing()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.Gate = new TaskCompletionSource();
+        rig.Hops.GateWhen = ttl => ttl == T.DirectTtl; // only the direct pings are held out
+        using var cts = new CancellationTokenSource();
+
+        var round = rig.Monitor.HopRoundAsync(cts.Token);
+        cts.Cancel();
+        rig.Hops.Gate.SetResult();
+        await round;
+
+        Assert.All(rig.Monitor.Snapshot().Lan.DirectSamples!, s => Assert.Empty(s));
+    }
+
+    [Fact]
+    public async Task A_route_replaced_by_a_shorter_one_is_kept_as_a_stale_last_known_route_until_it_is_back()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        Assert.Null(rig.Monitor.Snapshot().Lan.LastKnown);
+        rig.Hops.ByTtl[2] = Target();
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true); // first sight: not adopted, so no stale route yet
+        Assert.Null(rig.Monitor.Snapshot().Lan.LastKnown);
+
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        var lan = rig.Monitor.Snapshot().Lan;
+        Assert.Single(lan.Trace!.Hops); // the map now shows the shorter route
+        Assert.Equal(2, lan.LastKnown!.Trace.Hops.Count); // and the longer one is remembered, with the time it was seen
+        Assert.Equal(Start, lan.LastKnown.SeenAt);
+
+        rig.Hops.ByTtl[2] = Hop("192.168.1.1"); // the route is back
+        rig.Time.Advance(PathMonitor.RetraceEvery);
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.Equal(2, rig.Monitor.Snapshot().Lan.Trace!.Hops.Count);
+        Assert.Null(rig.Monitor.Snapshot().Lan.LastKnown);
+    }
+
+    [Fact]
+    public async Task Changing_the_adapter_forgets_the_last_known_route()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.ByTtl[2] = Target();
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true);
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.NotNull(rig.Monitor.Snapshot().Lan.LastKnown);
+
+        rig.Monitor.SetAdapters(TestAdapters.Lan() with { IPv4 = "192.168.86.43" }, null);
+
+        Assert.Null(rig.Monitor.Snapshot().Lan.LastKnown);
+    }
+
     static async Task WaitUntil(Func<bool> condition)
     {
         for (var i = 0; i < 200 && !condition(); i++) await Task.Delay(10); // bounded: at most about 2 s

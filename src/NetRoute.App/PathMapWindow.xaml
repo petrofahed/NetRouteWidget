@@ -9,7 +9,8 @@
     <DockPanel Margin="16">
         <StackPanel DockPanel.Dock="Top">
             <TextBlock x:Name="Headline" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
-            <StackPanel x:Name="Diagnosis" Margin="0,6,0,0" />
+            <TextBlock x:Name="ReachabilityTitle" Margin="0,8,0,0" FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
+            <StackPanel x:Name="Diagnosis" Margin="0,2,0,0" />
         </StackPanel>
 
         <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">

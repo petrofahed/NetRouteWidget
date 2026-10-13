@@ -34,3 +34,6 @@ public sealed record PathHop(int Ttl, IPAddress? Address)
 }
 
 public sealed record PathTrace(IPAddress Source, IPAddress Target, IReadOnlyList<PathHop> Hops, TraceStatus Status);
+
+/// The last better route, kept after a worse trace replaced it. It is history, not the current route: it is always shown as stale.
+public sealed record StaleRoute(PathTrace Trace, DateTimeOffset SeenAt);

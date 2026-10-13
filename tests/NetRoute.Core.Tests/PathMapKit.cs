@@ -42,6 +42,14 @@ static class PathKit
 
     public static LaneInput Lane(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
         new("LAN", true, trace, hops.Select(h => (IReadOnlyList<Sample>)h).ToList(), endpoint, Now);
+
+    /// The same, with a direct ping to every device that fares exactly like its route probes (a device that is really unreachable).
+    public static LaneInput LaneM(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
+        Lane(trace, endpoint, hops) with { DirectSamples = hops.Select(h => (IReadOnlyList<Sample>)h).ToList() };
+
+    /// Route probes as given, direct pings as given: the two kinds of evidence told apart.
+    public static LaneInput LaneWithDirect(PathTrace? trace, List<Sample> endpoint, List<Sample>[] hops, List<Sample>[] direct) =>
+        Lane(trace, endpoint, hops) with { DirectSamples = direct.Select(h => (IReadOnlyList<Sample>)h).ToList() };
 }
 
 /// Answers each TTL from a script; unknown TTLs time out.
@@ -49,6 +57,8 @@ sealed class FakePathProbe : IPathProbe
 {
     public Dictionary<int, EchoResult> ByTtl { get; } = new();
     public List<int> Calls { get; } = new();
+    /// Every echo asked for, with the address it was aimed at.
+    public List<(int Ttl, IPAddress Target)> Sent { get; } = new();
     public EchoResult Default { get; set; } = new(ProbeOutcome.NoReply);
 
     /// When set, every echo waits for it: holds a probe in flight.
@@ -59,7 +69,7 @@ sealed class FakePathProbe : IPathProbe
 
     public async Task<EchoResult> EchoAsync(IPAddress source, IPAddress target, int ttl, TimeSpan timeout, CancellationToken ct)
     {
-        lock (Calls) Calls.Add(ttl);
+        lock (Calls) { Calls.Add(ttl); Sent.Add((ttl, target)); }
         if (Gate is { } gate && (GateWhen?.Invoke(ttl) ?? true)) await gate.Task;
         if (Throw is { } ex) throw ex;
         return ByTtl.TryGetValue(ttl, out var r) ? r : Default;

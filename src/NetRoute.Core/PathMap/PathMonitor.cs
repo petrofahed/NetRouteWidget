@@ -46,6 +46,11 @@ public sealed class PathMonitor
         public IPAddress? Source;
         public PathTrace? Trace;
         public List<PathSamples> Hops = [];
+        /// Direct pings to each device's own address, parallel to Hops and kept under the same rule.
+        public List<PathSamples> Direct = [];
+        /// The better route a worse trace replaced; shown as stale until a trace at least as good comes back.
+        public StaleRoute? LastKnown;
+        public DateTimeOffset TracedAt;
         public PathSamples Endpoint = new(t.Window);
         /// Bumped whenever the lane is reset, so a probe that was in flight for the old state can be recognised and dropped.
         public int Generation;
@@ -77,6 +82,8 @@ public sealed class PathMonitor
         lane.Generation++;
         lane.Trace = null;
         lane.Hops = [];
+        lane.Direct = [];
+        lane.LastKnown = null;
         lane.AddressStreaks = [];
         lane.DegradedStreak = 0;
         lane.Endpoint = new PathSamples(_t.Window);
@@ -115,7 +122,7 @@ public sealed class PathMonitor
                     return;
                 }
                 lane.DegradedStreak = 0;
-                Adopt(lane, trace);
+                Adopt(lane, trace, _time.GetUtcNow());
             }
         }));
     }
@@ -132,15 +139,27 @@ public sealed class PathMonitor
     static int Visible(PathTrace trace) => trace.Hops.Count(h => !h.Hidden);
 
     /// A device keeps its samples when the same TTL answered from the same address in the old trace; the others start empty.
-    void Adopt(Lane lane, PathTrace trace)
+    void Adopt(Lane lane, PathTrace trace, DateTimeOffset now)
     {
         var old = lane.Trace;
         var oldHops = lane.Hops;
-        lane.Hops = trace.Hops.Select((hop, i) =>
-            old is not null && i < old.Hops.Count && i < oldHops.Count && hop.Address is { } address && Equals(old.Hops[i].Address, address)
-                ? oldHops[i]
-                : new PathSamples(_t.Window)).ToList();
+        var oldDirect = lane.Direct;
+        bool Same(int i, PathHop hop) =>
+            old is not null && i < old.Hops.Count && hop.Address is { } address && Equals(old.Hops[i].Address, address);
+        lane.Hops = trace.Hops.Select((hop, i) => Same(i, hop) && i < oldHops.Count ? oldHops[i] : new PathSamples(_t.Window)).ToList();
+        lane.Direct = trace.Hops.Select((hop, i) => Same(i, hop) && i < oldDirect.Count ? oldDirect[i] : new PathSamples(_t.Window)).ToList();
         lane.AddressStreaks = new int[trace.Hops.Count];
+
+        // The route that was replaced by a worse one is kept as history (the best one seen), never as the current route.
+        if (old is not null && IsDegraded(old, trace))
+        {
+            if (Visible(old) > 0 && (lane.LastKnown is null || Visible(old) >= Visible(lane.LastKnown.Trace)))
+                lane.LastKnown = new StaleRoute(old, lane.TracedAt);
+        }
+        else if (lane.LastKnown is { } known && !IsDegraded(known.Trace, trace))
+            lane.LastKnown = null; // the route is back to what it was
+
+        lane.TracedAt = now;
         lane.Trace = trace;
         lane.NeedsRetrace = trace.Status == TraceStatus.Unavailable;
     }
@@ -163,20 +182,32 @@ public sealed class PathMonitor
                 {
                     var hop = trace.Hops[i];
                     if (hop.Hidden) continue;
-                    var store = samples[i];
-                    work.Add(ProbeHop(lane, generation, trace, source, hop, i, store, ct));
+                    work.Add(ProbeHop(lane, generation, trace, source, hop, i, samples[i], ct));
+                    // The device's own address, with a TTL that cannot expire on the way: a second, separate kind of evidence.
+                    if (i < lane.Direct.Count)
+                        work.Add(ProbeDirect(lane, generation, trace, source, hop, lane.Direct[i], ct));
                 }
             }
         }
         await Task.WhenAll(work);
     }
 
-    async Task ProbeHop(Lane lane, int generation, PathTrace trace, IPAddress source, PathHop hop, int index, PathSamples store, CancellationToken ct)
+    Task ProbeHop(Lane lane, int generation, PathTrace trace, IPAddress source, PathHop hop, int index, PathSamples store, CancellationToken ct) =>
+        Probe(lane, generation, trace, source, trace.Target, hop.Ttl, store, ct, result =>
+        {
+            if (result.Outcome == ProbeOutcome.Reply) NoteReply(lane, hop, index, result);
+        });
+
+    Task ProbeDirect(Lane lane, int generation, PathTrace trace, IPAddress source, PathHop hop, PathSamples store, CancellationToken ct) =>
+        Probe(lane, generation, trace, source, hop.Address!, _t.DirectTtl, store, ct, null);
+
+    async Task Probe(Lane lane, int generation, PathTrace trace, IPAddress source, IPAddress target, int ttl, PathSamples store,
+        CancellationToken ct, Action<EchoResult>? onResult)
     {
         // A sample belongs to the moment its probe was sent, not the moment it finished: a failed check can take seconds,
-        // and the hop and internet series are lined up by time.
+        // and the hop and internet series are lined up by time. Every probe is bounded by the same one-second timeout.
         var sentAt = _time.GetUtcNow();
-        var result = await Guard(() => _hopProbe.EchoAsync(source, trace.Target, hop.Ttl, PathTracer.DefaultTimeout, ct),
+        var result = await Guard(() => _hopProbe.EchoAsync(source, target, ttl, PathTracer.DefaultTimeout, ct),
             new EchoResult(ProbeOutcome.Unavailable));
         if (ct.IsCancellationRequested) return; // the window is closing: a cancelled check is discarded, not stored
         lock (_gate)
@@ -184,7 +215,7 @@ public sealed class PathMonitor
             if (generation != lane.Generation || !ReferenceEquals(lane.Trace, trace)) return; // the lane was reset or re-traced meanwhile
             store.Add(new Sample(sentAt, result.Outcome, result.RttMs));
             _lastSampleAt = _time.GetUtcNow(); // when data last arrived, not when it was sent
-            if (result.Outcome == ProbeOutcome.Reply) NoteReply(lane, hop, index, result);
+            onResult?.Invoke(result);
         }
     }
 
@@ -264,7 +295,10 @@ public sealed class PathMonitor
         var hopSamples = lane.Trace is { } trace
             ? trace.Hops.Select((_, i) => i < lane.Hops.Count ? lane.Hops[i].Snapshot(now) : []).ToList()
             : [];
-        return new LaneSnapshot(lane.Name, lane.Adapter, lane.Trace, hopSamples, lane.Endpoint.Snapshot(now));
+        var directSamples = lane.Trace is { } shown
+            ? shown.Hops.Select((_, i) => i < lane.Direct.Count ? lane.Direct[i].Snapshot(now) : []).ToList()
+            : [];
+        return new LaneSnapshot(lane.Name, lane.Adapter, lane.Trace, hopSamples, lane.Endpoint.Snapshot(now), directSamples, lane.LastKnown);
     }
 
     /// Runs both loops until cancelled, then waits for the rounds still out (they watch the same token). The hop loop also retraces

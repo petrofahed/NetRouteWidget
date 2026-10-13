@@ -72,6 +72,7 @@ public partial class PathMapWindow : Window
         Headline.SetResourceReference(TextBlock.ForegroundProperty, view.HeadlineWarning ? "Warning" : "TextPrimary");
         // A click while paused still redraws (the user asked), but the footer keeps saying the display is paused.
         Footer.Text = _paused ? PausedFooter : view.FooterText;
+        ReachabilityTitle.Text = view.ReachabilityTitle;
         RenderDiagnosis(view.Diagnosis);
         Map.Render(view, _selected);
         RenderDetail(view.Detail);

@@ -4,7 +4,8 @@ namespace NetRoute.Core.PathMap;
 
 public sealed record LaneSnapshot(
     string Name, AdapterInfo? Adapter, PathTrace? Trace,
-    IReadOnlyList<IReadOnlyList<Sample>> HopSamples, IReadOnlyList<Sample> EndpointSamples);
+    IReadOnlyList<IReadOnlyList<Sample>> HopSamples, IReadOnlyList<Sample> EndpointSamples,
+    IReadOnlyList<IReadOnlyList<Sample>>? DirectSamples = null, StaleRoute? LastKnown = null);
 
 public sealed record PathSnapshot(DateTimeOffset At, LaneSnapshot Lan, LaneSnapshot Phone, DateTimeOffset? LastSampleAt);
 
@@ -25,9 +26,11 @@ public sealed record DetailView(
     string Id, string Title, string Address, string Chip, HopDisplay State,
     IReadOnlyList<(string Label, string Value)> Stats, IReadOnlyList<Sample> Series, string Note);
 
+/// Headline answers "which connection does Windows send traffic through" (routing); Diagnosis answers "can each connection reach
+/// the internet on its own" (reachability). They are different questions and are labelled as such.
 public sealed record PathMapView(
     string Headline, bool HeadlineWarning, IReadOnlyList<string> Diagnosis, LaneView Lan, LaneView Phone,
-    DetailView? Detail, string FooterText);
+    DetailView? Detail, string FooterText, string ReachabilityTitle = "");
 
 /// Pure mapping from a monitor snapshot to everything the path-map window shows.
 public static class PathMapPresenter
@@ -45,23 +48,26 @@ public static class PathMapPresenter
         var lan = Analyse("lan", "LAN", "Router", snapshot.Lan, snapshot.At, t);
         var phone = Analyse("phone", "Phone", "Phone", snapshot.Phone, snapshot.At, t);
         return new PathMapView(
-            card.Header, card.HeaderWarning,
-            Describe(lan, phone, t),
+            "Routing: " + card.Header, card.HeaderWarning,
+            Describe(lan, phone, snapshot.At, t),
             lan.View, phone.View,
-            selectedId is null ? null : DetailFor(selectedId, lan, phone, t),
-            Footer(snapshot));
+            selectedId is null ? null : DetailFor(selectedId, lan, phone, snapshot.At, t),
+            Footer(snapshot),
+            ReachabilityTitle);
     }
+
+    public const string ReachabilityTitle = "Reachability — can each connection reach the internet on its own, whichever one Windows uses";
 
     static string Footer(PathSnapshot s) =>
         s.LastSampleAt is not { } last ? "Starting…"
         : s.At - last > TimeSpan.FromSeconds(5) ? "No recent checks"
-        : "Devices checked every second, internet every 2 s";
+        : "Devices checked every second (route probe and direct ping), internet every 2 s";
 
     static Analysed Analyse(string id, string name, string firstHopTitle, LaneSnapshot snap, DateTimeOffset now, PathThresholds t)
     {
         var source = snap.Adapter?.IPv4;
         var connected = source is not null;
-        var diag = PathDiagnoser.Diagnose(new LaneInput(name, connected, snap.Trace, snap.HopSamples, snap.EndpointSamples, now), t);
+        var diag = PathDiagnoser.Diagnose(new LaneInput(name, connected, snap.Trace, snap.HopSamples, snap.EndpointSamples, now, snap.DirectSamples), t);
         var groups = GroupHops(diag, t);
         var nodes = groups.Select(g => NodeOf(id, g, diag, firstHopTitle)).ToList();
         if (diag.TraceStatus == TraceStatus.Incomplete)
@@ -175,6 +181,8 @@ public static class PathMapPresenter
         HopDisplay.Measuring => "Measuring…",
         HopDisplay.Unavailable => "unavailable",
         HopDisplay.Hidden => "",
+        // Route probes lost or silent, direct ping answered: the route-probe loss figure would contradict the green state.
+        HopDisplay.Answering when h.Observed is Observation.Silent or Observation.Lossy && h.DirectObserved == Observation.Answering => "answers ping",
         _ when h.Stats.Valid == 0 => "",
         _ when h.Stats.Lost == h.Stats.Valid => "no reply",
         _ => $"{h.Stats.AvgMs ?? 0} ms · {h.Stats.LossPercent.ToString("0", Inv)}%",
@@ -224,7 +232,7 @@ public static class PathMapPresenter
         HopDisplay.Broken => diag.Where switch
         {
             Localization.Located => LinkState.Muted,
-            Localization.NotEnoughData => LinkState.Neutral,
+            Localization.NotEnoughData or Localization.Uncertain => LinkState.Neutral,
             Localization.Narrowed => LinkState.Muted,
             _ => LinkState.Broken,
         },
@@ -253,13 +261,29 @@ public static class PathMapPresenter
 
     // ----- diagnosis text -----
 
-    static IReadOnlyList<string> Describe(Analysed lan, Analysed phone, PathThresholds t)
+    static IReadOnlyList<string> Describe(Analysed lan, Analysed phone, DateTimeOffset now, PathThresholds t)
     {
+        var lines = new List<string>();
         if (lan.Diagnosis.Status == LaneStatus.Healthy && phone.Diagnosis.Status == LaneStatus.Healthy)
-            return ["Both connections reach the internet." + string.Concat(new[] { lan, phone }
-                .Where(a => a.Diagnosis.TraceStatus == TraceStatus.Unavailable).Select(a => $" {a.Name}: the {NotMeasured}"))];
-        return [Line(lan, t), Line(phone, t)];
+            lines.Add("Both connections reach the internet." + string.Concat(new[] { lan, phone }
+                .Where(a => a.Diagnosis.TraceStatus == TraceStatus.Unavailable).Select(a => $" {a.Name}: the {NotMeasured}")));
+        else
+        {
+            lines.Add(Line(lan, t));
+            lines.Add(Line(phone, t));
+        }
+        lines.AddRange(new[] { lan, phone }.Select(a => StaleLine(a, now)).OfType<string>());
+        return lines;
     }
+
+    /// The route that was seen before the current trace got worse. It is history: said so, with its age, and never drawn as the map.
+    static string? StaleLine(Analysed a, DateTimeOffset now) =>
+        a.Snap.LastKnown is { } known && a.View.Connected
+            ? $"{a.Name}: last known route (stale, seen {Math.Max(0, (int)(now - known.SeenAt).TotalSeconds)} s ago, not the current route): {RouteText(known.Trace)}."
+            : null;
+
+    static string RouteText(PathTrace trace) =>
+        "this PC → " + string.Join(" → ", trace.Hops.Select(h => h.Address?.ToString() ?? $"hop {h.Ttl} (no answer)")) + " → internet";
 
     const string NotMeasured = "devices on the way could not be measured.";
 
@@ -285,7 +309,7 @@ public static class PathMapPresenter
             case Localization.Located:
                 var first = d.Hops[d.FirstBadHop!.Value];
                 var loss = first.LossDuringFailuresPercent ?? 100;
-                var verb = loss >= 99.5 ? "did not answer" : $"lost {loss.ToString("0", Inv)}% of its probes";
+                var verb = loss >= 99.5 ? "did not answer, not even a direct ping" : $"lost {loss.ToString("0", Inv)}% of its probes and of its direct pings";
                 var bad = Address(d.FirstBadHop.Value);
                 return d.LastAnsweringHop is { } p
                     ? $"{name}: the break is between {Address(p)} and {bad}. While the internet check failed, {Address(p)} answered and {bad} {verb}."
@@ -293,17 +317,21 @@ public static class PathMapPresenter
             case Localization.Narrowed:
                 var last = d.LastAnsweringHop!.Value;
                 var tail = d.Hops.Skip(last + 1).All(h => h.Hop.Hidden)
-                    ? "so the fault is beyond it or on the internet side."
-                    : "so the fault is after it, but the evidence does not say exactly where.";
-                return $"{name}: the internet check is failing. The last device that answered during the failures is {Address(last)}, {tail}";
+                    ? ", possibly on the internet side."
+                    : ", but the evidence does not say exactly where.";
+                return $"{name}: the internet check is failing. The last device that answered during the failures is {Address(last)}. "
+                    + $"Answering shows it is reachable, not that it passes traffic on, so the fault is at or beyond it{tail}";
+            case Localization.Uncertain:
+                return $"{name}: the internet check is failing, but the location is uncertain. Some devices stopped returning route probes, "
+                    + "which alone does not show that they are broken.";
             default:
-                return $"{name}: the internet check is failing, but there is not enough data yet to say where.";
+                return $"{name}: the internet check is failing, but the location is uncertain: there is not enough data yet.";
         }
     }
 
     // ----- detail panel -----
 
-    static DetailView? DetailFor(string id, Analysed lan, Analysed phone, PathThresholds t)
+    static DetailView? DetailFor(string id, Analysed lan, Analysed phone, DateTimeOffset now, PathThresholds t)
     {
         var lane = id.StartsWith("lan:", StringComparison.Ordinal) ? lan : id.StartsWith("phone:", StringComparison.Ordinal) ? phone : null;
         if (lane is null) return null;
@@ -319,7 +347,8 @@ public static class PathMapPresenter
 
         if (rest == "incomplete")
             return new DetailView(id, "Trace incomplete", "", "Trace incomplete", HopDisplay.Hidden, [], [],
-                $"The trace did not reach 1.1.1.1 within {t.MaxHops} hops, so devices further on are not listed. That says nothing about the connection: the internet check decides that.");
+                $"The trace did not reach 1.1.1.1 within {t.MaxHops} hops, so devices further on are not listed. That says nothing about the connection: the internet check decides that."
+                + (StaleLine(lane, now) is { } stale ? " " + stale : ""));
 
         // Nodes and Groups are built from the same list in the same order (the trace ghost is appended after them).
         var index = lane.View.Nodes.ToList().FindIndex(n => n.Id == id);
@@ -339,8 +368,14 @@ public static class PathMapPresenter
 
         var hop = lane.Diagnosis.Hops[group.Hops[0]];
         return new DetailView(id, node.Title, node.Address, node.StateLabel, node.State,
-            StatsOf(hop.Stats, t), lane.Snap.HopSamples.Count > group.Hops[0] ? lane.Snap.HopSamples[group.Hops[0]] : [], NoteFor(hop, lane, group.Hops[0]));
+            StatsOf(hop.Stats, t).Concat(DirectRows(hop)).ToList(),
+            lane.Snap.HopSamples.Count > group.Hops[0] ? lane.Snap.HopSamples[group.Hops[0]] : [], NoteFor(hop, lane, group.Hops[0]));
     }
+
+    static IEnumerable<(string, string)> DirectRows(HopDiagnosis hop) =>
+        hop.DirectStats is { Valid: > 0 } direct
+            ? [("Direct ping, lost", $"{direct.LossPercent.ToString("0", Inv)}%")]
+            : [];
 
     static IReadOnlyList<(string, string)> StatsOf(SampleStats s, PathThresholds t) =>
     [
@@ -367,6 +402,8 @@ public static class PathMapPresenter
             HopDisplay.Broken when !hasDeviceBefore => "Its probes were lost in the same moments the internet check failed, and it is the first device on the way out.",
             HopDisplay.Broken => "Its probes were lost in the same moments the internet check failed, while the device before it kept answering.",
             HopDisplay.Silent => "It does not answer, and it is after the located break.",
+            HopDisplay.Answering when hop.Observed is Observation.Silent or Observation.Lossy && hop.DirectObserved == Observation.Answering =>
+                "It answers a direct ping but not the probes that map the route; many devices do that. Answering a ping shows it is reachable, not that it passes traffic on.",
             _ => hop.Hop.Ttl == 1 && lane.Id == "lan"
                 ? "Your router: the first device on the way out."
                 : "Answering its probes normally.",

@@ -13,6 +13,14 @@ public class PathMapPresenterTests
     static LaneSnapshot Lan(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
         new("LAN", TestAdapters.Lan(), trace, hops.Select(h => (IReadOnlyList<Sample>)h).ToList(), endpoint);
 
+    /// Direct pings fare exactly like the route probes: the devices are really unreachable.
+    static LaneSnapshot LanM(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
+        Lan(trace, endpoint, hops) with { DirectSamples = hops.Select(h => (IReadOnlyList<Sample>)h).ToList() };
+
+    /// Route probes and direct pings told apart.
+    static LaneSnapshot LanD(PathTrace? trace, List<Sample> endpoint, List<Sample>[] hops, List<Sample>[] direct) =>
+        Lan(trace, endpoint, hops) with { DirectSamples = direct.Select(h => (IReadOnlyList<Sample>)h).ToList() };
+
     static LaneSnapshot HealthyPhone() => new("Phone", TestAdapters.Phone(),
         new PathTrace(Ip("192.168.42.11"), Ip("1.1.1.1"),
             [new PathHop(1, Ip("192.168.42.129")), new PathHop(2, Ip("172.26.220.1"))], TraceStatus.Complete),
@@ -31,7 +39,7 @@ public class PathMapPresenterTests
     {
         var view = Present(HealthyLan());
 
-        Assert.Equal("Internet via PHONE", view.Headline);
+        Assert.Equal("Routing: Internet via PHONE", view.Headline);
         Assert.False(view.HeadlineWarning);
         Assert.Equal(["Both connections reach the internet."], view.Diagnosis);
         Assert.All(view.Lan.Links, l => Assert.Equal(LinkState.Healthy, l));
@@ -56,11 +64,11 @@ public class PathMapPresenterTests
     [Fact]
     public void Located_break_is_named_with_the_devices_on_both_sides()
     {
-        var view = Present(Lan(Four, FailingEndpoint(),
+        var view = Present(LanM(Four, FailingEndpoint(),
             Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(14)), Every(1, LostDuring(14))));
 
         Assert.Equal(
-            "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 did not answer.",
+            "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 did not answer, not even a direct ping.",
             view.Diagnosis[0]);
         Assert.Equal("Phone reaches the internet.", view.Diagnosis[1]);
         // into router, box, then the broken link, then silent devices; the Internet link is muted because the red link is already drawn
@@ -73,12 +81,12 @@ public class PathMapPresenterTests
     [Fact]
     public void A_partial_loss_is_reported_as_a_percentage_and_drawn_suspect()
     {
-        var view = Present(Lan(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+        var view = Present(LanM(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
             Every(1, AllReply), Every(1, AllReply),
             Every(1, sec => sec >= 14 && sec % 2 == 0 ? ProbeOutcome.NoReply : ProbeOutcome.Reply)));
 
         Assert.Equal(
-            "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 lost 50% of its probes.",
+            "LAN: the break is between 192.168.1.1 and 172.17.18.1. While the internet check failed, 192.168.1.1 answered and 172.17.18.1 lost 50% of its probes and of its direct pings.",
             view.Diagnosis[0]);
         Assert.Equal(HopDisplay.Suspect, view.Lan.Nodes[2].State);
         Assert.Equal(LinkState.Suspect, view.Lan.Links[2]);
@@ -87,11 +95,11 @@ public class PathMapPresenterTests
     [Fact]
     public void A_break_at_the_first_device_names_this_pc()
     {
-        var view = Present(Lan(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+        var view = Present(LanM(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
             Every(1, LostDuring(14)), Every(1, LostDuring(14))));
 
         Assert.Equal(
-            "LAN: the break is between this PC and 192.168.86.1. While the internet check failed, 192.168.86.1 did not answer.",
+            "LAN: the break is between this PC and 192.168.86.1. While the internet check failed, 192.168.86.1 did not answer, not even a direct ping.",
             view.Diagnosis[0]);
     }
 
@@ -102,7 +110,7 @@ public class PathMapPresenterTests
             Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
 
         Assert.Equal(
-            "LAN: the internet check is failing. The last device that answered during the failures is 10.9.8.249, so the fault is beyond it or on the internet side.",
+            "LAN: the internet check is failing. The last device that answered during the failures is 10.9.8.249. Answering shows it is reachable, not that it passes traffic on, so the fault is at or beyond it, possibly on the internet side.",
             view.Diagnosis[0]);
     }
 
@@ -113,7 +121,7 @@ public class PathMapPresenterTests
             Every(1, AllReply), Every(1, AllReply), Every(1, AllLost)));
 
         Assert.Equal(
-            "LAN: the internet check is failing. The last device that answered during the failures is 192.168.1.1, so the fault is after it, but the evidence does not say exactly where.",
+            "LAN: the internet check is failing. The last device that answered during the failures is 192.168.1.1. Answering shows it is reachable, not that it passes traffic on, so the fault is at or beyond it, but the evidence does not say exactly where.",
             view.Diagnosis[0]);
         Assert.DoesNotContain(view.Lan.Nodes, n => n.State == HopDisplay.Broken);
     }
@@ -125,7 +133,102 @@ public class PathMapPresenterTests
             Every(1, AllReply, fromSecond: 26), Every(1, AllReply, fromSecond: 26),
             Every(1, AllLost, fromSecond: 26), Every(1, AllLost, fromSecond: 26)));
 
-        Assert.Equal("LAN: the internet check is failing, but there is not enough data yet to say where.", view.Diagnosis[0]);
+        Assert.Equal("LAN: the internet check is failing, but the location is uncertain: there is not enough data yet.", view.Diagnosis[0]);
+    }
+
+    // ----- routing is not reachability; direct ping is not proof of forwarding; stale routes are labelled -----
+
+    [Fact]
+    public void Routing_and_reachability_are_two_separately_labelled_statements()
+    {
+        // Windows prefers the phone ("LAN not routing"), yet the LAN's own internet check works: both must be readable as true
+        var status = Status() with { Mode = RoutingMode.Lan }; // wants the LAN, Windows uses the phone
+        var view = PathMapPresenter.Present(status, new PathSnapshot(Now, HealthyLan(), HealthyPhone(), Now.AddSeconds(-1)), null, T);
+
+        Assert.Equal("Routing: Internet via PHONE (LAN not routing)", view.Headline);
+        Assert.StartsWith("Reachability", view.ReachabilityTitle);
+        Assert.Contains("on its own", view.ReachabilityTitle);
+        Assert.Equal(["Both connections reach the internet."], view.Diagnosis);
+    }
+
+    [Fact]
+    public void The_observed_outage_does_not_say_the_break_is_between_this_pc_and_the_router()
+    {
+        var view = Present(LanD(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+            [Every(1, LostDuring(14)), Every(1, LostDuring(14)), Every(1, LostDuring(14))],
+            [Every(1, AllReply), Every(1, AllUnavailable), Every(1, AllUnavailable)]));
+
+        Assert.DoesNotContain("break is between", view.Diagnosis[0]);
+        Assert.Contains("last device that answered during the failures is 192.168.86.1", view.Diagnosis[0]);
+        Assert.Contains("not that it passes traffic on", view.Diagnosis[0]);
+        Assert.DoesNotContain(view.Lan.Nodes, n => n.State is HopDisplay.Broken or HopDisplay.Suspect);
+        Assert.Equal(HopDisplay.Answering, view.Lan.Nodes[0].State);
+    }
+
+    [Fact]
+    public void Route_probes_going_silent_with_no_direct_evidence_says_the_location_is_uncertain_and_blames_no_link()
+    {
+        var view = Present(Lan(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+            Every(1, LostDuring(14)), Every(1, LostDuring(14))));
+
+        Assert.Equal(
+            "LAN: the internet check is failing, but the location is uncertain. Some devices stopped returning route probes, which alone does not show that they are broken.",
+            view.Diagnosis[0]);
+        Assert.All(view.Lan.Links, l => Assert.NotEqual(LinkState.Broken, l));
+        Assert.All(view.Lan.Links, l => Assert.NotEqual(LinkState.Suspect, l));
+        Assert.DoesNotContain(view.Lan.Nodes, n => n.State is HopDisplay.Broken or HopDisplay.Suspect);
+    }
+
+    [Fact]
+    public void A_router_that_answers_ping_is_reachable_not_proven_to_forward_and_is_not_the_break()
+    {
+        var view = Present(LanD(Trace("192.168.86.1", null), FailingEndpoint(),
+            [Every(1, LostDuring(14)), []], [Every(1, AllReply), []]));
+
+        Assert.Equal(
+            "LAN: the internet check is failing. The last device that answered during the failures is 192.168.86.1. Answering shows it is reachable, not that it passes traffic on, so the fault is at or beyond it, possibly on the internet side.",
+            view.Diagnosis[0]);
+        Assert.Equal(HopDisplay.Answering, view.Lan.Nodes[0].State);
+        Assert.NotEqual(LinkState.Broken, view.Lan.Links[0]);
+    }
+
+    [Fact]
+    public void A_stale_last_known_route_is_listed_with_its_age_and_said_not_to_be_current()
+    {
+        var shorter = Trace("192.168.86.1");
+        var lan = Lan(shorter, Every(2, AllReply), Every(1, AllReply))
+            with { LastKnown = new StaleRoute(Four, Now.AddSeconds(-40)) };
+
+        var view = Present(lan);
+
+        Assert.Equal(
+            "LAN: last known route (stale, seen 40 s ago, not the current route): this PC → 192.168.86.1 → 192.168.1.1 → 172.17.18.1 → 10.9.8.249 → internet.",
+            view.Diagnosis.Last());
+        Assert.Equal(["Router"], view.Lan.Nodes.Select(n => n.Title)); // the map itself shows only the current route
+    }
+
+    [Fact]
+    public void The_trace_incomplete_detail_repeats_the_stale_route_and_nothing_is_listed_without_one()
+    {
+        var incomplete = new PathTrace(Four.Source, Four.Target, Four.Hops.Take(2).ToList(), TraceStatus.Incomplete);
+        var withStale = Present(Lan(incomplete, Every(2, AllReply), Every(1, AllReply), Every(1, AllReply))
+            with { LastKnown = new StaleRoute(Four, Now.AddSeconds(-12)) }, selected: "lan:incomplete");
+        var without = Present(Lan(incomplete, Every(2, AllReply), Every(1, AllReply), Every(1, AllReply)), selected: "lan:incomplete");
+
+        Assert.Contains("last known route (stale, seen 12 s ago", withStale.Detail!.Note);
+        Assert.DoesNotContain("stale", without.Detail!.Note);
+        Assert.Single(without.Diagnosis);
+    }
+
+    [Fact]
+    public void A_device_detail_shows_the_direct_ping_loss_when_there_is_one()
+    {
+        var view = Present(LanD(Trace("192.168.86.1"), Every(2, AllReply), [Every(1, AllLost)], [Every(1, AllReply)]), selected: "lan:1");
+
+        Assert.Equal("answers ping", view.Lan.Nodes[0].Metric);
+        Assert.Contains(("Direct ping, lost", "0%"), view.Detail!.Stats);
+        Assert.Contains("answers a direct ping but not the probes that map the route", view.Detail.Note);
+        Assert.Contains("not that it passes traffic on", view.Detail.Note);
     }
 
     [Fact]
@@ -189,7 +292,7 @@ public class PathMapPresenterTests
     {
         var view = Present(Lan(NoTrace, FailingEndpoint()));
 
-        Assert.Equal("LAN: the internet check is failing, but there is not enough data yet to say where.", view.Diagnosis[0]);
+        Assert.Equal("LAN: the internet check is failing, but the location is uncertain: there is not enough data yet.", view.Diagnosis[0]);
         Assert.Equal(HopDisplay.Broken, view.Lan.Internet.State);
         Assert.Equal([LinkState.Neutral], view.Lan.Links);
     }
@@ -235,7 +338,7 @@ public class PathMapPresenterTests
     public void A_collapsed_box_takes_the_worst_state_of_the_hops_it_hides()
     {
         var trace = Trace("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6");
-        var view = Present(Lan(trace, FailingEndpoint(),
+        var view = Present(LanM(trace, FailingEndpoint(),
             Every(1, AllReply), Every(1, AllReply), Every(1, AllReply),
             Every(1, AllReply), Every(1, LostDuring(14)), Every(1, LostDuring(14))));
 
@@ -271,7 +374,7 @@ public class PathMapPresenterTests
         // The break is hop 3 (drawn on its own); hop 4 is silent after it. Hops 5 and 6 lost their probes while the internet check
         // failed but replied again for the last 10 s, so they are implicated yet read as answering: they are not cleared, so the
         // break stays located at hop 3 and the box holds one Silent and two answering members.
-        var view = Present(Lan(Six, Every(2, LostDuring(10)),
+        var view = Present(LanM(Six, Every(2, LostDuring(10)),
             Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(10)),
             Every(1, LostDuring(10)), Every(1, LostDuring(10, 20)), Every(1, LostDuring(10, 20))), selected: "lan:4-6");
 
@@ -357,7 +460,7 @@ public class PathMapPresenterTests
     [Fact]
     public void A_quiet_device_before_the_last_answering_one_keeps_a_green_link_during_a_located_break()
     {
-        var view = Present(Lan(Four, FailingEndpoint(),
+        var view = Present(LanM(Four, FailingEndpoint(),
             Every(1, AllReply), Every(1, AllLost), Every(1, AllReply), Every(1, LostDuring(14))));
 
         Assert.Equal(HopDisplay.Quiet, view.Lan.Nodes[1].State);
@@ -393,7 +496,7 @@ public class PathMapPresenterTests
     [Fact]
     public void The_note_for_a_suspect_first_device_with_nothing_before_it_does_not_claim_a_device_that_answered()
     {
-        var detail = Present(Lan(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+        var detail = Present(LanM(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
             Every(1, sec => sec >= 14 && sec % 2 == 0 ? ProbeOutcome.NoReply : ProbeOutcome.Reply), Every(1, LostDuring(14))),
             selected: "lan:1").Detail;
 
@@ -408,7 +511,7 @@ public class PathMapPresenterTests
     public void Footer_distinguishes_starting_live_and_stale()
     {
         Assert.Equal("Starting…", PathMapPresenter.Present(Status(), new PathSnapshot(Now, HealthyLan(), HealthyPhone(), null), null, T).FooterText);
-        Assert.Equal("Devices checked every second, internet every 2 s", Present(HealthyLan(), lastSample: Now.AddSeconds(-2)).FooterText);
+        Assert.Equal("Devices checked every second (route probe and direct ping), internet every 2 s", Present(HealthyLan(), lastSample: Now.AddSeconds(-2)).FooterText);
         Assert.Equal("No recent checks", Present(HealthyLan(), lastSample: Now.AddSeconds(-6)).FooterText);
     }
 
@@ -574,7 +677,7 @@ public class PathMapPresenterTests
     [Fact]
     public void The_note_for_the_located_first_bad_device_agrees_with_the_diagnosis()
     {
-        var detail = Present(Lan(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
+        var detail = Present(LanM(Trace("192.168.86.1", "192.168.1.1", "172.17.18.1"), FailingEndpoint(),
             Every(1, AllReply), Every(1, AllReply),
             Every(1, sec => sec >= 14 && sec % 2 == 0 ? ProbeOutcome.NoReply : ProbeOutcome.Reply)),
             selected: "lan:3").Detail;
@@ -586,7 +689,7 @@ public class PathMapPresenterTests
     [Fact]
     public void The_note_for_a_break_at_the_first_device_does_not_claim_a_device_before_it()
     {
-        var detail = Present(Lan(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+        var detail = Present(LanM(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
             Every(1, LostDuring(14)), Every(1, LostDuring(14))),
             selected: "lan:1").Detail;
 
