@@ -10,6 +10,7 @@ public static class PathObserver
     {
         if (hidden) return Observation.Hidden;
 
+        // The share rule applies only once there are enough samples, so one or two Unavailable samples read as Measuring.
         if (s.ConsecutiveUnavailable >= t.UnavailableConsecutive
             || (s.Total >= t.UnavailableConsecutive && s.UnavailablePercent >= t.UnavailableSharePercent))
             return Observation.Unavailable;

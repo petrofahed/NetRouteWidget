@@ -60,14 +60,15 @@ public class PathObserverTests
     [Fact]
     public void Loss_below_the_threshold_is_not_lossy()
     {
-        // 1 lost in 25 valid samples is 4%, below the 5% default
-        var samples = Every(1, sec => sec == 3 ? ProbeOutcome.NoReply : ProbeOutcome.Reply).Take(25).ToList();
+        // 1 lost in 25 valid samples is 4%, below the 5% default. The loss is the last sample, so no
+        // replies follow it and only the loss threshold can make this Answering.
+        var samples = Every(1, sec => sec == 24 ? ProbeOutcome.NoReply : ProbeOutcome.Reply).Take(25).ToList();
 
         Assert.Equal(Observation.Answering, Hop(samples));
     }
 
     [Fact]
-    public void Ten_consecutive_replies_end_lossy_even_with_old_losses_in_the_window()
+    public void Ten_consecutive_replies_end_the_lossy_state_even_with_old_losses_in_the_window()
     {
         // lost at seconds 2 and 18, then replies for seconds 19..29 (11 in a row)
         var samples = Every(1, sec => sec is 2 or 18 ? ProbeOutcome.NoReply : ProbeOutcome.Reply);
@@ -82,6 +83,33 @@ public class PathObserverTests
         var samples = Every(1, sec => sec is 2 or 24 ? ProbeOutcome.NoReply : ProbeOutcome.Reply);
 
         Assert.Equal(Observation.Lossy, Hop(samples));
+    }
+
+    [Fact]
+    public void Exactly_ten_replies_since_the_last_loss_end_lossy()
+    {
+        // lost at seconds 2 and 19, then replies for seconds 20..29 (exactly 10 in a row)
+        var samples = Every(1, sec => sec is 2 or 19 ? ProbeOutcome.NoReply : ProbeOutcome.Reply);
+
+        Assert.Equal(Observation.Answering, Hop(samples));
+    }
+
+    [Fact]
+    public void Nine_replies_since_the_last_loss_stay_lossy()
+    {
+        // lost at seconds 2 and 20, then replies for seconds 21..29 (9 in a row)
+        var samples = Every(1, sec => sec is 2 or 20 ? ProbeOutcome.NoReply : ProbeOutcome.Reply);
+
+        Assert.Equal(Observation.Lossy, Hop(samples));
+    }
+
+    [Fact]
+    public void Three_unavailable_samples_after_replies_are_unavailable()
+    {
+        // replies at seconds 0..26, then unavailable at 27, 28 and 29: the latest three are unavailable
+        var samples = Every(1, sec => sec >= 27 ? ProbeOutcome.Unavailable : ProbeOutcome.Reply);
+
+        Assert.Equal(Observation.Unavailable, Hop(samples));
     }
 
     [Fact]
