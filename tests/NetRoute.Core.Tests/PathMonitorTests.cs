@@ -448,19 +448,35 @@ public class PathMonitorTests
     {
         var rig = new Rig();
         await rig.Ready();
+        var original = rig.Monitor.Snapshot().Lan.Trace!;
+        Assert.Equal(TraceStatus.Complete, original.Status);
         var good = rig.Hops.Default;
-        rig.Hops.Default = new EchoResult(ProbeOutcome.NoReply);
-        rig.Hops.ByTtl[2] = Hop("192.168.1.1");
+        var degraded = new EchoResult(ProbeOutcome.NoReply); // both devices still answer, the target does not: Complete becomes Incomplete
 
-        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true); // degraded (1)
+        rig.Hops.Default = degraded;
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true); // degraded, first in a row: kept out
+        Assert.Same(original, rig.Monitor.Snapshot().Lan.Trace);
+
         rig.Hops.Default = good;
         rig.Time.Advance(PathMonitor.RetraceMinGap);
-        await rig.Monitor.RetraceAsync(CancellationToken.None); // fine again: the count starts over
-        rig.Hops.Default = new EchoResult(ProbeOutcome.NoReply);
-        rig.Time.Advance(PathMonitor.RetraceMinGap);
-        await rig.Monitor.RetraceAsync(CancellationToken.None); // degraded (1) again, not (2)
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // a good trace is adopted: the count starts over
+        var recovered = rig.Monitor.Snapshot().Lan.Trace!;
+        Assert.NotSame(original, recovered);
+        Assert.Equal(TraceStatus.Complete, recovered.Status);
 
-        Assert.Equal(TraceStatus.Complete, rig.Monitor.Snapshot().Lan.Trace!.Status);
+        rig.Hops.Default = degraded;
+        rig.Time.Advance(PathMonitor.RetraceEvery); // a retrace is due again
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        var afterFirst = rig.Monitor.Snapshot().Lan.Trace!;
+        Assert.Same(recovered, afterFirst); // only the FIRST degraded one since the reset: still kept out
+        Assert.Equal(TraceStatus.Complete, afterFirst.Status);
+        Assert.Equal(original.Hops.Count, afterFirst.Hops.Count);
+
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // the second degraded one in a row is adopted
+        var afterSecond = rig.Monitor.Snapshot().Lan.Trace!;
+        Assert.Equal(TraceStatus.Incomplete, afterSecond.Status);
+        Assert.NotSame(recovered, afterSecond);
     }
 
     [Fact]

@@ -341,7 +341,7 @@ public class PathMapPresenterTests
     }
 
     [Fact]
-    public void A_quiet_device_keeps_a_green_link_only_while_the_destination_answers()
+    public void A_quiet_device_keeps_a_green_link_when_the_destination_answers_or_traffic_passes_it()
     {
         var healthy = Present(Lan(Four, Every(2, AllReply),
             Every(1, AllReply), Every(1, AllLost), Every(1, AllReply), Every(1, AllReply)));
