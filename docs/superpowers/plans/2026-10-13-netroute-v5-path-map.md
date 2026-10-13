@@ -51,7 +51,7 @@ Failure modes the spec implies that are most likely to bite, each pinned by a na
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `ProbeOutcome { Reply, NoReply, Unavailable }`; `Sample(DateTimeOffset At, ProbeOutcome Outcome, int? RttMs = null)`; `EchoResult(ProbeOutcome Outcome, IPAddress? From = null, int? RttMs = null, bool TargetReached = false)`; `EndpointResult(ProbeOutcome Outcome, int? RttMs = null)`; `IPathProbe.EchoAsync(IPAddress source, IPAddress target, int ttl, TimeSpan timeout, CancellationToken ct)`; `IEndpointProbe.CheckAsync(IPAddress source, CancellationToken ct)`; `TraceStatus { Complete, Incomplete, Unavailable }`; `PathHop(int Ttl, IPAddress? Address)` with `Hidden`; `PathTrace(IPAddress Source, IPAddress Target, IReadOnlyList<PathHop> Hops, TraceStatus Status)`; `PathThresholds` (all defaults, `PathThresholds.Default`); `SampleStats.Of(IReadOnlyList<Sample>)` with `Valid`, `LossPercent`, `UnavailablePercent`, `ConsecutiveLost/Replies/Unavailable`, `AvgMs/BestMs/WorstMs`; `PathSamples(TimeSpan window)` with `Add(Sample)` and `Snapshot(DateTimeOffset now)`. In tests: `PathKit` (`Start`, `Now`, `T`, `Ip`, `Every`, `AllReply`, `AllLost`, `AllUnavailable`, `LostDuring`, `Trace`, `Four`, `Lane`), `FakePathProbe`, `FakeEndpointProbe`.
+- Produces: `ProbeOutcome { Reply, NoReply, Unavailable }`; `Sample(DateTimeOffset At, ProbeOutcome Outcome, int? RttMs = null)`; `EchoResult(ProbeOutcome Outcome, IPAddress? From = null, int? RttMs = null, bool TargetReached = false)`; `EndpointResult(ProbeOutcome Outcome, int? RttMs = null)`; `IPathProbe.EchoAsync(IPAddress source, IPAddress target, int ttl, TimeSpan timeout, CancellationToken ct)`; `IEndpointProbe.CheckAsync(IPAddress source, CancellationToken ct)`; `TraceStatus { Complete, Incomplete, Unavailable }`; `PathHop(int Ttl, IPAddress? Address)` with `Hidden`; `PathTrace(IPAddress Source, IPAddress Target, IReadOnlyList<PathHop> Hops, TraceStatus Status)`; `PathThresholds` (all defaults, `PathThresholds.Default`); `SampleStats.Of(IReadOnlyList<Sample>)` with `Valid`, `LossPercent`, `UnavailablePercent`, `ConsecutiveLost/Replies/Unavailable`, `AvgMs/BestMs/WorstMs`; `PathSamples(TimeSpan window)` with `Add(Sample)` and `Snapshot(DateTimeOffset now)`. In tests: `PathKit` (`Start`, `Now`, `T`, `Ip`, `Every`, `AllReply`, `AllLost`, `AllUnavailable`, `LostDuring`, `Trace`, `Four`), `FakePathProbe`, `FakeEndpointProbe`.
 
 - [ ] **Step 1: Write the test kit and the statistics tests**
 
@@ -100,8 +100,6 @@ static class PathKit
         Ip("192.168.86.42"), Ip("1.1.1.1"),
         hops.Select((a, i) => new PathHop(i + 1, a is null ? null : Ip(a))).ToList(), TraceStatus.Complete);
 
-    public static LaneInput Lane(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
-        new("LAN", true, trace, hops.Select(h => (IReadOnlyList<Sample>)h).ToList(), endpoint, Now);
 }
 
 /// Answers each TTL from a script; unknown TTLs time out.
@@ -857,6 +855,7 @@ git commit -m "feat(core): path tracer with complete, incomplete and unavailable
 
 **Files:**
 - Create: `src/NetRoute.Core/PathMap/PathDiagnoser.cs`
+- Modify: `tests/NetRoute.Core.Tests/PathMapKit.cs` (add the `Lane` helper; it needs `LaneInput`, which this task defines)
 - Create: `tests/NetRoute.Core.Tests/PathDiagnoserTests.cs`
 
 **Interfaces:**
@@ -866,6 +865,14 @@ git commit -m "feat(core): path tracer with complete, incomplete and unavailable
 This is the heart of the feature. The tests are written around the review rules: a quiet hop is never broken; a device before one that answers is not blamed; evidence comes only from the same 2-second buckets as the failed checks; too little evidence names nothing.
 
 - [ ] **Step 1: Write the failing tests**
+
+First add the `Lane` helper to the kit: in `tests/NetRoute.Core.Tests/PathMapKit.cs`, inside `static class PathKit`, directly after the `Trace(...)` method, add:
+
+```csharp
+
+    public static LaneInput Lane(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
+        new("LAN", true, trace, hops.Select(h => (IReadOnlyList<Sample>)h).ToList(), endpoint, Now);
+```
 
 `tests/NetRoute.Core.Tests/PathDiagnoserTests.cs`:
 
