@@ -1,0 +1,377 @@
+<title>Network Path Map</title>
+<style>
+/* Layout: a desktop-style stage. The widget card (how you open it) sits above the path window (the new feature). */
+:root {
+  --bg: #cddceb; --bg2: #a4bdd6;
+  --card: #fafafa; --node: #ffffff; --border: rgba(0,0,0,.14); --border2: rgba(0,0,0,.22);
+  --text: #1b1b1b; --text2: #5f5f5f; --btn: #e6e6e6; --accent: #2563eb;
+  --ok: #2ea043; --amber: #d97706; --bad: #cf222e; --gray: #8b949e; --warn: #b45309;
+  --track: rgba(0,0,0,.08); --shadow: 0 18px 50px rgba(20,40,70,.28);
+  --font: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --mono: "Cascadia Mono", ui-monospace, Consolas, "SF Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b2a3d; --bg2: #0e1826;
+    --card: #1f1f1f; --node: #272727; --border: rgba(255,255,255,.14); --border2: rgba(255,255,255,.24);
+    --text: #f3f3f3; --text2: #b0b0b0; --btn: #2d2d2d; --accent: #3b82f6;
+    --ok: #3fb950; --amber: #f5a623; --bad: #f85149; --gray: #6e7681; --warn: #f5a623;
+    --track: rgba(255,255,255,.07); --shadow: 0 18px 50px rgba(0,0,0,.55);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b2a3d; --bg2: #0e1826;
+  --card: #1f1f1f; --node: #272727; --border: rgba(255,255,255,.14); --border2: rgba(255,255,255,.24);
+  --text: #f3f3f3; --text2: #b0b0b0; --btn: #2d2d2d; --accent: #3b82f6;
+  --ok: #3fb950; --amber: #f5a623; --bad: #f85149; --gray: #6e7681; --warn: #f5a623;
+  --track: rgba(255,255,255,.07); --shadow: 0 18px 50px rgba(0,0,0,.55);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background-color: var(--bg2); background-image: linear-gradient(135deg, var(--bg), var(--bg2)); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.45; min-height: 100%; }
+.page { max-width: 920px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 40px; display: flex; flex-direction: column; gap: 28px; }
+h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+.intro p { margin: 4px 0 0; color: var(--text2); max-width: 62ch; }
+.sample { display: inline-block; margin-top: 10px; padding: 3px 10px; border-radius: 999px; background: var(--card); border: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+
+/* the existing card, with the two new entry points */
+.entry { display: flex; flex-wrap: wrap; gap: 20px 28px; align-items: flex-start; }
+.mini { width: 400px; max-width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow); font-size: 12px; }
+.mini-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hdrlink { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 7px; cursor: pointer; font: 600 13px var(--font); color: var(--warn); padding: 3px 6px; margin: -3px -6px; border-radius: 6px; min-width: 0; }
+.hdrlink span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline dotted; text-underline-offset: 4px; }
+.hdrlink:hover, .hdrlink:focus-visible { background: var(--btn); }
+.mini-x { color: var(--text2); letter-spacing: .3em; }
+.mini hr { border: 0; height: 1px; background: var(--border); margin: 8px 0; }
+.mini-row { display: grid; grid-template-columns: 16px 52px 1fr auto auto; align-items: center; height: 22px; color: var(--text2); }
+.mini-row b { color: var(--text); font-weight: 400; }
+.mini-row .d { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
+.mini-row em { font-style: normal; margin-left: 10px; }
+.mini-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.mb { text-align: center; padding: 6px 0; border-radius: 6px; background: var(--btn); color: var(--text); }
+.mb.on { background: var(--accent); color: #fff; font-weight: 600; }
+.mini-foot { display: flex; align-items: center; justify-content: space-between; color: var(--text2); }
+.icons { display: flex; gap: 2px; align-items: center; }
+.ib { all: unset; box-sizing: border-box; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; color: var(--text2); font-size: 14px; }
+.newicon { cursor: pointer; color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
+.newicon:hover, .newicon:focus-visible { background: var(--btn); }
+.callouts { display: flex; flex-direction: column; gap: 14px; max-width: 34ch; padding-top: 6px; }
+.callouts p { margin: 0; color: var(--text); }
+.callouts small { display: block; color: var(--text2); font-size: 12.5px; margin-top: 2px; }
+.callouts .tag { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: var(--accent); }
+
+/* the new window */
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.controls .lbl { color: var(--text2); font-size: 12.5px; }
+.seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+.seg button { all: unset; box-sizing: border-box; cursor: pointer; padding: 5px 12px; border-radius: 6px; font-size: 12.5px; color: var(--text2); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; font-weight: 600; }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.win { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+.win.flash { animation: flash 1.1s ease-out 1; }
+@keyframes flash { 0% { box-shadow: 0 0 0 0 var(--accent), var(--shadow); } 40% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow); } 100% { box-shadow: 0 0 0 0 transparent, var(--shadow); } }
+.titlebar { display: flex; align-items: center; gap: 8px; }
+.titlebar h2 { font-size: 13px; font-weight: 600; margin: 0; flex: 1; }
+.titlebar .x { color: var(--text2); font-size: 13px; padding: 0 6px; }
+.headline { font-size: 15px; font-weight: 650; margin: 0; }
+.headline.warn { color: var(--warn); }
+.sub { margin: 2px 0 0; color: var(--text2); max-width: 78ch; }
+.map { overflow-x: auto; border-radius: 8px; background: color-mix(in srgb, var(--card) 70%, var(--track)); border: 1px solid var(--border); }
+.map svg { display: block; min-width: 760px; width: 100%; height: auto; }
+
+.track { fill: none; stroke: var(--track); stroke-width: 9; stroke-linecap: round; }
+.link { fill: none; stroke-width: 3; stroke-linecap: round; }
+.link.ok { stroke: var(--ok); stroke-dasharray: 6 8; animation: flow 1.1s linear infinite; }
+.link.warn { stroke: var(--amber); stroke-dasharray: 6 8; animation: flow 2.2s linear infinite; }
+.link.bad { stroke: var(--bad); stroke-dasharray: 2 7; }
+.link.dead { stroke: var(--gray); stroke-dasharray: 2 8; opacity: .5; }
+.link.hid.ok, .link.hid.warn { stroke-dasharray: 3 9; }
+@keyframes flow { to { stroke-dashoffset: -28; } }
+.cut .cutbg { fill: var(--card); stroke: var(--bad); stroke-width: 2; }
+.cut path { stroke: var(--bad); stroke-width: 2; stroke-linecap: round; fill: none; }
+.cut .ring { fill: none; stroke: var(--bad); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ping 1.6s ease-out infinite; }
+@keyframes ping { 0% { transform: scale(1); opacity: .8; } 100% { transform: scale(2.4); opacity: 0; } }
+
+.node, .row { cursor: pointer; }
+.node:focus, .row:focus { outline: none; }
+.node .body { fill: var(--node); stroke: var(--border2); stroke-width: 1; }
+.node.warn .body { stroke: var(--amber); }
+.node.bad .body { stroke: var(--bad); }
+.node.hidden .body { stroke-dasharray: 4 3; }
+.node:hover .body, .node:focus-visible .body, .node.sel .body { stroke: var(--accent); stroke-width: 2; }
+.halo { fill: none; stroke-width: 5; stroke-opacity: .0; animation: halo 1.8s ease-in-out infinite; pointer-events: none; }
+.halo.warn { stroke: var(--amber); } .halo.bad { stroke: var(--bad); }
+@keyframes halo { 0%, 100% { stroke-opacity: .0; } 50% { stroke-opacity: .45; } }
+.nm { font: 600 11px var(--font); fill: var(--text); }
+.ip { font: 10.5px var(--mono); fill: var(--text2); }
+.mt { font: 500 10.5px var(--font); fill: var(--text2); }
+.mt.warn { fill: var(--amber); } .mt.bad { fill: var(--bad); }
+.cap { font: 600 10.5px var(--font); fill: var(--text2); letter-spacing: .06em; text-transform: uppercase; }
+.dot.ok { fill: var(--ok); } .dot.warn { fill: var(--amber); } .dot.bad { fill: var(--bad); } .dot.hidden { fill: var(--gray); }
+.row .rbg { fill: transparent; }
+.row:hover .rbg, .row:focus-visible .rbg, .row.sel .rbg { fill: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+.detail { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 24px; }
+.dhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; grid-column: 1 / -1; }
+.dhead h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.dhead code { font: 12px var(--mono); color: var(--text2); }
+.chip { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.chip.ok { color: var(--ok); } .chip.warn { color: var(--amber); } .chip.bad { color: var(--bad); } .chip.hidden { color: var(--text2); }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.stats dt { font-size: 11.5px; color: var(--text2); }
+.stats dd { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.spark svg { width: 100%; height: 56px; display: block; }
+.spark small { color: var(--text2); font-size: 11.5px; }
+.dnote { margin: 0; grid-column: 1 / -1; color: var(--text2); max-width: 80ch; }
+.spark .line { fill: none; stroke: var(--accent); stroke-width: 1.8; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.spark .lost { stroke: var(--bad); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.spark .base { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+.winfoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; color: var(--text2); font-size: 12px; }
+.live { display: inline-flex; align-items: center; gap: 6px; }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: blink 1.6s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 18px; height: 0; border-top: 3px solid; border-radius: 2px; }
+.legend .l-ok { border-color: var(--ok); border-top-style: dashed; } .legend .l-warn { border-color: var(--amber); border-top-style: dashed; }
+.legend .l-bad { border-color: var(--bad); border-top-style: dotted; } .legend .l-hid { border-color: var(--gray); border-top-style: dotted; }
+.pause { all: unset; box-sizing: border-box; cursor: pointer; padding: 3px 10px; border-radius: 6px; background: var(--btn); color: var(--text); font-size: 12px; }
+.pause:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.paused .link, .paused .halo, .paused .ring, .paused .live i { animation-play-state: paused; }
+.note { color: var(--text2); font-size: 12.5px; margin: 0; max-width: 78ch; }
+@media (max-width: 640px) { .detail { grid-template-columns: minmax(0, 1fr); } .callouts { max-width: none; } }
+@media (prefers-reduced-motion: reduce) { .link, .halo, .ring, .live i, .win.flash { animation: none !important; } }
+</style>
+
+<main class="page">
+  <header class="intro">
+    <h1>Network path map</h1>
+    <p>Mockup of a new window in NetRoute Widget. It draws the route from this PC to the internet over both connections and shows which device on the way stops answering.</p>
+    <span class="sample">Sample numbers for illustration, nothing here was measured on your PC</span>
+  </header>
+
+  <section class="entry" aria-label="How to open it">
+    <div class="mini">
+      <div class="mini-head">
+        <button class="hdrlink" id="openHeader" type="button" title="Open the network path map">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="2.8" ry="6.5"/><path d="M1.5 8h13M2.6 4.7h10.8M2.6 11.3h10.8"/></svg>
+          <span>Internet via PHONE (LAN has no internet)</span>
+        </button>
+        <span class="mini-x" aria-hidden="true">⋮ ✕</span>
+      </div>
+      <hr>
+      <div class="mini-row"><i class="d"></i><b>Phone</b><span>192.168.42.11</span><span style="color:var(--accent)">166 KB/s</span><em>21 ms</em></div>
+      <div class="mini-row"><i class="d"></i><b>LAN</b><span>192.168.86.42</span><span style="color:var(--accent)">50 KB/s</span><em>53 ms</em></div>
+      <hr>
+      <div class="mini-btns" aria-hidden="true"><span class="mb">Phone</span><span class="mb on">LAN</span><span class="mb on">⚡ Smart</span></div>
+      <hr>
+      <div class="mini-foot">
+        <span>LAN + exceptions · 23 rules</span>
+        <span class="icons">
+          <button class="ib newicon" id="openIcon" type="button" title="Network path map" aria-label="Open the network path map">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="3" cy="8" r="1.8"/><circle cx="8" cy="3.5" r="1.8"/><circle cx="8" cy="12.5" r="1.8"/><circle cx="13" cy="8" r="1.8"/><path d="M4.6 7.1 6.5 4.7M4.6 8.9l1.9 2.4M9.5 4.7l2 2.4M9.5 11.3l2-2.4"/></svg>
+          </button>
+          <span class="ib" aria-hidden="true">⏱</span><span class="ib" aria-hidden="true">⚙</span>
+        </span>
+      </div>
+    </div>
+    <div class="callouts">
+      <p><span class="tag"></span>The status line becomes a link<small>Its dotted underline shows it opens something. This is the natural click when it says "LAN has no internet".</small></p>
+      <p><span class="tag"></span>A new icon beside ⏱ and ⚙<small>Same window, easier to find. Try either one on the left.</small></p>
+    </div>
+  </section>
+
+  <section aria-label="The path window">
+    <div class="controls">
+      <span class="lbl">Example situation:</span>
+      <div class="seg" role="group" aria-label="Example situation" id="seg">
+        <button type="button" data-s="healthy" aria-pressed="false">Everything healthy</button>
+        <button type="button" data-s="dropping" aria-pressed="true">LAN losing packets</button>
+        <button type="button" data-s="down" aria-pressed="false">LAN path broken</button>
+      </div>
+    </div>
+
+    <div class="win" id="win">
+      <div class="titlebar"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="3" cy="8" r="1.8"/><circle cx="8" cy="3.5" r="1.8"/><circle cx="8" cy="12.5" r="1.8"/><circle cx="13" cy="8" r="1.8"/><path d="M4.6 7.1 6.5 4.7M4.6 8.9l1.9 2.4M9.5 4.7l2 2.4M9.5 11.3l2-2.4"/></svg><h2>Network path</h2><span class="x" aria-hidden="true">✕</span></div>
+      <div><p class="headline" id="headline"></p><p class="sub" id="sub"></p></div>
+      <div class="map"><svg id="map" viewBox="0 0 880 380" role="img" aria-label="Network path from this PC to the internet over the LAN and over the phone"></svg></div>
+      <div class="detail" id="detail" aria-live="polite"></div>
+      <div class="winfoot">
+        <span class="live"><i></i>Live, checked every second while this window is open</span>
+        <span class="legend"><span><i class="l-ok"></i>Healthy</span><span><i class="l-warn"></i>Losing packets</span><span><i class="l-bad"></i>No reply</span><span><i class="l-hid"></i>Hidden or unreachable</span></span>
+        <button class="pause" id="pause" type="button">Pause</button>
+      </div>
+    </div>
+    <p class="note" style="margin-top:12px">Click any device on the map to see its latency, loss and a plain-language note. The situations above are examples: where your real LAN breaks is not known yet.</p>
+  </section>
+</main>
+
+<script>
+var S = {
+  healthy:  { router:[1,0], modem:[3,0], isp:[12,0], phone:[2,0], netLan:[38,0], netPhone:[29,0],
+    head:'Internet via PHONE', warn:false,
+    sub:'Both connections reach the internet. The LAN is ready if you switch back.' },
+  dropping: { router:[1,0], modem:[3,0], isp:[14,38], phone:[2,0], netLan:[389,31], netPhone:[29,0],
+    head:'Internet via PHONE (LAN is unstable)', warn:true,
+    sub:'The LAN loses 38% of packets at 172.17.18.1, the third device on its path. Your router and the box behind it are fine.' },
+  down:     { router:[1,0], modem:[3,0], isp:[null,100], phone:[2,0], netLan:[null,100], netPhone:[29,0],
+    head:'Internet via PHONE (LAN has no internet)', warn:true,
+    sub:'The LAN path stops after 192.168.1.1. Your router and the box behind it answer; 172.17.18.1 and everything after it do not.' }
+};
+var NODES = {
+  router:  { name:'Router',  ip:'192.168.86.1',   hop:'Hop 1', note:'Your own router. If this stops answering, the problem is between this PC and the router: the cable, the port or Wi-Fi.' },
+  modem:   { name:'Modem',   ip:'192.168.1.1',    hop:'Hop 2', note:'A second device behind your router, probably the ISP modem, so the network is double-NATed. If this answers but the next device does not, the fault is on the line to your provider.' },
+  isp:     { name:'ISP gateway', ip:'172.17.18.1', hop:'Hop 3', note:'The first device on your provider’s side, with a private address. Loss here while hop 2 is healthy points at the provider’s line or equipment, not at this PC or your router.' },
+  phone:   { name:'Phone',   ip:'192.168.42.129', hop:'Hop 1', note:'The phone sharing its mobile data over USB. It is one step away from this PC.' },
+  carrier: { name:'Carrier', ip:'hops hidden',    hop:'Hops 2+', hidden:true, note:'Mobile carriers usually do not answer these probes, so the hops are drawn as hidden. That is normal and not a failure.' },
+  netLan:  { name:'Internet via LAN', ip:'1.1.1.1 · 8.8.8.8', hop:'End to end', note:'A TCP connection from the LAN adapter to 1.1.1.1 and 8.8.8.8. This is the same test the widget uses to decide when to switch to the phone.' },
+  netPhone:{ name:'Internet via Phone', ip:'1.1.1.1 · 8.8.8.8', hop:'End to end', note:'The same test from the phone adapter.' }
+};
+var L = {
+  pc:{x:80,y:200,w:118,h:84}, router:{x:245,y:105,w:112,h:66}, modem:{x:405,y:105,w:112,h:66}, isp:{x:565,y:105,w:112,h:66},
+  phone:{x:245,y:295,w:112,h:66}, carrier:{x:485,y:295,w:112,h:66}, net:{x:790,y:200,w:124,h:96}
+};
+var LABEL = { ok:'Healthy', warn:'Losing packets', bad:'No reply', hidden:'Hidden hop', dead:'Not reachable' };
+var scenario = 'dropping', selected = null;
+
+function st(m) { if (!m) return 'hidden'; if (m[1] >= 100) return 'bad'; if (m[1] >= 5) return 'warn'; return 'ok'; }
+function worst(a) { return a.indexOf('bad') >= 0 ? 'bad' : a.indexOf('warn') >= 0 ? 'warn' : 'ok'; }
+function metric(id, m) { if (id === 'carrier') return 'no TTL replies'; if (m[1] >= 100) return 'no reply'; return m[0] + ' ms · ' + m[1] + '%'; }
+
+function model() {
+  var d = S[scenario], lan = [], broken = false, firstProblem = null;
+  ['router','modem','isp'].forEach(function (id) {
+    var s = st(d[id]);
+    lan.push(broken ? 'dead' : s);
+    if (!firstProblem && s !== 'ok') firstProblem = id;
+    if (s === 'bad') broken = true;
+  });
+  var nl = st(d.netLan); lan.push(broken ? 'dead' : nl);
+  if (!firstProblem && nl !== 'ok') firstProblem = 'netLan';
+  var np = st(d.netPhone), ph = [st(d.phone), np, np];
+  return { d:d, lan:lan, ph:ph, firstProblem:firstProblem, lanOverall:worst([st(d.router), st(d.modem), st(d.isp), nl]), phOverall:worst([st(d.phone), np]) };
+}
+
+function link(a, b, state, hid) {
+  var ax = a.x + a.w / 2, ay = a.y, bx = b.x - b.w / 2, by = b.y, dx = (bx - ax) / 2;
+  var p = ay === by ? 'M' + ax + ' ' + ay + 'L' + bx + ' ' + by : 'M' + ax + ' ' + ay + 'C' + (ax + dx) + ' ' + ay + ' ' + (bx - dx) + ' ' + by + ' ' + bx + ' ' + by;
+  var o = '<path class="track" d="' + p + '"/><path class="link ' + state + (hid ? ' hid' : '') + '" d="' + p + '"/>';
+  if (state === 'bad') o += '<g class="cut" transform="translate(' + (ax + bx) / 2 + ' ' + (ay + by) / 2 + ')"><circle class="ring" r="9"/><circle class="cutbg" r="9"/><path d="M-3.5 -3.5L3.5 3.5M3.5 -3.5L-3.5 3.5"/></g>';
+  return o;
+}
+
+function card(id, m) {
+  var l = L[id], n = NODES[id], s = n.hidden ? 'hidden' : st(m.d[id]), x = l.x - l.w / 2, y = l.y - l.h / 2;
+  var halo = (m.firstProblem === id && (s === 'warn' || s === 'bad')) ? '<rect class="halo ' + s + '" x="' + (x - 3) + '" y="' + (y - 3) + '" width="' + (l.w + 6) + '" height="' + (l.h + 6) + '" rx="13"/>' : '';
+  var mt = n.hidden ? 'no TTL replies' : metric(id, m.d[id]);
+  return '<g class="node ' + s + (selected === id ? ' sel' : '') + '" data-id="' + id + '" tabindex="0" role="button" aria-label="' + n.name + ', ' + n.ip + ', ' + LABEL[s] + '. ' + mt + '">' + halo +
+    '<rect class="body" x="' + x + '" y="' + y + '" width="' + l.w + '" height="' + l.h + '" rx="10"/>' +
+    '<circle class="dot ' + s + '" cx="' + (x + 13) + '" cy="' + (y + 18) + '" r="4"/>' +
+    '<text class="nm" x="' + (x + 24) + '" y="' + (y + 22) + '">' + n.name + '</text>' +
+    '<text class="ip" x="' + (x + 13) + '" y="' + (y + 40) + '">' + n.ip + '</text>' +
+    '<text class="mt ' + (s === 'warn' || s === 'bad' ? s : '') + '" x="' + (x + 13) + '" y="' + (y + 57) + '">' + mt + '</text></g>';
+}
+
+function netCard(m) {
+  var l = L.net, x = l.x - l.w / 2, y = l.y - l.h / 2;
+  function row(id, label, yy) {
+    var s = st(m.d[id]), mt = m.d[id][1] >= 100 ? 'no reply' : m.d[id][0] + ' ms';
+    return '<g class="row' + (selected === id ? ' sel' : '') + '" data-id="' + id + '" tabindex="0" role="button" aria-label="Internet via ' + label + ', ' + LABEL[s] + ', ' + mt + '">' +
+      '<rect class="rbg" x="' + (x + 4) + '" y="' + (yy - 14) + '" width="' + (l.w - 8) + '" height="24" rx="6"/>' +
+      '<circle class="dot ' + s + '" cx="' + (x + 16) + '" cy="' + (yy - 2) + '" r="4"/>' +
+      '<text class="nm" x="' + (x + 27) + '" y="' + (yy + 2) + '" style="font-weight:500">' + label + '</text>' +
+      '<text class="mt ' + (s === 'ok' ? '' : s) + '" x="' + (x + l.w - 10) + '" y="' + (yy + 2) + '" text-anchor="end">' + mt + '</text></g>';
+  }
+  return '<g><rect class="body" x="' + x + '" y="' + y + '" width="' + l.w + '" height="' + l.h + '" rx="12" style="fill:var(--node);stroke:var(--border2)"/>' +
+    '<text class="nm" x="' + (x + 14) + '" y="' + (y + 24) + '" style="font-size:13px">Internet</text>' +
+    '<text class="ip" x="' + (x + 14) + '" y="' + (y + 40) + '">1.1.1.1 · 8.8.8.8</text>' + row('netLan', 'LAN', y + 62) + row('netPhone', 'Phone', y + 84) + '</g>';
+}
+
+function pcCard(m) {
+  var l = L.pc, x = l.x - l.w / 2, y = l.y - l.h / 2;
+  return '<g><rect class="body" x="' + x + '" y="' + y + '" width="' + l.w + '" height="' + l.h + '" rx="12" style="fill:var(--node);stroke:var(--border2)"/>' +
+    '<rect x="' + (x + 14) + '" y="' + (y + 12) + '" width="22" height="15" rx="2.5" fill="none" stroke="var(--text2)" stroke-width="1.5"/><path d="M' + (x + 20) + ' ' + (y + 32) + 'h10" stroke="var(--text2)" stroke-width="1.5" stroke-linecap="round"/>' +
+    '<text class="nm" x="' + (x + 44) + '" y="' + (y + 25) + '" style="font-size:12.5px">This PC</text>' +
+    '<circle class="dot ' + m.lanOverall + '" cx="' + (x + 16) + '" cy="' + (y + 50) + '" r="4"/><text class="mt" x="' + (x + 27) + '" y="' + (y + 54) + '">LAN · Ethernet</text>' +
+    '<circle class="dot ' + m.phOverall + '" cx="' + (x + 16) + '" cy="' + (y + 68) + '" r="4"/><text class="mt" x="' + (x + 27) + '" y="' + (y + 72) + '">Phone · Ethernet 5</text></g>';
+}
+
+function drawMap() {
+  var m = model(), o = '';
+  o += '<text class="cap" x="193" y="52">LAN path · from 192.168.86.42</text><text class="cap" x="193" y="352">Phone path · from 192.168.42.11</text>';
+  o += link(L.pc, L.router, m.lan[0]) + link(L.router, L.modem, m.lan[1]) + link(L.modem, L.isp, m.lan[2]) + link(L.isp, L.net, m.lan[3]);
+  o += link(L.pc, L.phone, m.ph[0]) + link(L.phone, L.carrier, m.ph[1], true) + link(L.carrier, L.net, m.ph[2], true);
+  o += pcCard(m) + ['router','modem','isp','phone','carrier'].map(function (id) { return card(id, m); }).join('') + netCard(m);
+  document.getElementById('map').innerHTML = o;
+  var h = document.getElementById('headline'); h.textContent = m.d.head; h.className = 'headline' + (m.d.warn ? ' warn' : '');
+  document.getElementById('sub').textContent = m.d.sub;
+  Array.prototype.forEach.call(document.querySelectorAll('#map [data-id]'), function (el) {
+    el.addEventListener('click', function () { select(el.getAttribute('data-id')); });
+    el.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(el.getAttribute('data-id')); } });
+  });
+}
+
+function rng(seed) { var a = 0; for (var i = 0; i < seed.length; i++) a = (a * 31 + seed.charCodeAt(i)) | 0; return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function series(id, m) {
+  var r = rng(id + scenario), out = [];
+  for (var i = 0; i < 30; i++) {
+    if (m[1] >= 100 || r() * 100 < m[1]) out.push(null);
+    else out.push(Math.max(1, Math.round(m[0] * (0.8 + r() * 0.5))));
+  }
+  return out;
+}
+
+function spark(s) {
+  var vals = s.filter(function (v) { return v !== null; }), max = Math.max.apply(null, vals.concat([1])) * 1.15, o = '', seg = [];
+  function flush() { if (seg.length > 1) o += '<polyline class="line" points="' + seg.join(' ') + '"/>'; else if (seg.length === 1) o += '<circle cx="' + seg[0].split(',')[0] + '" cy="' + seg[0].split(',')[1] + '" r="1.6" fill="var(--accent)"/>'; seg = []; }
+  s.forEach(function (v, i) {
+    var x = 5 + i * (290 / 29);
+    if (v === null) { flush(); o += '<line class="lost" x1="' + x + '" x2="' + x + '" y1="46" y2="54"/>'; }
+    else seg.push(x.toFixed(1) + ',' + (44 - v / max * 38).toFixed(1));
+  });
+  flush();
+  return '<svg viewBox="0 0 300 56" preserveAspectRatio="none" role="img" aria-label="Latency over the last 30 seconds"><line class="base" x1="0" x2="300" y1="44" y2="44"/>' + o + '</svg>';
+}
+
+function select(id) {
+  selected = id;
+  Array.prototype.forEach.call(document.querySelectorAll('#map .node, #map .row'), function (el) { el.classList.toggle('sel', el.getAttribute('data-id') === id); });
+  var d = S[scenario], n = NODES[id], m = d[id], s = n.hidden ? 'hidden' : st(m), html;
+  if (n.hidden) {
+    html = '<div class="dhead"><div><h3>' + n.name + '</h3><code>' + n.ip + '</code></div><span class="chip hidden">' + LABEL.hidden + '</span></div><p class="dnote">' + n.note + '</p>';
+  } else {
+    var sr = series(id, m), ok = sr.filter(function (v) { return v !== null; }), avg = ok.length ? Math.round(ok.reduce(function (a, b) { return a + b; }, 0) / ok.length) : null;
+    var lost = sr.length - ok.length, pct = Math.round(lost / sr.length * 100);
+    html = '<div class="dhead"><div><h3>' + n.name + '</h3><code>' + n.ip + ' · ' + n.hop + '</code></div><span class="chip ' + s + '">' + LABEL[s] + '</span></div>' +
+      '<dl class="stats"><div><dt>Latency, average</dt><dd>' + (avg === null ? 'no reply' : avg + ' ms') + '</dd></div>' +
+      '<div><dt>Packets lost</dt><dd>' + pct + '%</dd></div>' +
+      '<div><dt>Best / worst</dt><dd>' + (ok.length ? Math.min.apply(null, ok) + ' / ' + Math.max.apply(null, ok) + ' ms' : '—') + '</dd></div>' +
+      '<div><dt>Window</dt><dd>30 s</dd></div></dl>' +
+      '<div class="spark">' + spark(sr) + '<small>One check per second. Red ticks are checks that got no reply.</small></div>' +
+      '<p class="dnote">' + n.note + '</p>';
+  }
+  document.getElementById('detail').innerHTML = html;
+}
+
+function setScenario(k) {
+  scenario = k;
+  Array.prototype.forEach.call(document.querySelectorAll('#seg button'), function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-s') === k ? 'true' : 'false'); });
+  var m = model(); selected = m.firstProblem || 'router';
+  drawMap(); select(selected);
+}
+
+document.getElementById('seg').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) setScenario(b.getAttribute('data-s')); });
+document.getElementById('pause').addEventListener('click', function (e) {
+  var w = document.getElementById('win'), p = w.classList.toggle('paused'); e.target.textContent = p ? 'Resume' : 'Pause';
+});
+function open() {
+  var w = document.getElementById('win'); w.classList.remove('flash'); void w.offsetWidth; w.classList.add('flash');
+  try { w.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { }
+}
+document.getElementById('openHeader').addEventListener('click', open);
+document.getElementById('openIcon').addEventListener('click', open);
+setScenario('dropping');
+</script>
