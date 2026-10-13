@@ -279,7 +279,57 @@ public class PathMapPresenterTests
         var failing = Present(Lan(Four, FailingEndpoint(),
             Every(1, AllReply), Every(1, AllLost), Every(1, AllReply), Every(1, LostDuring(14))));
         Assert.Equal(HopDisplay.Quiet, failing.Lan.Nodes[1].State);
-        Assert.Equal(LinkState.Neutral, failing.Lan.Links[1]);
+        Assert.Equal(LinkState.Healthy, failing.Lan.Links[1]); // expectation changed by the F8 fix: hop 3 answers, so traffic demonstrably passes hop 2
+    }
+
+    [Fact]
+    public void A_quiet_device_before_the_last_answering_one_keeps_a_green_link_during_a_located_break()
+    {
+        var view = Present(Lan(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllLost), Every(1, AllReply), Every(1, LostDuring(14))));
+
+        Assert.Equal(HopDisplay.Quiet, view.Lan.Nodes[1].State);
+        Assert.Equal(LinkState.Healthy, view.Lan.Links[1]);
+        Assert.Equal(LinkState.Broken, view.Lan.Links[3]);
+    }
+
+    [Fact]
+    public void A_quiet_device_after_the_last_answering_one_stays_neutral_during_a_fault()
+    {
+        // hop 2 answers throughout, hop 3 breaks with the check, hop 4 just ignores probes: it lies beyond the last answering device
+        var view = Present(Lan(Four, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(14)), Every(1, AllLost)));
+
+        Assert.Equal(HopDisplay.Quiet, view.Lan.Nodes[3].State);
+        Assert.Equal(LinkState.Neutral, view.Lan.Links[3]);
+    }
+
+    [Fact]
+    public void Narrowed_with_a_ghost_box_draws_the_link_into_the_ghost_amber_and_the_one_beyond_it_muted()
+    {
+        var trace = new PathTrace(Ip("192.168.86.42"), Ip("1.1.1.1"), Four.Hops, TraceStatus.Incomplete);
+        var view = Present(Lan(trace, FailingEndpoint(),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply)));
+
+        Assert.Equal(NodeKind.TraceIncomplete, view.Lan.Nodes[^1].Kind);
+        Assert.Equal(6, view.Lan.Links.Count);
+        Assert.Equal(LinkState.Suspect, view.Lan.Links[4]); // into the ghost: the fault is after the last device that answered
+        Assert.Equal(LinkState.Muted, view.Lan.Links[5]);
+        Assert.DoesNotContain(LinkState.Broken, view.Lan.Links);
+    }
+
+    [Fact]
+    public void The_note_for_a_suspect_first_device_with_nothing_before_it_does_not_claim_a_device_that_answered()
+    {
+        var detail = Present(Lan(Trace("192.168.86.1", "192.168.1.1"), FailingEndpoint(),
+            Every(1, sec => sec >= 14 && sec % 2 == 0 ? ProbeOutcome.NoReply : ProbeOutcome.Reply), Every(1, LostDuring(14))),
+            selected: "lan:1").Detail;
+
+        Assert.NotNull(detail);
+        Assert.Equal(HopDisplay.Suspect, detail.State);
+        Assert.Equal(
+            "The first device on the way out. It lost some of its probes while the internet check was failing, so it is the most likely break, though not every probe was lost.",
+            detail.Note);
     }
 
     [Fact]
