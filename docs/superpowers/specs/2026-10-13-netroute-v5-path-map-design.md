@@ -81,7 +81,7 @@ For each connected lane, send ICMP echo requests from the adapter's IPv4 address
 | **Incomplete** | no TTL ≤ 12 got an answer from the target (the path is longer than 12 hops, or ICMP to the target is filtered) | the devices found (trailing hidden hops trimmed), then the "Trace incomplete" ghost, then the Internet card. **Never a fault by itself**: the lane's health is decided by the internet check |
 | **Unavailable** | TTL 1 could not be measured, or at least half the TTLs were Unavailable | "Measurement unavailable" for the lane |
 
-A trace repeats every 30 s, and sooner (at most once per 10 s) when a probe's reply comes from a different address than the trace recorded, when the target answers at a lower TTL than expected, or when a hidden hop starts answering. A change of the detected adapter or its address re-traces at once and clears that lane's samples.
+A trace repeats every 30 s, and sooner (at most once per 10 s) when a probe's reply comes from a different address than the trace recorded, or when the target answers at a lower TTL than expected. A hidden hop that starts answering is picked up by the periodic 30 s trace (hidden hops are not probed between traces, so silent devices cost nothing). A change of the detected adapter or its address re-traces at once and clears that lane's samples.
 
 ### Frequencies: probes versus the screen
 
