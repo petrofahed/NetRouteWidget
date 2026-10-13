@@ -20,6 +20,11 @@ static class Theme
         ["DotGreen"] = ("#FF2EA043", "#FF3FB950"),
         ["DotAmber"] = ("#FFD97706", "#FFF5A623"),
         ["DotGray"] = ("#FF8B949E", "#FF6E7681"),
+        ["DotRed"] = ("#FFCF222E", "#FFF85149"),
+        ["DotMeasuring"] = ("#FF6E8CB4", "#FF7D9CC8"),
+        ["NodeBackground"] = ("#FFFFFFFF", "#FF272727"),
+        ["NodeBorder"] = ("#38000000", "#3DFFFFFF"),
+        ["Track"] = ("#14000000", "#12FFFFFF"),
     };
 
     public static void Apply(ResourceDictionary resources)

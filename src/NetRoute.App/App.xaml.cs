@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Windows;
 using System.Windows.Threading;
 using NetRoute.Core;
+using NetRoute.Core.PathMap;
 using NetRoute.Core.Windows;
 
 namespace NetRoute.App;
@@ -40,6 +41,7 @@ public partial class App : Application
     bool _speedTestRunning;
     bool _smartStopped;
     SmartRoutingWindow? _smartWindow;
+    PathMapWindow? _pathWindow;
     WaitingPopup? _waitingPopup;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -96,6 +98,7 @@ public partial class App : Application
             _card.QuitRequested += Quit;
             _card.SpeedTestRequested += RunSpeedTest;
             _card.SmartSettingsRequested += OpenSmartRouting;
+            _card.PathMapRequested += OpenPathMap;
             _card.SmartToggleRequested += on => { if (_smart is not null) ChangeSmart(s => s with { Enabled = on }); };
 
             _instance.ListenForShow(() => Dispatcher.BeginInvoke(new Action(ShowCard)));
@@ -490,6 +493,43 @@ public partial class App : Application
         {
             _renderRunning = false;
         }
+    }
+
+    /// Opens the network path window (one at a time). Probing runs only while it is open: the monitor starts here and
+    /// is cancelled when the window closes.
+    void OpenPathMap()
+    {
+        if (_controller is not { } controller) return;
+        if (_pathWindow is not null)
+        {
+            if (_pathWindow.WindowState == WindowState.Minimized) _pathWindow.WindowState = WindowState.Normal;
+            _pathWindow.Activate();
+            return;
+        }
+
+        var monitor = new PathMonitor(new IcmpPathProbe(), TcpEndpointProbe.Default(), TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
+        var cts = new CancellationTokenSource();
+        var window = _pathWindow = new PathMapWindow(selected =>
+        {
+            // Keep the monitor on the adapters the card shows; a no-op when nothing changed.
+            var adapters = controller.Status.Adapters;
+            monitor.SetAdapters(adapters.Lan, adapters.Phone);
+            return PathMapPresenter.Present(controller.Status, monitor.Snapshot(), selected, PathThresholds.Default);
+        });
+        window.Closed += (_, _) =>
+        {
+            cts.Cancel();
+            cts.Dispose();
+            _pathWindow = null;
+        };
+        var initial = controller.Status.Adapters;
+        monitor.SetAdapters(initial.Lan, initial.Phone);
+        var token = cts.Token; // read before queuing: the Closed handler may dispose cts before the pool runs the lambda
+        var run = Task.Run(() => monitor.RunAsync(token)); // off the UI thread: its loops, probe continuations, locks and the log callback must not run there
+        // Last resort: the monitor swallows cancellation and logs its own errors, but an unobserved fault here would vanish silently.
+        _ = run.ContinueWith(t => _log?.Error("Path map monitor stopped unexpectedly", t.Exception?.GetBaseException()),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        window.Show();
     }
 
     void OpenSmartRouting()

@@ -98,7 +98,17 @@
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>
-                <TextBlock x:Name="Header" FontSize="13" FontWeight="SemiBold" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="Header" FontSize="13" FontWeight="SemiBold" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis"
+                           Cursor="Hand" ToolTip="Open the network path map: see where the connection breaks">
+                    <TextBlock.TextDecorations>
+                        <!-- A dotted underline marks the status line as a link. A constant brush: dynamic resources do not work inside a Pen here. -->
+                        <TextDecoration Location="Underline" PenOffset="3">
+                            <TextDecoration.Pen>
+                                <Pen Brush="#80808080" Thickness="1"><Pen.DashStyle><DashStyle Dashes="1,2" /></Pen.DashStyle></Pen>
+                            </TextDecoration.Pen>
+                        </TextDecoration>
+                    </TextBlock.TextDecorations>
+                </TextBlock>
             </DockPanel>
             <TextBlock x:Name="Note" Visibility="Collapsed" Margin="0,2,0,0" TextWrapping="Wrap" Foreground="{DynamicResource Warning}" />
 
@@ -150,6 +160,14 @@
                         ToolTip="Speed test of both connections (uses about 5 MB of mobile data)" />
                 <Button DockPanel.Dock="Right" Content="⚙" Style="{StaticResource IconButton}" Click="OnSmartSettings"
                         ToolTip="Smart routing: choose what stays off 4G" />
+                <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Click="OnPathMap"
+                        ToolTip="Network path: see where the connection breaks">
+                    <Viewbox Width="14" Height="14">
+                        <Path Width="16" Height="16" Fill="Transparent" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              Data="M4.8,8 A1.8,1.8 0 1 1 1.2,8 A1.8,1.8 0 1 1 4.8,8 M9.8,3.5 A1.8,1.8 0 1 1 6.2,3.5 A1.8,1.8 0 1 1 9.8,3.5 M9.8,12.5 A1.8,1.8 0 1 1 6.2,12.5 A1.8,1.8 0 1 1 9.8,12.5 M14.8,8 A1.8,1.8 0 1 1 11.2,8 A1.8,1.8 0 1 1 14.8,8 M4.6,7.1 L6.5,4.7 M4.6,8.9 L6.5,11.3 M9.5,4.7 L11.5,7.1 M9.5,11.3 L11.5,8.9" />
+                    </Viewbox>
+                </Button>
                 <TextBlock x:Name="SmartText" Style="{StaticResource Secondary}" TextTrimming="CharacterEllipsis"
                            Cursor="Hand" MouseLeftButtonUp="OnSmartTextClick" Text="⚡ Smart routing off" />
             </DockPanel>
