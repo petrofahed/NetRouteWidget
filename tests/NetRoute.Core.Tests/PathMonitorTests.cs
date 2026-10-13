@@ -194,7 +194,7 @@ public class PathMonitorTests
         await rig.Ready();
         rig.Hops.ByTtl[2] = Hop("10.1.1.1"); // the second device changed
 
-        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        for (var i = 0; i < T.HopAddressChangeReplies; i++) await rig.Monitor.HopRoundAsync(CancellationToken.None);
         await rig.Monitor.RetraceAsync(CancellationToken.None); // too soon: nothing happens
         Assert.Equal("192.168.1.1", rig.Monitor.Snapshot().Lan.Trace!.Hops[1].Address!.ToString());
 
@@ -275,6 +275,8 @@ public class PathMonitorTests
 
         await rig.Monitor.HopRoundAsync(CancellationToken.None);
         rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        rig.Time.Advance(PathMonitor.RetraceMinGap); // a shorter path is adopted once a second retrace agrees
         await rig.Monitor.RetraceAsync(CancellationToken.None);
 
         Assert.Single(rig.Monitor.Snapshot().Lan.Trace!.Hops);
@@ -404,6 +406,161 @@ public class PathMonitorTests
         cts.Cancel();
         await run.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(run.IsCompletedSuccessfully);
+    }
+
+    // ----- a retrace must not truncate the path or wipe evidence (F1) -----
+
+    [Fact]
+    public async Task A_shorter_trace_is_kept_out_until_a_second_retrace_agrees_and_the_samples_survive()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        rig.Hops.ByTtl[2] = Target(); // the retrace now finds one device only, e.g. the probes past the router time out in a drop
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true);
+        var first = rig.Monitor.Snapshot().Lan;
+        Assert.Equal(2, first.Trace!.Hops.Count); // not adopted on first sight
+        Assert.All(first.HopSamples, s => Assert.Single(s)); // and the evidence is still there
+
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // due after the minimum gap, not the thirty seconds
+        var second = rig.Monitor.Snapshot().Lan;
+        Assert.Single(second.Trace!.Hops);
+        Assert.Single(Assert.Single(second.HopSamples)); // the router kept its history
+    }
+
+    [Fact]
+    public async Task An_incomplete_trace_for_a_complete_path_is_not_adopted_on_first_sight()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.ByTtl[2] = Hop("192.168.1.1");
+        rig.Hops.Default = new EchoResult(ProbeOutcome.NoReply); // both devices still answer, the target does not
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true);
+
+        Assert.Equal(TraceStatus.Complete, rig.Monitor.Snapshot().Lan.Trace!.Status);
+    }
+
+    [Fact]
+    public async Task A_good_trace_between_two_degraded_ones_resets_the_count()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        var good = rig.Hops.Default;
+        rig.Hops.Default = new EchoResult(ProbeOutcome.NoReply);
+        rig.Hops.ByTtl[2] = Hop("192.168.1.1");
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true); // degraded (1)
+        rig.Hops.Default = good;
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // fine again: the count starts over
+        rig.Hops.Default = new EchoResult(ProbeOutcome.NoReply);
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // degraded (1) again, not (2)
+
+        Assert.Equal(TraceStatus.Complete, rig.Monitor.Snapshot().Lan.Trace!.Status);
+    }
+
+    [Fact]
+    public async Task An_unavailable_trace_for_a_known_path_is_kept_and_retried()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.Default = new EchoResult(ProbeOutcome.Unavailable);
+        rig.Hops.ByTtl.Clear();
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true);
+        Assert.Equal(TraceStatus.Complete, rig.Monitor.Snapshot().Lan.Trace!.Status);
+
+        rig.Hops.Default = Target();
+        rig.Hops.ByTtl[1] = Hop("192.168.86.1");
+        rig.Hops.ByTtl[2] = Hop("192.168.1.1");
+        var calls = rig.Hops.Calls.Count;
+        rig.Time.Advance(PathMonitor.RetraceMinGap); // retried after the minimum gap
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.True(rig.Hops.Calls.Count > calls);
+        Assert.Equal(2, rig.Monitor.Snapshot().Lan.Trace!.Hops.Count);
+    }
+
+    [Fact]
+    public async Task A_path_that_really_lost_a_hop_is_adopted_after_two_retraces_ten_seconds_apart()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.ByTtl[2] = Target();
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true);
+        rig.Time.Advance(PathMonitor.RetraceMinGap - TimeSpan.FromSeconds(1));
+        await rig.Monitor.RetraceAsync(CancellationToken.None); // 9 s: still inside the minimum gap
+        Assert.Equal(2, rig.Monitor.Snapshot().Lan.Trace!.Hops.Count);
+
+        rig.Time.Advance(TimeSpan.FromSeconds(1));
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.Single(rig.Monitor.Snapshot().Lan.Trace!.Hops);
+    }
+
+    // ----- per-hop retention and flapping addresses (F2) -----
+
+    [Fact]
+    public async Task A_retrace_where_only_one_address_changed_keeps_the_other_devices_samples()
+    {
+        var rig = new Rig();
+        rig.Hops.ByTtl[3] = Hop("172.17.18.1");
+        await rig.Ready();
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        rig.Hops.ByTtl[3] = Hop("10.5.5.5"); // only the third device changed
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None, force: true);
+        var lan = rig.Monitor.Snapshot().Lan;
+
+        Assert.Equal("10.5.5.5", lan.Trace!.Hops[2].Address!.ToString());
+        Assert.Single(lan.HopSamples[0]);
+        Assert.Single(lan.HopSamples[1]);
+        Assert.Empty(lan.HopSamples[2]); // a different device starts its own history
+    }
+
+    [Fact]
+    public async Task Fewer_than_three_replies_from_another_address_do_not_ask_for_a_retrace_the_third_does()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Hops.ByTtl[2] = Hop("10.1.1.1");
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        var calls = rig.Hops.Calls.Count;
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.Equal(calls, rig.Hops.Calls.Count); // two odd replies: not a path change
+
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        calls = rig.Hops.Calls.Count;
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.True(rig.Hops.Calls.Count > calls); // the third in a row: retrace
+    }
+
+    [Fact]
+    public async Task A_reply_from_the_traced_address_resets_the_count_of_odd_replies()
+    {
+        var rig = new Rig();
+        await rig.Ready();
+        rig.Time.Advance(PathMonitor.RetraceMinGap);
+        var traced = rig.Hops.ByTtl[2];
+
+        rig.Hops.ByTtl[2] = Hop("10.1.1.1");
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        rig.Hops.ByTtl[2] = traced;
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        rig.Hops.ByTtl[2] = Hop("10.1.1.1");
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+
+        var calls = rig.Hops.Calls.Count;
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        Assert.Equal(calls, rig.Hops.Calls.Count); // 2 + 2 odd replies, never 3 in a row
     }
 
     static async Task WaitUntil(Func<bool> condition)

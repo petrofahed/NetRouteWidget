@@ -50,6 +50,10 @@ public sealed class PathMonitor
         /// Bumped whenever the lane is reset, so a probe that was in flight for the old state can be recognised and dropped.
         public int Generation;
         public bool NeedsRetrace = true;
+        /// Consecutive retraces that came back worse than the current trace (see IsDegraded).
+        public int DegradedStreak;
+        /// Per hop of Trace: consecutive replies from another address than the traced one. Replaced together with Trace.
+        public int[] AddressStreaks = [];
         public DateTimeOffset LastTrace = DateTimeOffset.MinValue;
     }
 
@@ -73,6 +77,8 @@ public sealed class PathMonitor
         lane.Generation++;
         lane.Trace = null;
         lane.Hops = [];
+        lane.AddressStreaks = [];
+        lane.DegradedStreak = 0;
         lane.Endpoint = new PathSamples(_t.Window);
         lane.NeedsRetrace = true;
         lane.LastTrace = DateTimeOffset.MinValue;
@@ -99,13 +105,44 @@ public sealed class PathMonitor
             if (trace is null || ct.IsCancellationRequested) return;
             lock (_gate)
             {
-                if (d.Generation != d.Lane.Generation) return;
-                var sameHops = d.Lane.Trace is { } old && old.Hops.Select(h => h.Address?.ToString()).SequenceEqual(trace.Hops.Select(h => h.Address?.ToString()));
-                if (!sameHops) d.Lane.Hops = trace.Hops.Select(_ => new PathSamples(_t.Window)).ToList();
-                d.Lane.Trace = trace;
-                d.Lane.NeedsRetrace = trace.Status == TraceStatus.Unavailable;
+                var lane = d.Lane;
+                if (d.Generation != lane.Generation) return;
+                // A trace made during a drop (probes past the break time out) must not replace a better one at once: it is kept
+                // out, with its samples, until a second retrace in a row agrees, so a real path change still lands ~10 s later.
+                if (lane.Trace is { } current && IsDegraded(current, trace) && ++lane.DegradedStreak < 2)
+                {
+                    lane.NeedsRetrace = true;
+                    return;
+                }
+                lane.DegradedStreak = 0;
+                Adopt(lane, trace);
             }
         }));
+    }
+
+    /// Worse than the current trace: fewer visible devices, a Complete path that is now Incomplete, or no trace at all
+    /// (Unavailable) where there was one.
+    static bool IsDegraded(PathTrace current, PathTrace next)
+    {
+        if (next.Status == TraceStatus.Unavailable) return current.Status != TraceStatus.Unavailable;
+        return Visible(next) < Visible(current)
+            || (current.Status == TraceStatus.Complete && next.Status == TraceStatus.Incomplete);
+    }
+
+    static int Visible(PathTrace trace) => trace.Hops.Count(h => !h.Hidden);
+
+    /// A device keeps its samples when the same TTL answered from the same address in the old trace; the others start empty.
+    void Adopt(Lane lane, PathTrace trace)
+    {
+        var old = lane.Trace;
+        var oldHops = lane.Hops;
+        lane.Hops = trace.Hops.Select((hop, i) =>
+            old is not null && i < old.Hops.Count && i < oldHops.Count && hop.Address is { } address && Equals(old.Hops[i].Address, address)
+                ? oldHops[i]
+                : new PathSamples(_t.Window)).ToList();
+        lane.AddressStreaks = new int[trace.Hops.Count];
+        lane.Trace = trace;
+        lane.NeedsRetrace = trace.Status == TraceStatus.Unavailable;
     }
 
     bool RetraceDue(Lane lane, DateTimeOffset now) =>
@@ -127,14 +164,14 @@ public sealed class PathMonitor
                     var hop = trace.Hops[i];
                     if (hop.Hidden) continue;
                     var store = samples[i];
-                    work.Add(ProbeHop(lane, generation, trace, source, hop, store, ct));
+                    work.Add(ProbeHop(lane, generation, trace, source, hop, i, store, ct));
                 }
             }
         }
         await Task.WhenAll(work);
     }
 
-    async Task ProbeHop(Lane lane, int generation, PathTrace trace, IPAddress source, PathHop hop, PathSamples store, CancellationToken ct)
+    async Task ProbeHop(Lane lane, int generation, PathTrace trace, IPAddress source, PathHop hop, int index, PathSamples store, CancellationToken ct)
     {
         // A sample belongs to the moment its probe was sent, not the moment it finished: a failed check can take seconds,
         // and the hop and internet series are lined up by time.
@@ -147,14 +184,20 @@ public sealed class PathMonitor
             if (generation != lane.Generation || !ReferenceEquals(lane.Trace, trace)) return; // the lane was reset or re-traced meanwhile
             store.Add(new Sample(sentAt, result.Outcome, result.RttMs));
             _lastSampleAt = _time.GetUtcNow(); // when data last arrived, not when it was sent
-            if (result.Outcome == ProbeOutcome.Reply && PathChanged(hop, result)) lane.NeedsRetrace = true;
+            if (result.Outcome == ProbeOutcome.Reply) NoteReply(lane, hop, index, result);
         }
     }
 
-    /// A reply from another address, or from the target at a TTL that used to be a device. (Hidden hops are not probed, so a
-    /// silent hop that starts answering is picked up by the periodic retrace.)
-    static bool PathChanged(PathHop hop, EchoResult result) =>
-        result.TargetReached || !Equals(result.From, hop.Address);
+    /// The target at a TTL that used to be a device means the path got shorter: retrace at once. A reply from another address
+    /// has to repeat before it counts (a load-balanced hop answers from several); a reply from the traced address ends the run.
+    /// A lost or unavailable probe says nothing about the address, so it neither extends nor ends it.
+    /// (Hidden hops are not probed, so a silent hop that starts answering is picked up by the periodic retrace.)
+    void NoteReply(Lane lane, PathHop hop, int index, EchoResult result)
+    {
+        if (result.TargetReached) lane.NeedsRetrace = true;
+        else if (Equals(result.From, hop.Address)) lane.AddressStreaks[index] = 0;
+        else if (++lane.AddressStreaks[index] >= _t.HopAddressChangeReplies) lane.NeedsRetrace = true;
+    }
 
     /// One internet check per connected lane.
     public async Task EndpointRoundAsync(CancellationToken ct)
