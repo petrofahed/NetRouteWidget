@@ -79,9 +79,11 @@ For each connected lane, send ICMP echo requests from the adapter's IPv4 address
 |---|---|---|
 | **Complete** | the target answered at some TTL ≤ 12 | the devices before the target, then the Internet card |
 | **Incomplete** | no TTL ≤ 12 got an answer from the target (the path is longer than 12 hops, or ICMP to the target is filtered) | the devices found (trailing hidden hops trimmed), then the "Trace incomplete" ghost, then the Internet card. **Never a fault by itself**: the lane's health is decided by the internet check |
-| **Unavailable** | TTL 1 could not be measured, or at least half the TTLs were Unavailable | "Measurement unavailable" for the lane |
+| **Unavailable** | TTL 1 could not be measured, or at least half the TTLs were Unavailable | no devices are listed and the lane's health comes from the internet check alone (a failing check is "not enough data", an answering one "reaches the internet. The devices on the way could not be measured."); "Measurement unavailable" only when the internet check itself is Unavailable |
 
-A trace repeats every 30 s, and sooner (at most once per 10 s) when a probe's reply comes from a different address than the trace recorded, or when the target answers at a lower TTL than expected. A hidden hop that starts answering is picked up by the periodic 30 s trace (hidden hops are not probed between traces, so silent devices cost nothing). A change of the detected adapter or its address re-traces at once and clears that lane's samples.
+A trace repeats every 30 s, and sooner (at most once per 10 s) when a probe's reply comes from a different address than the trace recorded, or when the target answers at a lower TTL than expected. A hidden hop that starts answering is picked up by the periodic 30 s trace (hidden hops are not probed between traces, so silent devices cost nothing). A different address must repeat on 3 consecutive probes of the same device before it triggers a re-trace (a load-balanced device that answers from varying addresses must not keep the lane measuring); the target answering at a device's TTL triggers one at once. A change of the detected adapter or its address re-traces at once and clears that lane's samples.
+
+**A degraded re-trace is not adopted on first sight.** If a re-trace finds fewer visible devices than the current one, or comes back Incomplete or Unavailable where the current one was Complete (typically because it ran during a drop and the devices past the break did not answer), the current trace and its samples are kept and the trace is retried after the 10 s gap; it is adopted only when the next trace is degraded too (a real path change is adopted about 10 s later). When a trace is adopted, each device keeps its samples if its position and address are unchanged; only changed or new devices start empty.
 
 ### Frequencies: probes versus the screen
 
@@ -135,7 +137,7 @@ Raw observations are not conclusions. A lane gets one of these statuses from the
 **Localisation (only in a Fault).** All evidence comes from the same trailing window as the failure:
 
 1. Cut the window into **2 s buckets**. A bucket is *failing* if the internet check lost in it, *good* if it replied. Buckets with only Unavailable checks are ignored.
-2. For each non-hidden device, count its valid probes in failing buckets (`nF`, `lostF`) and in good buckets (`nG`, `lostG`). Its loss during failures is `lostF / nF`. Its loss during good periods is `lostG / nG`, or 0 when `nG` < 5 (the trace itself counted as a good reply).
+2. For each non-hidden device, count its valid probes in failing buckets (`nF`, `lostF`) and in good buckets (`nG`, `lostG`). Its loss during failures is `lostF / nF`. Its loss during good periods is `lostG / nG`. A device can be Implicated only when `nG` ≥ **5**: without a real good-period baseline (for example when the window is opened during an outage) a device that ignores or rate-limits probes cannot be told from a broken one, so it is never implicated; it can still be Cleared.
 3. A device is **Cleared** when `nF` ≥ **5** and its loss during failures ≤ **10%**: it answered while the internet check was failing, so traffic reaches at least that far.
 4. A device is **Implicated** when `nF` ≥ **5**, its loss during failures ≥ **50%**, and it is at least **30 points** worse during failures than during good periods. A device that is silent during good periods too is just quiet; it is not implicated.
 5. Everything else is **Unknown** (too little evidence, or not correlated).
