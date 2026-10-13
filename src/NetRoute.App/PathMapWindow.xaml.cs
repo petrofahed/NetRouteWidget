@@ -14,6 +14,7 @@ public partial class PathMapWindow : Window
     readonly Func<string?, PathMapView> _present;
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     string? _selected;
+    const string PausedFooter = "Display paused. Checks continue in the background.";
     bool _paused;
     string _diagnosisKey = "";
 
@@ -69,7 +70,8 @@ public partial class PathMapWindow : Window
 
         Headline.Text = "🌐 " + view.Headline;
         Headline.SetResourceReference(TextBlock.ForegroundProperty, view.HeadlineWarning ? "Warning" : "TextPrimary");
-        Footer.Text = view.FooterText;
+        // A click while paused still redraws (the user asked), but the footer keeps saying the display is paused.
+        Footer.Text = _paused ? PausedFooter : view.FooterText;
         RenderDiagnosis(view.Diagnosis);
         Map.Render(view, _selected);
         RenderDetail(view.Detail);
@@ -163,7 +165,8 @@ public partial class PathMapWindow : Window
     {
         _paused = !_paused;
         Map.Paused = _paused;
-        PauseButton.Content = _paused ? "Resume" : "Pause";
-        if (!_paused) Refresh();
+        PauseButton.Content = _paused ? "Resume display" : "Pause display";
+        if (_paused) Footer.Text = PausedFooter;
+        else Refresh();
     }
 }

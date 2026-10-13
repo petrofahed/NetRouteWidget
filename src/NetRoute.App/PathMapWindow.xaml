@@ -13,7 +13,8 @@
         </StackPanel>
 
         <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
-            <Button x:Name="PauseButton" DockPanel.Dock="Right" Content="Pause" Padding="12,3" Click="OnPause" />
+            <Button x:Name="PauseButton" DockPanel.Dock="Right" Content="Pause display" Padding="12,3" Click="OnPause"
+                    ToolTip="Freezes this window and its animation. The checks keep running in the background while the window is open." />
             <TextBlock DockPanel.Dock="Right" x:Name="Footer" Margin="0,0,16,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" />
             <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap">
                 <Run Foreground="{DynamicResource DotGreen}" Text="●" /> Answering

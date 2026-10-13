@@ -32,7 +32,7 @@ From the review of draft 1:
 ## What the user sees
 
 - **Card:** the header text opens the window; so does the new footer icon. Both raise the same single window (a second click brings it forward).
-- **Window:** the card's own status line as the headline (`StatusPresenter`), one diagnosis line per connection, the map, a detail panel for the selected device, and a footer with a live indicator, a legend and a Pause button.
+- **Window:** the card's own status line as the headline (`StatusPresenter`), one diagnosis line per connection, the map, a detail panel for the selected device, and a footer with a live indicator, a legend and a Pause display button.
 - **Map:** **This PC** on the left; a LAN lane on top and a phone lane below, each a chain of devices; both end at one **Internet** card with a LAN row and a Phone row. Links are drawn as pipes with flowing dashes when healthy. A lane whose adapter is missing or has no IPv4 is drawn dim with "Not connected" and is not probed.
 - **Device and link states** (every device and link is in exactly one):
 
@@ -94,7 +94,7 @@ A trace repeats every 30 s, and sooner (at most once per 10 s) when a probe's re
 | Trace | every 30 s, and on change | see above |
 | Screen refresh | **at most every 500 ms** | a UI timer takes the monitor's latest immutable snapshot and re-renders. Probe results never trigger a redraw themselves |
 | Animations | continuous, independent of data | drawn from the render clock, not from probe results |
-| Pause | freezes the screen and animations | probing continues, so Resume shows current data |
+| Pause display | freezes the screen and animations; the button says "Pause display" / "Resume display" and the footer says "Display paused. Checks continue in the background." | probing continues, so Resume display shows current data |
 
 If no sample has arrived for 5 s, the footer says "No recent checks" instead of "Live".
 
