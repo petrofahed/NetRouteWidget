@@ -99,4 +99,42 @@ public class PathSampleStatsTests
         Assert.Single(samples.Snapshot(Start.AddSeconds(40)));
         Assert.Empty(samples.Snapshot(Start.AddSeconds(60)));
     }
+
+    [Fact]
+    public void Samples_added_out_of_order_are_stored_sorted_by_time()
+    {
+        // a slow failed check is stamped with its send time but completes after a later fast reply
+        var samples = new PathSamples(TimeSpan.FromSeconds(30));
+        samples.Add(new Sample(Start.AddSeconds(2), ProbeOutcome.Reply, 5));
+        samples.Add(new Sample(Start.AddSeconds(1), ProbeOutcome.NoReply));
+        samples.Add(new Sample(Start.AddSeconds(3), ProbeOutcome.Reply, 5));
+
+        Assert.Equal([Start.AddSeconds(1), Start.AddSeconds(2), Start.AddSeconds(3)], samples.Snapshot(Start.AddSeconds(4)).Select(x => x.At));
+    }
+
+    [Fact]
+    public void Samples_with_the_same_time_keep_their_arrival_order()
+    {
+        var samples = new PathSamples(TimeSpan.FromSeconds(30));
+        samples.Add(new Sample(Start, ProbeOutcome.Reply, 1));
+        samples.Add(new Sample(Start, ProbeOutcome.Reply, 2));
+        samples.Add(new Sample(Start, ProbeOutcome.Reply, 3));
+
+        Assert.Equal([1, 2, 3], samples.Snapshot(Start).Select(x => x.RttMs!.Value));
+    }
+
+    [Fact]
+    public void Consecutive_runs_read_the_newest_samples_by_time_not_by_arrival()
+    {
+        // the newest probe (second 3) replied; the older lost one (second 2) only arrived afterwards
+        var samples = new PathSamples(TimeSpan.FromSeconds(30));
+        samples.Add(new Sample(Start.AddSeconds(1), ProbeOutcome.NoReply));
+        samples.Add(new Sample(Start.AddSeconds(3), ProbeOutcome.Reply, 5));
+        samples.Add(new Sample(Start.AddSeconds(2), ProbeOutcome.NoReply));
+
+        var s = SampleStats.Of(samples.Snapshot(Start.AddSeconds(4)));
+
+        Assert.Equal(1, s.ConsecutiveReplies);
+        Assert.Equal(0, s.ConsecutiveLost);
+    }
 }
