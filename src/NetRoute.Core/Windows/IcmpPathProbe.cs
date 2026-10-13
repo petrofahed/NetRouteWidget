@@ -71,7 +71,13 @@ public sealed class IcmpPathProbe : IPathProbe
     internal static EchoResult Interpret(uint replies, uint status, uint address, uint roundTripMs, int lastError, IPAddress target)
     {
         if (replies == 0)
-            return new EchoResult(lastError == (int)IcmpNative.IP_REQ_TIMED_OUT ? ProbeOutcome.NoReply : ProbeOutcome.Unavailable);
+            // No reply structure came back, but GetLastError may still carry the IP status: a timeout or "unreachable" is the
+            // network's answer, anything else (a Win32 error) says nothing about it.
+            return new EchoResult(lastError is (int)IcmpNative.IP_REQ_TIMED_OUT
+                or (int)IcmpNative.IP_DEST_NET_UNREACHABLE or (int)IcmpNative.IP_DEST_HOST_UNREACHABLE
+                or (int)IcmpNative.IP_DEST_PROT_UNREACHABLE or (int)IcmpNative.IP_DEST_PORT_UNREACHABLE
+                or (int)IcmpNative.IP_BAD_DESTINATION
+                ? ProbeOutcome.NoReply : ProbeOutcome.Unavailable);
 
         var from = new IPAddress(BitConverter.GetBytes(address));
         var rtt = (int)Math.Max(1, roundTripMs);

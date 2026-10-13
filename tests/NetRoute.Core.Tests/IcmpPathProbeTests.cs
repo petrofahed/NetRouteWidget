@@ -29,6 +29,17 @@ public class IcmpPathProbeTests
     }
 
     [Theory]
+    [InlineData(11002)] // destination net unreachable
+    [InlineData(11003)] // destination host unreachable
+    [InlineData(11004)] // destination protocol unreachable
+    [InlineData(11005)] // destination port unreachable
+    [InlineData(11018)] // bad destination
+    public void A_zero_reply_return_with_an_ip_status_is_a_lost_check(int lastError)
+    {
+        Assert.Equal(ProbeOutcome.NoReply, IcmpPathProbe.Interpret(0, 0, 0, 0, lastError, Target).Outcome);
+    }
+
+    [Theory]
     [InlineData(87)]    // ERROR_INVALID_PARAMETER: for example the source address no longer exists
     [InlineData(1231)]  // ERROR_NETWORK_UNREACHABLE
     [InlineData(5)]     // access denied
