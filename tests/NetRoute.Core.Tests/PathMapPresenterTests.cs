@@ -242,6 +242,78 @@ public class PathMapPresenterTests
         Assert.Equal(HopDisplay.Broken, view.Lan.Nodes[3].State);
     }
 
+    static readonly PathTrace Six = Trace("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6");
+
+    [Fact]
+    public void A_collapsed_box_with_answering_and_unavailable_members_is_not_presented_as_unavailable()
+    {
+        var view = Present(Lan(Six, Every(2, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply),
+            Every(1, AllReply), Every(1, AllUnavailable), Every(1, AllReply)), selected: "lan:4-6");
+
+        var box = view.Lan.Nodes[3];
+        Assert.Equal("lan:4-6", box.Id);
+        Assert.Equal(HopDisplay.Answering, box.State);
+        Assert.Equal("2 of 3 answering", box.StateLabel);
+        Assert.Equal("", box.Metric);
+        Assert.Equal(LinkState.Healthy, view.Lan.Links[3]);
+
+        // the detail panel still tells each member's own story
+        Assert.NotNull(view.Detail);
+        Assert.Contains("hop 4 10.0.0.4 (answering)", view.Detail.Note);
+        Assert.Contains("hop 5 10.0.0.5 (measurement unavailable)", view.Detail.Note);
+        Assert.Contains("hop 6 10.0.0.6 (answering)", view.Detail.Note);
+    }
+
+    [Fact]
+    public void A_collapsed_box_with_a_silent_member_after_a_located_break_does_not_grey_its_answering_members()
+    {
+        // The break is hop 3 (drawn on its own); hop 4 is silent after it. Hops 5 and 6 lost their probes while the internet check
+        // failed but replied again for the last 10 s, so they are implicated yet read as answering: they are not cleared, so the
+        // break stays located at hop 3 and the box holds one Silent and two answering members.
+        var view = Present(Lan(Six, Every(2, LostDuring(10)),
+            Every(1, AllReply), Every(1, AllReply), Every(1, LostDuring(10)),
+            Every(1, LostDuring(10)), Every(1, LostDuring(10, 20)), Every(1, LostDuring(10, 20))), selected: "lan:4-6");
+
+        Assert.Equal(HopDisplay.Broken, view.Lan.Nodes[2].State);
+        var box = view.Lan.Nodes[3];
+        Assert.Equal(NodeKind.Collapsed, box.Kind);
+        Assert.Equal(HopDisplay.Answering, box.State);
+        Assert.Equal("2 of 3 answering", box.StateLabel);
+        Assert.Equal(LinkState.Healthy, view.Lan.Links[3]);
+        Assert.NotNull(view.Detail);
+        Assert.Contains("hop 4 10.0.0.4 (after the break)", view.Detail.Note);
+        Assert.Contains("hop 5 10.0.0.5 (answering)", view.Detail.Note);
+    }
+
+    [Fact]
+    public void A_collapsed_box_whose_members_are_all_unavailable_stays_unavailable()
+    {
+        var view = Present(Lan(Six, Every(2, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply),
+            Every(1, AllUnavailable), Every(1, AllUnavailable), Every(1, AllUnavailable)));
+
+        var box = view.Lan.Nodes[3];
+        Assert.Equal(HopDisplay.Unavailable, box.State);
+        Assert.Equal("Measurement unavailable", box.StateLabel);
+        Assert.Equal(LinkState.Unavailable, view.Lan.Links[3]);
+    }
+
+    [Fact]
+    public void A_collapsed_box_ignores_hidden_members_when_counting_the_answering_ones()
+    {
+        var trace = Trace("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", null, "10.0.0.6");
+        var onlyHiddenBesidesAnswering = Present(Lan(trace, Every(2, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), [], Every(1, AllReply)));
+        Assert.Equal(HopDisplay.Answering, onlyHiddenBesidesAnswering.Lan.Nodes[3].State);
+        Assert.Equal("Answering", onlyHiddenBesidesAnswering.Lan.Nodes[3].StateLabel);
+
+        var withQuiet = Present(Lan(trace, Every(2, AllReply),
+            Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), Every(1, AllReply), [], Every(1, AllLost)));
+        Assert.Equal(HopDisplay.Answering, withQuiet.Lan.Nodes[3].State);
+        Assert.Equal("1 of 2 answering", withQuiet.Lan.Nodes[3].StateLabel);
+    }
+
     [Fact]
     public void Consecutive_hidden_hops_share_one_box()
     {

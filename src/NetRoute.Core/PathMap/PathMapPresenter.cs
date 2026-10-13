@@ -122,8 +122,8 @@ public static class PathMapPresenter
                 return new NodeView(id, g.Kind, g.Hops.Count == 1 ? $"Hop {first}" : $"Hops {first}–{last}",
                     "no answer", "", HopDisplay.Hidden, Label(HopDisplay.Hidden));
             case NodeKind.Collapsed:
-                var worst = Worst(hops.Select(h => h.Display));
-                return new NodeView(id, g.Kind, $"+{hops.Count} more", $"hops {first}–{last}", "", worst, Label(worst));
+                var (state, label) = CollapsedState(hops);
+                return new NodeView(id, g.Kind, $"+{hops.Count} more", $"hops {first}–{last}", "", state, label);
             default:
                 var h = hops[0];
                 return new NodeView(id, g.Kind, first == 1 ? firstHopTitle : $"Hop {first}", h.Hop.Address!.ToString(),
@@ -134,6 +134,21 @@ public static class PathMapPresenter
     // Severity order for a box that stands for several hops; Hidden and Answering are the least interesting.
     static readonly HopDisplay[] Severity =
         [HopDisplay.Broken, HopDisplay.Suspect, HopDisplay.Silent, HopDisplay.Unavailable, HopDisplay.Measuring, HopDisplay.Quiet, HopDisplay.Answering, HopDisplay.Hidden];
+
+    /// How a "+N more" box is drawn. A fault among its members (Broken, Suspect) is the box's state. Otherwise any answering member
+    /// keeps the box from being drawn as unavailable, silent or quiet, which would present responding devices that way: the box
+    /// is Answering and says how many of its devices answer. With no answering member it takes the worst member state.
+    /// Hidden members carry no health and are not counted.
+    static (HopDisplay State, string Label) CollapsedState(IReadOnlyList<HopDiagnosis> hops)
+    {
+        var worst = Worst(hops.Select(h => h.Display));
+        if (worst is HopDisplay.Broken or HopDisplay.Suspect) return (worst, Label(worst));
+
+        var shown = hops.Where(h => h.Display != HopDisplay.Hidden).ToList();
+        var answering = shown.Count(h => h.Display == HopDisplay.Answering);
+        if (answering == 0) return (worst, Label(worst));
+        return (HopDisplay.Answering, answering == shown.Count ? Label(HopDisplay.Answering) : $"{answering} of {shown.Count} answering");
+    }
 
     static HopDisplay Worst(IEnumerable<HopDisplay> displays)
     {
