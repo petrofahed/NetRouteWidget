@@ -45,11 +45,20 @@ $downloaded = 0L
 for ($i = 1; $i -le $Count; $i++) {
     # Rate-limited on purpose: the trace delivers events about a second late, and a process that has already exited by then
     # cannot be named (its bytes land in "Other"). A download that lasts several seconds avoids a false FAIL on a fast line.
-    $bytes = & curl.exe -s -L -o NUL -w '%{size_download}' --max-time 120 --limit-rate $LimitRate $Url
-    $downloaded += [long]$bytes
+    # A lossy line can fail a connection outright, so each request gets up to three attempts.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $bytes = & curl.exe -sS -L -o NUL -w '%{size_download}' --max-time 120 --limit-rate $LimitRate $Url
+        $exit = $LASTEXITCODE
+        if ([long]$bytes -gt 0) { $downloaded += [long]$bytes; break }
+        Write-Host ("Attempt {0}: curl downloaded nothing (exit code {1}). The line may be dropping connections." -f $attempt, $exit) -ForegroundColor Yellow
+    }
 }
 Write-Host ("Downloaded {0:N0} bytes in {1} request(s) from {2}" -f $downloaded, $Count, $Url)
 
+if ($downloaded -le 0) {
+    Write-Host 'INCONCLUSIVE: nothing could be downloaded, so there is nothing to compare. Check the connection (the path map shows where it breaks) and run the script again.' -ForegroundColor Yellow
+    exit 2
+}
 Write-Host "Waiting for the widget to save (up to $WaitSeconds s)..."
 Start-Sleep -Seconds $WaitSeconds
 $after = Get-Recorded
