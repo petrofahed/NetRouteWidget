@@ -377,7 +377,7 @@ public static class PathMapPresenter
             ? [("Direct ping, lost", $"{direct.LossPercent.ToString("0", Inv)}%")]
             : [];
 
-    static IReadOnlyList<(string, string)> StatsOf(SampleStats s, PathThresholds t) =>
+    internal static IReadOnlyList<(string, string)> StatsOf(SampleStats s, PathThresholds t) =>
     [
         ("Latency, average", s.AvgMs is { } a ? $"{a} ms" : "—"),
         ("Best / worst", s.BestMs is { } b && s.WorstMs is { } w ? $"{b} / {w} ms" : "—"),
