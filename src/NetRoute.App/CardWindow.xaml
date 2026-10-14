@@ -91,6 +91,7 @@
                     <Button.ContextMenu>
                         <ContextMenu x:Name="OptionsMenu">
                             <MenuItem x:Name="StartWithWindowsItem" Header="Start with Windows" IsCheckable="True" Click="OnStartWithWindows" />
+                            <MenuItem x:Name="AutoHealItem" Header="Switch automatically when a connection has no internet" IsCheckable="True" Click="OnAutoHeal" />
                             <MenuItem Header="Choose adapters…" Click="OnChooseAdapters" />
                             <MenuItem Header="Open network settings" Click="OnOpenNetworkSettings" />
                             <Separator />
@@ -98,6 +99,8 @@
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>
+                <TextBlock x:Name="VersionText" DockPanel.Dock="Right" Style="{StaticResource Secondary}" FontSize="9.5" Opacity="0.45"
+                           Margin="8,1,2,0" />
                 <TextBlock x:Name="Header" FontSize="13" FontWeight="SemiBold" Style="{StaticResource Primary}" TextTrimming="CharacterEllipsis"
                            Cursor="Hand" ToolTip="Open the network path map: see where the connection breaks">
                     <TextBlock.TextDecorations>

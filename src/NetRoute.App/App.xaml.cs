@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Windows;
 using System.Windows.Threading;
@@ -85,6 +86,7 @@ public partial class App : Application
             _tray.ToggleCardRequested += ToggleCard;
             _tray.ShowCardRequested += ShowCard;
             _tray.StartWithWindowsToggled += ToggleStartWithWindows;
+            _tray.AutoHealToggled += ToggleAutoHeal;
             _tray.QuitRequested += Quit;
 
             _card = new CardWindow();
@@ -92,6 +94,7 @@ public partial class App : Application
             _card.HideRequested += HideCard;
             _card.Moved += (left, top) => controller.UpdateSettings(s => s with { CardLeft = left, CardTop = top });
             _card.StartWithWindowsToggled += ToggleStartWithWindows;
+            _card.AutoHealToggled += ToggleAutoHeal;
             _card.OpenNetworkSettingsRequested += OpenNetworkSettings;
             _card.ChooseAdaptersRequested += ChooseAdapters;
             _card.RestartAsAdminRequested += RestartAsAdmin;
@@ -203,8 +206,9 @@ public partial class App : Application
     void Render(NetworkStatus status)
     {
         var view = StatusPresenter.Present(status);
-        _tray?.Update(view, status.Mode, status.CanModify, _startupEnabled);
-        _card?.Render(view, status.Mode, status.CanModify, _startupEnabled);
+        var autoHeal = _controller?.Settings.AutoHeal ?? true;
+        _tray?.Update(view, status.Mode, status.CanModify, _startupEnabled, autoHeal);
+        _card?.Render(view, status.Mode, status.CanModify, _startupEnabled, autoHeal);
         if (_smart is { } smart) RenderSmartCard(smart.Status); // the Smart-off line names the mode, which just changed
     }
 
@@ -237,6 +241,14 @@ public partial class App : Application
     }
 
     void UpdatePollInterval() => _poll.Interval = _card?.IsVisible == true ? VisiblePoll : HiddenPoll;
+
+    void ToggleAutoHeal()
+    {
+        var on = !_controller!.Settings.AutoHeal;
+        _controller.UpdateSettings(s => s with { AutoHeal = on });
+        _log!.Info($"Auto-heal: {(on ? "on" : "off")}");
+        _ = _controller.RefreshAsync(measureLatency: false); // an active heal ends now and the menu shows the new state
+    }
 
     void ToggleStartWithWindows()
     {
@@ -337,7 +349,7 @@ public partial class App : Application
             if (usage.Unreadable) log.Error("usage.json could not be read; usage is kept in memory only this session and NOT saved");
             var smart = new SmartRoutingController(
                 _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next, usage.Usage, log.Info,
-                counters: new WindowsAdapterCounters());
+                counters: new WindowsAdapterCounters(), traffic: new WindowsTrafficTracker());
             smart.StatusChanged += s => Dispatcher.BeginInvoke(new Action(() => RenderSmart(s)));
             smart.Notify += m => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(m)));
             smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() => ShowWaitingPopup(names)));
@@ -387,13 +399,13 @@ public partial class App : Application
         if (_smart is { } smart) _ = smart.ApplyAsync(controller.Status, controller.Settings);
     }
 
-    /// The card's live speed next to each latency: the total through that exit right now. Blank whenever Smart routing
-    /// is not running, so a stale figure never lingers (it measures what passes through Smart routing).
+    /// The card's live speed next to each latency: the total through that exit right now. Blank whenever neither Smart
+    /// routing nor Windows tracing is counting, so a stale figure never lingers.
     void RenderLiveSpeeds(SmartRoutingController smart)
     {
         if (_card is not { } card) return;
         RenderTotals(smart);
-        if (smart.Status.State is not (SmartState.Running or SmartState.Starting))
+        if (!LiveSpeedDisplay.IsShown(smart.Status.State, smart.IsMeasuring))
         {
             card.RenderSpeeds("", "");
             return;
@@ -417,7 +429,7 @@ public partial class App : Application
     void RenderSmart(SmartRoutingStatus status)
     {
         RenderSmartCard(status);
-        if (status.State is not (SmartState.Running or SmartState.Starting)) _card?.RenderSpeeds("", "");
+        if (!LiveSpeedDisplay.IsShown(status.State, _smart?.IsMeasuring == true)) _card?.RenderSpeeds("", "");
         RenderSmartWindow();
         if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone
             || status.State is SmartState.Off or SmartState.Unavailable or SmartState.Faulted)) // Starting is a transient restart: keep the popup
@@ -481,7 +493,8 @@ public partial class App : Application
                 var canAssign = settings.Enabled && (status.State is SmartState.Running or SmartState.Starting);
                 var report = UsageReport.Build(
                     usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter, status.Profile);
-                window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text, recording: status.State == SmartState.Running);
+                window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text,
+                    recording: status.State == SmartState.Running, windowsTracking: smart.IsMeasuring);
             }
             while (_renderAgain);
         }
@@ -509,13 +522,60 @@ public partial class App : Application
 
         var monitor = new PathMonitor(new IcmpPathProbe(), TcpEndpointProbe.Default(), TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
         var cts = new CancellationTokenSource();
+        var localMonitor = new LocalNetworkMonitor(new IcmpPathProbe(), HostResolver.ResolveIPv4Async, TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
+        var netInfo = new CachingNetworkInfo(new WindowsNetworkInfo(), TimeProvider.System); // the tab asks several times a second; each real read lists every adapter
+        var scanner = new NetworkScanner(new IcmpPathProbe(), new NeighborTable(), HostResolver.ReverseAsync);
+        string? nicAdapter = null;
+        NicStats? nicBaseline = null;
+        var localStarted = false;
+        var token = cts.Token; // read before queuing: the Closed handler may dispose cts before the pool runs a lambda
+
+        (AdapterInfo? Lan, IPAddress? Source, int? Prefix) CurrentLan()
+        {
+            var lan = controller.Status.Adapters.Lan;
+            var source = lan?.IPv4 is { } text && IPAddress.TryParse(text, out var ip) ? ip : null;
+            return (lan, source, lan is not null && source is not null ? netInfo.PrefixLengthV4(lan.Name, source) : null);
+        }
+
+        var localServices = new LocalNetworkTabServices(
+            Present: selectedKey =>
+            {
+                var (lan, _, prefix) = CurrentLan();
+                localMonitor.SetNetwork(lan, lan is null ? null : netInfo.GatewayV4(lan.Name), controller.Settings.LocalDevices);
+                var nic = lan is null ? null : netInfo.ReadNic(lan.Name);
+                if (lan?.Name != nicAdapter)
+                {
+                    nicAdapter = lan?.Name; // a different card starts its error count again
+                    nicBaseline = nic;
+                }
+                var internet = LocalNetworkPresenter.InternetOf(
+                    PathMapPresenter.Present(controller.Status, monitor.Snapshot(), null, PathThresholds.Default).Lan.Internet.State);
+                return LocalNetworkPresenter.Present(localMonitor.Snapshot(), nic, nicBaseline, internet, selectedKey, PathThresholds.Default, prefix);
+            },
+            GetDevices: () => controller.Settings.LocalDevices,
+            SaveDevices: devices => controller.UpdateSettings(s => s with { LocalDevices = devices }),
+            Scan: (progress, ct) =>
+            {
+                var (_, source, prefix) = CurrentLan();
+                return source is null || prefix is null
+                    ? Task.FromResult<IReadOnlyList<ScanResult>>([])
+                    : scanner.ScanAsync(source, prefix.Value, progress, ct);
+            },
+            Start: () =>
+            {
+                if (localStarted) return;
+                localStarted = true;
+                var run = Task.Run(() => localMonitor.RunAsync(token));
+                _ = run.ContinueWith(t => _log?.Error("Local network monitor stopped unexpectedly", t.Exception?.GetBaseException()),
+                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            });
         var window = _pathWindow = new PathMapWindow(selected =>
         {
             // Keep the monitor on the adapters the card shows; a no-op when nothing changed.
             var adapters = controller.Status.Adapters;
             monitor.SetAdapters(adapters.Lan, adapters.Phone);
             return PathMapPresenter.Present(controller.Status, monitor.Snapshot(), selected, PathThresholds.Default);
-        });
+        }, localServices);
         window.Closed += (_, _) =>
         {
             cts.Cancel();
@@ -524,7 +584,6 @@ public partial class App : Application
         };
         var initial = controller.Status.Adapters;
         monitor.SetAdapters(initial.Lan, initial.Phone);
-        var token = cts.Token; // read before queuing: the Closed handler may dispose cts before the pool runs the lambda
         var run = Task.Run(() => monitor.RunAsync(token)); // off the UI thread: its loops, probe continuations, locks and the log callback must not run there
         // Last resort: the monitor swallows cancellation and logs its own errors, but an unobserved fault here would vanish silently.
         _ = run.ContinueWith(t => _log?.Error("Path map monitor stopped unexpectedly", t.Exception?.GetBaseException()),

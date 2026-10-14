@@ -24,9 +24,9 @@ public class SmartRoutingControllerTests
     ];
 
     SmartRoutingController Create(Func<int>? freePort = null, IAdapterCounters? counters = null, UsageSnapshot? restored = null,
-                                  IReadOnlyList<RuleItem>? catalog = null)
+                                  IReadOnlyList<RuleItem>? catalog = null, ITrafficSource? traffic = null)
     {
-        var c = new SmartRoutingController(catalog ?? Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters);
+        var c = new SmartRoutingController(catalog ?? Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters, traffic);
         c.WaitingDetected += _popups.Add;
         c.Notify += _notes.Add;
         return c;
@@ -1367,5 +1367,182 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(mode), edited);
 
         Assert.Equal(starts, _host.Starts.Count);
+    }
+
+    static MeasuredTraffic Measured(string? process, RouteExit exit, long up, long down) => new(process, exit, new Traffic(up, down));
+
+    [Fact]
+    public async Task With_smart_off_the_measured_traffic_is_recorded_and_the_card_totals_move()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 10, 90));
+
+        await c.PollStatsAsync();
+
+        var day = (await c.GetUsageAsync()).Days.Values.Single();
+        Assert.Equal(100, day.Rows["app:chrome.exe"].Phone.Total);
+        Assert.Equal(new ExitTotals(100, 0), c.TodayTotals);
+        Assert.True(c.IsMeasuring);
+    }
+
+    [Fact]
+    public async Task The_traffic_source_follows_the_adapters_on_every_apply_so_a_replugged_phone_is_followed()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+
+        await c.ApplyAsync(Net(phoneIndex: 31), On(false));
+        Assert.Equal(31, traffic.Phone!.Index);
+
+        await c.ApplyAsync(Net(phoneIndex: 36), On(false));
+        Assert.Equal(36, traffic.Phone!.Index);
+        Assert.NotNull(traffic.Lan);
+    }
+
+    [Fact]
+    public async Task While_sing_box_runs_the_measured_traffic_is_discarded_not_counted_twice()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On());
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 500));
+
+        await c.PollStatsAsync();
+
+        Assert.Empty((await c.GetUsageAsync()).Days);
+        Assert.Empty(traffic.Pending); // drained and dropped, so it does not pile up for later
+        Assert.False(c.IsMeasuring);
+    }
+
+    [Fact]
+    public async Task Switching_smart_on_and_off_counts_only_the_traffic_measured_while_it_was_off()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On());
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 500));
+        await c.PollStatsAsync(); // discarded: sing-box counted this one
+
+        await c.ApplyAsync(Net(), On(false));
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 50));
+        await c.PollStatsAsync();
+
+        Assert.Equal(50, (await c.GetUsageAsync()).Days.Values.Single().Rows["app:chrome.exe"].Phone.Total);
+        Assert.True(c.IsMeasuring);
+
+        await c.ApplyAsync(Net(), On()); // Smart back on: measuring ends
+        Assert.False(c.IsMeasuring);
+    }
+
+    [Fact]
+    public async Task A_traffic_source_that_cannot_start_is_logged_once_and_never_blocks_anything()
+    {
+        var traffic = new FakeTrafficSource { StartError = "Access is denied" };
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+
+        await c.PollStatsAsync();
+        await c.PollStatsAsync();
+
+        Assert.Equal(1, _logs.Count(l => l.Contains("Access is denied")));
+        Assert.False(c.IsMeasuring);
+        Assert.Empty((await c.GetUsageAsync()).Days);
+
+        traffic.StartError = null; // e.g. the widget was restarted elevated: the next poll starts it
+        await c.PollStatsAsync();
+        Assert.True(c.IsMeasuring);
+    }
+
+    [Fact]
+    public async Task A_trace_that_stops_by_itself_marks_a_gap_for_the_day()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 10));
+        await c.PollStatsAsync();
+
+        traffic.IsRunning = false; // someone stopped the session
+        traffic.StartError = "session in use";
+        await c.PollStatsAsync();
+
+        Assert.Equal(1, (await c.GetUsageAsync()).Days.Values.Single().Gaps);
+        Assert.False(c.IsMeasuring);
+    }
+
+    [Fact]
+    public async Task Live_speed_works_while_measuring()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 6000));
+
+        await c.PollStatsAsync();
+
+        Assert.Equal(2000, c.LiveSpeed.PhoneBytesPerSecond);
+    }
+
+    [Fact]
+    public async Task Applying_again_while_smart_is_off_keeps_the_adapter_baseline_and_the_live_speed()
+    {
+        var counters = new FakeAdapterCounters { Bytes = 1000 };
+        var traffic = new FakeTrafficSource();
+        var c = Create(counters: counters, traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+        await c.PollStatsAsync(); // baseline 1000
+
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 6000));
+        await c.PollStatsAsync();
+        await c.ApplyAsync(Net(), On(false)); // the widget refreshes every 5-10 s: this must not reset anything
+        counters.Bytes = 1500;
+        await c.PollStatsAsync();
+
+        Assert.Equal(500, (await c.GetUsageAsync()).Days.Values.Single().PhoneAdapterBytes);
+        Assert.Equal(2000, c.LiveSpeed.PhoneBytesPerSecond);
+    }
+
+    [Fact]
+    public async Task Shutdown_disposes_the_traffic_source()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+
+        await c.ShutdownAsync();
+
+        Assert.True(traffic.Disposed);
+        Assert.False(c.IsMeasuring);
+    }
+
+    [Fact]
+    public async Task Sing_boxs_own_packets_seen_just_before_it_stops_are_not_booked_as_usage()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On()); // sing-box running
+        traffic.Pending.Add(Measured("sing-box.exe", RouteExit.Phone, 0, 700)); // its own packets, not yet discarded by a poll
+
+        await c.ApplyAsync(Net(), On(false)); // Smart off: sing-box stops
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 40));
+        await c.PollStatsAsync();
+
+        var rows = (await c.GetUsageAsync()).Days.Values.Single().Rows;
+        Assert.DoesNotContain("app:sing-box.exe", rows.Keys);
+        Assert.Equal(40, rows["app:chrome.exe"].Phone.Total);
+    }
+
+    [Fact]
+    public async Task Without_a_traffic_source_nothing_changes()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On(false));
+
+        await c.PollStatsAsync();
+
+        Assert.False(c.IsMeasuring);
+        Assert.Empty((await c.GetUsageAsync()).Days);
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using NetRoute.Core.PathMap;
 
 namespace NetRoute.Core;
 
@@ -12,7 +13,14 @@ public sealed record AppSettings
     public double? CardTop { get; init; }
     public bool CardVisible { get; init; } = true;
     public bool StartWithWindows { get; init; }
+
+    /// Moves the internet to the other connection while the preferred one has no internet. Off: the user's choice
+    /// always stands, so a flaky LAN can never push traffic onto the metered phone connection by itself.
+    public bool AutoHeal { get; init; } = true;
     public SmartRoutingSettings SmartRouting { get; init; } = new();
+
+    /// Devices on the local network the user tests in the path window's "Local network" tab.
+    public IReadOnlyList<LocalDevice> LocalDevices { get; init; } = Array.Empty<LocalDevice>();
 
     [JsonIgnore]
     public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac);
@@ -50,6 +58,7 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
                 ?? throw new JsonException("Settings file is null");
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
             if (settings.SmartRouting is null) settings = settings with { SmartRouting = new SmartRoutingSettings() };
+            settings = settings with { LocalDevices = LocalDeviceValidator.Sanitize(settings.LocalDevices) }; // bad entries are dropped, never a failed load
             if (!settings.SmartRouting.IsValid()) throw new JsonException("Invalid Smart routing settings");
             return new(settings, false);
         }

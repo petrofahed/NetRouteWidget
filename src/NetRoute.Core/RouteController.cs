@@ -16,14 +16,24 @@ public sealed class RouteController
     readonly RoutingEngine _engine;
     readonly Action<AppSettings> _persist;
     readonly Action<string> _log;
+    readonly TimeProvider _time;
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly Lock _settingsLock = new();
     AppSettings _settings;
     bool _hasRefreshed;
     bool _userChangePending;
 
-    /// Consecutive failed checks of the preferred adapter (while the backup answers) before healing.
+    /// The preferred adapter must fail this long without a single good check (while the backup answers) before
+    /// healing. Short blips on a flaky link never move traffic onto the metered phone connection.
+    public static readonly TimeSpan HealAfterFailingFor = TimeSpan.FromSeconds(60);
+
+    /// Consecutive failed checks of the preferred adapter that must also have happened, so a long gap between two
+    /// checks (a sleeping PC) is not read as a long outage.
     public const int HealAfterFailedChecks = 3;
+
+    /// A longer pause between two measured checks (the PC slept) restarts the failure window: misses before the pause
+    /// say nothing about the link after it.
+    public static readonly TimeSpan MaxGapBetweenChecks = TimeSpan.FromSeconds(30);
 
     /// Consecutive good checks of the preferred adapter before healing ends.
     public const int RecoverAfterGoodChecks = 3;
@@ -34,9 +44,17 @@ public sealed class RouteController
     /// Measured checks without healing, after a heal ended, that return the backoff to the base rule.
     public const int CalmChecksToResetBackoff = 60;
 
+    /// Consecutive missed latency checks before the card shows "no reply"; a single miss keeps the last latency.
+    public const int NoReplyAfterMissedChecks = 2;
+
+    int _phoneMisses;
+    int _lanMisses;
+
     // Heal state is read and written only while holding _gate.
     bool _healing;
     int _healCount;
+    DateTimeOffset? _failingSince;
+    DateTimeOffset? _lastCheckAt;
     int _recoverThreshold = RecoverAfterGoodChecks;
     int _checksSinceHealEnded;
     bool _hadHeal;
@@ -47,8 +65,9 @@ public sealed class RouteController
 
     public RouteController(
         IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
-        AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log)
+        AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _adapters = adapters;
         _routes = routes;
         _probe = probe;
@@ -101,6 +120,11 @@ public sealed class RouteController
                 : (detection.Phone is null ? null : before.PhoneLatencyMs, detection.Lan is null ? null : before.LanLatencyMs);
 
             var stickyHealStarted = UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
+
+            // Healing above used the raw results; the card only reports "no reply" once a miss repeats.
+            var (shownPhoneMs, shownLanMs) = measureLatency
+                ? (Smooth(ref _phoneMisses, phoneMs, before.PhoneLatencyMs), Smooth(ref _lanMisses, lanMs, before.LanLatencyMs))
+                : (phoneMs, lanMs);
             var effective = EffectiveMode(mode);
 
             string? error = null;
@@ -123,8 +147,8 @@ public sealed class RouteController
                 Adapters = detection,
                 ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
-                PhoneLatencyMs = phoneMs,
-                LanLatencyMs = lanMs,
+                PhoneLatencyMs = shownPhoneMs,
+                LanLatencyMs = shownLanMs,
                 Error = error,
             };
 
@@ -254,6 +278,7 @@ public sealed class RouteController
     {
         _healing = false;
         _healCount = 0;
+        _failingSince = null;
         _recoverThreshold = RecoverAfterGoodChecks;
         _checksSinceHealEnded = 0;
         _hadHeal = false;
@@ -270,27 +295,48 @@ public sealed class RouteController
             _ => ((AdapterInfo?)null, (AdapterInfo?)null, (int?)null, (int?)null),
         };
 
-        if (!canModify || preferred is null || backup is null)
+        if (!canModify || !Settings.AutoHeal || preferred is null || backup is null)
         {
-            if (_healing) _log("Auto-heal ended: preferred or backup adapter unavailable");
+            if (_healing)
+                _log(Settings.AutoHeal ? "Auto-heal ended: preferred or backup adapter unavailable" : "Auto-heal ended: switched off");
             ResetHealing();
             return false;
         }
         // No IPv4 yet (e.g. DHCP pending after a replug): nothing was measured, so it is no evidence either way.
         if (!measured || preferred.IPv4 is null) return false;
 
+        var checkedAt = _time.GetUtcNow();
+        var afterPause = _lastCheckAt is { } previous && checkedAt - previous > MaxGapBetweenChecks;
+        _lastCheckAt = checkedAt;
+
         if (!_healing)
         {
+            if (afterPause)
+            {
+                _healCount = 0;
+                _failingSince = null;
+            }
             if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
             {
                 _checksSinceHealEnded++;
                 if (_checksSinceHealEnded == CalmChecksToResetBackoff) _recoverThreshold = RecoverAfterGoodChecks;
             }
 
-            _healCount = preferredMs is null && backupMs is not null ? _healCount + 1 : 0;
-            if (_healCount < HealAfterFailedChecks) return false;
+            var now = _time.GetUtcNow();
+            if (preferredMs is null && backupMs is not null)
+            {
+                _healCount++;
+                _failingSince ??= now;
+            }
+            else
+            {
+                _healCount = 0;
+                _failingSince = null;
+            }
+            if (_healCount < HealAfterFailedChecks || now - _failingSince < HealAfterFailingFor) return false;
             _healing = true;
             _healCount = 0;
+            _failingSince = null;
             if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
             {
                 if (_recoverThreshold == MaxRecoverAfterGoodChecks)
@@ -332,6 +378,16 @@ public sealed class RouteController
         _hadHeal = true;
         _checksSinceHealEnded = 0;
         _healSticky = false;
+    }
+
+    static int? Smooth(ref int misses, int? measured, int? previous)
+    {
+        if (measured is not null)
+        {
+            misses = 0;
+            return measured;
+        }
+        return ++misses >= NoReplyAfterMissedChecks ? null : previous;
     }
 
     async Task<(int?, int?)> MeasureAsync(DetectionResult adapters, CancellationToken ct)

@@ -24,6 +24,7 @@ public class WindowsIntegrationTests
     {
         var expected = PowerShell(GetNetIpInterfaceScript)
             .Select(line => line.Split(','))
+            .Where(f => f[2].Length > 0) // an interface with no metric at all (Smart routing's own TUN) has nothing to compare
             .Select(f => (Index: int.Parse(f[0]), Family: f[1] == "IPv4" ? IpFamily.IPv4 : IpFamily.IPv6,
                           Metric: uint.Parse(f[2]), Automatic: f[3] == "1",
                           Fields: string.Join(",", f.Skip(2))))
@@ -76,11 +77,44 @@ public class WindowsIntegrationTests
     {
         var best = new WindowsRouteQuery().GetBestInterfaceIndex(RouteController.ProbeTargetV4);
 
-        var adapter = new WindowsAdapterSource().GetAdapters().Single(a => a.Index == best);
+        var adapters = new WindowsAdapterSource().GetAdapters();
+        var adapter = adapters.Single(a => a.Index == best);
+
+        if (adapter.Name == "NetRoute")
+        {
+            // While Smart routing runs its TUN carries the default route and has no gateway of its own: the internet
+            // adapters are the real ones beside it.
+            Assert.Contains(adapters, a => a.Name != "NetRoute" && a.IsUp && a.HasGateway && a.IPv4 is not null);
+            return;
+        }
 
         Assert.True(adapter.IsUp);
         Assert.True(adapter.HasGateway);
         Assert.NotNull(adapter.IPv4);
+    }
+
+    [Fact]
+    public void Network_info_reads_the_internet_adapter_speed_gateway_and_prefix()
+    {
+        // Smart routing's own TUN carries the default route while it runs and has no gateway: use a real adapter beside it.
+        var adapter = new WindowsAdapterSource().GetAdapters()
+            .First(a => a.Name != "NetRoute" && a.IsUp && a.HasGateway && a.IPv4 is not null);
+        var info = new WindowsNetworkInfo();
+
+        var nic = info.ReadNic(adapter.Name);
+
+        Assert.NotNull(nic);
+        Assert.Equal(adapter.Name, nic.Name);
+        Assert.NotNull(info.GatewayV4(adapter.Name));
+        Assert.InRange(info.PrefixLengthV4(adapter.Name, System.Net.IPAddress.Parse(adapter.IPv4!)) ?? 0, 1, 32);
+    }
+
+    [Fact]
+    public void Neighbour_table_reads_without_throwing_and_every_entry_has_a_mac()
+    {
+        var entries = new NeighborTable().Read();
+
+        Assert.All(entries, e => Assert.Matches("^[0-9A-F]{2}(-[0-9A-F]{2}){5}$", e.Mac));
     }
 
     static string[] PowerShell(string script)

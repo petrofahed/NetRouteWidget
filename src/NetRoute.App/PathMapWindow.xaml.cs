@@ -12,17 +12,21 @@ namespace NetRoute.App;
 public partial class PathMapWindow : Window
 {
     readonly Func<string?, PathMapView> _present;
+    readonly LocalNetworkTabServices _local;
+    bool _localStarted;
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     string? _selected;
     const string PausedFooter = "Display paused. Checks continue in the background.";
     bool _paused;
     string _diagnosisKey = "";
 
-    public PathMapWindow(Func<string?, PathMapView> present)
+    public PathMapWindow(Func<string?, PathMapView> present, LocalNetworkTabServices local)
     {
         InitializeComponent();
         Theme.Track(this);
         _present = present;
+        _local = local;
+        LocalTab.Attach(local);
         Map.NodeClicked += id =>
         {
             _selected = id;
@@ -37,6 +41,7 @@ public partial class PathMapWindow : Window
                 try { _present(_selected); }
                 catch (Exception) { }
             }
+            if (LocalTabItem.IsSelected) LocalTab.Refresh();
         };
         Loaded += (_, _) =>
         {
@@ -44,6 +49,17 @@ public partial class PathMapWindow : Window
             _timer.Start();
         };
         Closed += (_, _) => _timer.Stop();
+    }
+
+    void OnTabChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.OriginalSource != Tabs || !LocalTabItem.IsSelected) return; // ignore selection events bubbling up from inside a tab
+        if (!_localStarted)
+        {
+            _localStarted = true;
+            _local.Start(); // the checks start the first time the tab is shown and stop when the window closes
+        }
+        LocalTab.Refresh();
     }
 
     void Refresh()
@@ -121,46 +137,9 @@ public partial class PathMapWindow : Window
         DetailNote.Text = detail.Note;
     }
 
-    /// Latency over the window. A lost check is a red tick on the baseline; a check that could not be measured is a grey one.
-    void DrawSpark(IReadOnlyList<Sample> series)
-    {
-        Spark.Children.Clear();
-        if (series.Count == 0) return;
-        Brush Resource(string key) => (Brush)(TryFindResource(key) ?? Brushes.Gray);
-
-        var values = series.Where(s => s.Outcome == ProbeOutcome.Reply && s.RttMs is not null).Select(s => s.RttMs!.Value).ToList();
-        var max = Math.Max(1, values.Count == 0 ? 1 : values.Max()) * 1.15;
-        var step = series.Count > 1 ? (Spark.Width - 10) / (series.Count - 1) : 0;
-        Spark.Children.Add(new Line { X1 = 0, X2 = Spark.Width, Y1 = 44, Y2 = 44, Stroke = Resource("CardBorder"), StrokeThickness = 1 });
-
-        var points = new PointCollection();
-        void Flush()
-        {
-            if (points.Count > 1) Spark.Children.Add(new Polyline { Points = points, Stroke = Resource("Accent"), StrokeThickness = 1.8, StrokeLineJoin = PenLineJoin.Round });
-            else if (points.Count == 1) Spark.Children.Add(new Ellipse { Width = 3, Height = 3, Fill = Resource("Accent"), Margin = new Thickness(points[0].X - 1.5, points[0].Y - 1.5, 0, 0) });
-            points = new PointCollection();
-        }
-
-        for (var i = 0; i < series.Count; i++)
-        {
-            var x = 5 + i * step;
-            switch (series[i].Outcome)
-            {
-                case ProbeOutcome.Reply:
-                    points.Add(new Point(x, 44 - (series[i].RttMs ?? 0) / max * 38));
-                    break;
-                default:
-                    Flush();
-                    Spark.Children.Add(new Line
-                    {
-                        X1 = x, X2 = x, Y1 = 46, Y2 = 54, StrokeThickness = 2,
-                        Stroke = Resource(series[i].Outcome == ProbeOutcome.NoReply ? "DotRed" : "DotGray"),
-                    });
-                    break;
-            }
-        }
-        Flush();
-    }
+    /// Latency over the window (see SparkLine).
+    void DrawSpark(IReadOnlyList<Sample> series) =>
+        SparkLine.Draw(Spark, series, key => (Brush)(TryFindResource(key) ?? Brushes.Gray));
 
     void OnPause(object sender, RoutedEventArgs e)
     {

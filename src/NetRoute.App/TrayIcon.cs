@@ -16,6 +16,7 @@ sealed class TrayIcon : IDisposable
     readonly Forms.ToolStripMenuItem _auto = new("Windows default (restore)");
     readonly Forms.ToolStripMenuItem _show = new("Show card");
     readonly Forms.ToolStripMenuItem _startup = new("Start with Windows");
+    readonly Forms.ToolStripMenuItem _autoHeal = new("Switch automatically when a connection has no internet");
     readonly Forms.ToolStripMenuItem _quit = new("Quit");
 
     public TrayIcon()
@@ -25,12 +26,13 @@ sealed class TrayIcon : IDisposable
         _auto.Click += (_, _) => ModeRequested?.Invoke(RoutingMode.Auto);
         _show.Click += (_, _) => ShowCardRequested?.Invoke();
         _startup.Click += (_, _) => StartWithWindowsToggled?.Invoke();
+        _autoHeal.Click += (_, _) => AutoHealToggled?.Invoke();
         _quit.Click += (_, _) => QuitRequested?.Invoke();
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.AddRange(new Forms.ToolStripItem[]
         {
-            _phone, _lan, _auto, new Forms.ToolStripSeparator(), _show, _startup, new Forms.ToolStripSeparator(), _quit,
+            _phone, _lan, _auto, new Forms.ToolStripSeparator(), _show, _startup, _autoHeal, new Forms.ToolStripSeparator(), _quit,
         });
         _icon.ContextMenuStrip = menu;
         _icon.MouseClick += (_, e) =>
@@ -46,9 +48,10 @@ sealed class TrayIcon : IDisposable
     public event Action? ToggleCardRequested;
     public event Action? ShowCardRequested;
     public event Action? StartWithWindowsToggled;
+    public event Action? AutoHealToggled;
     public event Action? QuitRequested;
 
-    public void Update(CardView view, RoutingMode mode, bool canModify, bool startWithWindows)
+    public void Update(CardView view, RoutingMode mode, bool canModify, bool startWithWindows, bool autoHeal)
     {
         _icon.Icon = IconFor(view.TrayColor, view.TrayBadge);
         _icon.Text = view.Tooltip.Length > 127 ? view.Tooltip[..127] : view.Tooltip;
@@ -58,6 +61,8 @@ sealed class TrayIcon : IDisposable
         _phone.Enabled = _lan.Enabled = _auto.Enabled = canModify;
         _startup.Checked = startWithWindows;
         _startup.Enabled = canModify;
+        _autoHeal.Checked = autoHeal;
+        _autoHeal.Enabled = canModify;
     }
 
     public void Notify(string message) =>

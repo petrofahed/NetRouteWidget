@@ -6,51 +6,58 @@
         Title="NetRoute — Network path" Width="1020" Height="780" MinWidth="720" MinHeight="600"
         WindowStartupLocation="CenterScreen" FontFamily="Segoe UI" FontSize="13" ThemeMode="System"
         Background="{DynamicResource WindowBackground}" Foreground="{DynamicResource TextPrimary}">
-    <DockPanel Margin="16">
-        <StackPanel DockPanel.Dock="Top">
-            <TextBlock x:Name="Headline" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
-            <TextBlock x:Name="ReachabilityTitle" Margin="0,8,0,0" FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
-            <StackPanel x:Name="Diagnosis" Margin="0,2,0,0" />
-        </StackPanel>
-
-        <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
-            <Button x:Name="PauseButton" DockPanel.Dock="Right" Content="Pause display" Padding="12,3" Click="OnPause"
-                    ToolTip="Freezes this window and its animation. The checks keep running in the background while the window is open." />
-            <TextBlock DockPanel.Dock="Right" x:Name="Footer" Margin="0,0,16,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" />
-            <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap">
-                <Run Foreground="{DynamicResource DotGreen}" Text="●" /> Answering
-                <Run Foreground="{DynamicResource DotAmber}" Text="●" /> Losing packets
-                <Run Foreground="{DynamicResource DotRed}" Text="●" /> No reply
-                <Run Foreground="{DynamicResource DotGray}" Text="●" /> Ignores probes, hidden or unavailable
-                <Run Foreground="{DynamicResource DotMeasuring}" Text="●" /> Measuring
-            </TextBlock>
-        </DockPanel>
-
-        <Border DockPanel.Dock="Bottom" Margin="0,12,0,0" Padding="14,10" CornerRadius="8" BorderThickness="1"
-                Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
-            <StackPanel>
-                <TextBlock x:Name="DetailHint" Text="Click a device on the map to see its details." Foreground="{DynamicResource TextSecondary}" />
-                <StackPanel x:Name="DetailBody" Visibility="Collapsed">
-                    <DockPanel>
-                        <Border x:Name="DetailChipBox" DockPanel.Dock="Right" BorderThickness="1" CornerRadius="10" Padding="9,1" VerticalAlignment="Top">
-                            <TextBlock x:Name="DetailChip" FontSize="11.5" FontWeight="SemiBold" />
-                        </Border>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="DetailTitle" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock x:Name="DetailAddress" Margin="10,2,0,0" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="{DynamicResource TextSecondary}" />
-                        </StackPanel>
-                    </DockPanel>
-                    <WrapPanel x:Name="DetailStats" Margin="0,8,0,0" />
-                    <Canvas x:Name="Spark" Width="320" Height="56" HorizontalAlignment="Left" Margin="0,8,0,0" />
-                    <TextBlock x:Name="DetailNote" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+    <TabControl x:Name="Tabs" Margin="8" SelectionChanged="OnTabChanged">
+        <TabItem x:Name="InternetTab" Header="Internet path">
+            <DockPanel Margin="16">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock x:Name="Headline" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock x:Name="ReachabilityTitle" Margin="0,8,0,0" FontSize="12" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
+                    <StackPanel x:Name="Diagnosis" Margin="0,2,0,0" />
                 </StackPanel>
-            </StackPanel>
-        </Border>
 
-        <Border Margin="0,12,0,0" CornerRadius="8" BorderThickness="1" Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
-            <Viewbox Stretch="Uniform" Margin="6">
-                <local:PathMapCanvas x:Name="Map" />
-            </Viewbox>
-        </Border>
-    </DockPanel>
+                <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+                    <Button x:Name="PauseButton" DockPanel.Dock="Right" Content="Pause display" Padding="12,3" Click="OnPause"
+                            ToolTip="Freezes the Internet path tab and its animation. The checks keep running in the background while the window is open." />
+                    <TextBlock DockPanel.Dock="Right" x:Name="Footer" Margin="0,0,16,0" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" />
+                    <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap">
+                        <Run Foreground="{DynamicResource DotGreen}" Text="●" /> Answering
+                        <Run Foreground="{DynamicResource DotAmber}" Text="●" /> Losing packets
+                        <Run Foreground="{DynamicResource DotRed}" Text="●" /> No reply
+                        <Run Foreground="{DynamicResource DotGray}" Text="●" /> Ignores probes, hidden or unavailable
+                        <Run Foreground="{DynamicResource DotMeasuring}" Text="●" /> Measuring
+                    </TextBlock>
+                </DockPanel>
+
+                <Border DockPanel.Dock="Bottom" Margin="0,12,0,0" Padding="14,10" CornerRadius="8" BorderThickness="1"
+                        Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock x:Name="DetailHint" Text="Click a device on the map to see its details." Foreground="{DynamicResource TextSecondary}" />
+                        <StackPanel x:Name="DetailBody" Visibility="Collapsed">
+                            <DockPanel>
+                                <Border x:Name="DetailChipBox" DockPanel.Dock="Right" BorderThickness="1" CornerRadius="10" Padding="9,1" VerticalAlignment="Top">
+                                    <TextBlock x:Name="DetailChip" FontSize="11.5" FontWeight="SemiBold" />
+                                </Border>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="DetailTitle" FontSize="14" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="DetailAddress" Margin="10,2,0,0" FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="{DynamicResource TextSecondary}" />
+                                </StackPanel>
+                            </DockPanel>
+                            <WrapPanel x:Name="DetailStats" Margin="0,8,0,0" />
+                            <Canvas x:Name="Spark" Width="320" Height="56" HorizontalAlignment="Left" Margin="0,8,0,0" />
+                            <TextBlock x:Name="DetailNote" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Margin="0,12,0,0" CornerRadius="8" BorderThickness="1" Background="{DynamicResource CardBackground}" BorderBrush="{DynamicResource CardBorder}">
+                    <Viewbox Stretch="Uniform" Margin="6">
+                        <local:PathMapCanvas x:Name="Map" />
+                    </Viewbox>
+                </Border>
+            </DockPanel>
+        </TabItem>
+        <TabItem x:Name="LocalTabItem" Header="Local network">
+            <local:LocalNetworkTab x:Name="LocalTab" />
+        </TabItem>
+    </TabControl>
 </Window>

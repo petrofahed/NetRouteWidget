@@ -2,6 +2,17 @@ namespace NetRoute.Core.Tests;
 
 public class RouteControllerTests
 {
+    /// Checks needed to heal at the 5 s poll: the first failure starts the 60 s window, the 13th check closes it.
+    const int HealChecks = 13;
+
+    sealed class StepClock : TimeProvider
+    {
+        DateTimeOffset _now = new(2026, 10, 14, 9, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    readonly StepClock _clock = new();
     readonly FakeAdapterSource _adapters = new();
     readonly FakeInterfaceMetrics _metrics = new();
     readonly FakeRouteQuery _routes = new();
@@ -22,7 +33,7 @@ public class RouteControllerTests
     RouteController Create(AppSettings? settings = null, bool canModify = true)
     {
         var controller = new RouteController(_adapters, _metrics, _routes, _probe,
-            settings ?? new AppSettings(), canModify, _saved.Add, _ => { });
+            settings ?? new AppSettings(), canModify, _saved.Add, _ => { }, _clock);
         controller.AutoSwitched += _toasts.Add;
         return controller;
     }
@@ -232,22 +243,26 @@ public class RouteControllerTests
 
     async Task RefreshTimes(RouteController controller, int times)
     {
-        for (var i = 0; i < times; i++) await controller.RefreshAsync(measureLatency: true);
+        for (var i = 0; i < times; i++)
+        {
+            _clock.Advance(TimeSpan.FromSeconds(5)); // the visible poll interval
+            await controller.RefreshAsync(measureLatency: true);
+        }
     }
 
     [Fact]
-    public async Task Phone_without_internet_heals_to_lan_after_three_failed_checks()
+    public async Task Phone_without_internet_heals_to_lan_after_sixty_seconds_of_failed_checks()
     {
         var controller = Create();
         await controller.RefreshAsync(measureLatency: true);
         _probe.BySource["192.168.42.11"] = null;
 
-        await RefreshTimes(controller, 2);
+        await RefreshTimes(controller, HealChecks - 1);
         Assert.False(controller.Status.IsHealing);
         Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
 
         _routes.BestV4 = 10; // Windows follows the swapped metrics
-        await controller.RefreshAsync(measureLatency: true);
+        await RefreshTimes(controller, 1);
 
         Assert.True(controller.Status.IsHealing);
         Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(31, IpFamily.IPv4));
@@ -265,7 +280,7 @@ public class RouteControllerTests
         await controller.RefreshAsync(measureLatency: true);
         _probe.BySource["192.168.42.11"] = null;
         _routes.BestV4 = 10;
-        await RefreshTimes(controller, 3);
+        await RefreshTimes(controller, HealChecks);
         Assert.True(controller.Status.IsHealing);
 
         _probe.BySource["192.168.42.11"] = 38;
@@ -312,13 +327,114 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task One_missed_latency_check_keeps_the_last_latency_on_the_card()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Equal(12, controller.Status.LanLatencyMs);
+
+        _probe.BySource["192.168.86.42"] = null;
+        await RefreshTimes(controller, 1);
+        Assert.Equal(12, controller.Status.LanLatencyMs); // a blip is not "no reply"
+
+        await RefreshTimes(controller, 1);
+        Assert.Null(controller.Status.LanLatencyMs); // two misses in a row are
+
+        _probe.BySource["192.168.86.42"] = 15;
+        await RefreshTimes(controller, 1);
+        Assert.Equal(15, controller.Status.LanLatencyMs);
+    }
+
+    [Fact]
+    public async Task A_blip_shorter_than_the_window_never_heals()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+
+        for (var round = 0; round < 5; round++)
+        {
+            _probe.BySource["192.168.42.11"] = null;
+            await RefreshTimes(controller, HealChecks - 1); // 55 s of failures, just under the window
+            _probe.BySource["192.168.42.11"] = 38;
+            await RefreshTimes(controller, 1);
+        }
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
+    public async Task A_long_gap_between_two_failed_checks_is_not_enough_to_heal()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+
+        await controller.RefreshAsync(measureLatency: true);
+        _clock.Advance(TimeSpan.FromMinutes(10)); // e.g. the PC slept
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task A_long_gap_between_checks_restarts_the_failure_window_so_waking_from_sleep_never_heals()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, 2); // a 10 s blip...
+        _clock.Advance(TimeSpan.FromMinutes(10)); // ...then the PC sleeps
+
+        await RefreshTimes(controller, 1); // the first check after waking, still a miss
+        Assert.False(controller.Status.IsHealing);
+
+        await RefreshTimes(controller, HealChecks - 2); // the window runs from the wake-up
+        Assert.False(controller.Status.IsHealing);
+        await RefreshTimes(controller, 1);
+        Assert.True(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Auto_heal_off_never_heals()
+    {
+        var controller = Create(new AppSettings { AutoHeal = false });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+
+        await RefreshTimes(controller, HealChecks * 3);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Switching_auto_heal_off_during_a_heal_returns_to_the_saved_mode()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, HealChecks);
+        Assert.True(controller.Status.IsHealing);
+
+        controller.UpdateSettings(s => s with { AutoHeal = false });
+        await RefreshTimes(controller, 1);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+    }
+
+    [Fact]
     public async Task Lan_mode_heals_to_phone()
     {
         var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
         await controller.RefreshAsync(measureLatency: true);
         _probe.BySource["192.168.86.42"] = null;
 
-        await RefreshTimes(controller, 3);
+        await RefreshTimes(controller, HealChecks);
 
         Assert.True(controller.Status.IsHealing);
         Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
@@ -348,7 +464,7 @@ public class RouteControllerTests
         var controller = Create();
         await controller.RefreshAsync(measureLatency: true);
         _probe.BySource["192.168.42.11"] = null;
-        await RefreshTimes(controller, 3);
+        await RefreshTimes(controller, HealChecks);
         Assert.True(controller.Status.IsHealing);
 
         await controller.SetModeAsync(RoutingMode.Phone);
@@ -364,7 +480,7 @@ public class RouteControllerTests
         var controller = Create();
         await controller.RefreshAsync(measureLatency: true);
         _probe.BySource["192.168.42.11"] = null;
-        await RefreshTimes(controller, 3);
+        await RefreshTimes(controller, HealChecks);
         Assert.True(controller.Status.IsHealing);
 
         _adapters.Adapters.RemoveAll(a => a.Index == 10);
@@ -392,7 +508,7 @@ public class RouteControllerTests
     async Task HealPhone(RouteController controller)
     {
         _probe.BySource["192.168.42.11"] = null;
-        await RefreshTimes(controller, RouteController.HealAfterFailedChecks);
+        await RefreshTimes(controller, HealChecks);
         Assert.True(controller.Status.IsHealing);
     }
 
@@ -536,11 +652,11 @@ public class RouteControllerTests
         await controller.RefreshAsync(measureLatency: true);
         await ReachMaxBackoff(controller);
         _probe.BySource["192.168.42.11"] = null;
-        await RefreshTimes(controller, RouteController.HealAfterFailedChecks - 1);
+        await RefreshTimes(controller, HealChecks - 1);
 
         _routes.BestV4 = 10; // Windows follows the swapped metrics, so the path changes in this refresh
         _toasts.Clear();
-        await controller.RefreshAsync(measureLatency: true);
+        await RefreshTimes(controller, 1);
 
         Assert.True(controller.Status.IsHealSticky);
         Assert.Equal(InternetPath.Lan, controller.Status.ActivePath);

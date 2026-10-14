@@ -57,7 +57,7 @@ public partial class UsageTab : UserControl
 
     RouteExit _renderedProfile = RouteExit.Phone;
 
-    public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording)
+    public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording, bool windowsTracking)
     {
         _sort = sort;
         _renderedProfile = model.Profile;
@@ -67,7 +67,7 @@ public partial class UsageTab : UserControl
         UpdateHeaders();
 
         var banner = new List<string>();
-        if (!recording) banner.Add("Usage is recorded only while Smart routing is running. History stays visible.");
+        if (UsageBanner.Text(recording, windowsTracking) is { } bannerText) banner.Add(bannerText);
         if (model.RecordingSince is { } since)
             banner.Add($"Recording since {since.ToString("d MMM yyyy", CultureInfo.CurrentCulture)}.");
         Banner.Text = string.Join("\n", banner);
