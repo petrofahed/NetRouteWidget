@@ -93,6 +93,30 @@ public class WindowsIntegrationTests
         Assert.NotNull(adapter.IPv4);
     }
 
+    [Fact]
+    public void Network_info_reads_the_internet_adapter_speed_gateway_and_prefix()
+    {
+        // Smart routing's own TUN carries the default route while it runs and has no gateway: use a real adapter beside it.
+        var adapter = new WindowsAdapterSource().GetAdapters()
+            .First(a => a.Name != "NetRoute" && a.IsUp && a.HasGateway && a.IPv4 is not null);
+        var info = new WindowsNetworkInfo();
+
+        var nic = info.ReadNic(adapter.Name);
+
+        Assert.NotNull(nic);
+        Assert.Equal(adapter.Name, nic.Name);
+        Assert.NotNull(info.GatewayV4(adapter.Name));
+        Assert.InRange(info.PrefixLengthV4(adapter.Name, System.Net.IPAddress.Parse(adapter.IPv4!)) ?? 0, 1, 32);
+    }
+
+    [Fact]
+    public void Neighbour_table_reads_without_throwing_and_every_entry_has_a_mac()
+    {
+        var entries = new NeighborTable().Read();
+
+        Assert.All(entries, e => Assert.Matches("^[0-9A-F]{2}(-[0-9A-F]{2}){5}$", e.Mac));
+    }
+
     static string[] PowerShell(string script)
     {
         var psi = new ProcessStartInfo("powershell.exe")
