@@ -52,6 +52,7 @@ public sealed class SmartRoutingController
     readonly Queue<string> _recentLines = new();
     readonly UsageCounter _usage;
     readonly IAdapterCounters? _counters;
+    readonly ITrafficSource? _traffic;
 
     ISingBoxApi? _api;
     LanWaitTracker? _tracker;
@@ -84,12 +85,16 @@ public sealed class SmartRoutingController
     static readonly UsageRate NoSpeed = new(0, 0);
     volatile UsageRate _liveSpeed = NoSpeed;
     volatile ExitTotals _todayTotals = ExitTotals.Zero;
+    bool _measuring; // under the gate: Windows tracing is counting usage because sing-box is not running
+    volatile bool _isMeasuring;
+    string? _trafficError;
 
     public SmartRoutingController(
         IReadOnlyList<RuleItem> catalog, ISingBoxHost host, Func<int, string, ISingBoxApi> createApi,
         Func<int> freePort, UsageSnapshot? restoredUsage, Action<string> log, TimeProvider? time = null,
-        IAdapterCounters? counters = null)
+        IAdapterCounters? counters = null, ITrafficSource? traffic = null)
     {
+        _traffic = traffic;
         _catalog = catalog;
         _host = host;
         _createApi = createApi;
@@ -114,6 +119,11 @@ public sealed class SmartRoutingController
     /// The bytes counted today through each exit, all applications together (history, not live speed: it is not zeroed when
     /// a poll fails or sing-box stops). Immutable and read without the gate.
     public ExitTotals TodayTotals => _todayTotals;
+
+    /// True while usage is being counted by Windows tracing because sing-box is not running (the card shows live speeds and
+    /// the Usage tab says so). Read without the gate.
+    public bool IsMeasuring => _isMeasuring;
+
     public event Action<SmartRoutingStatus>? StatusChanged;
     public event Action<IReadOnlyList<string>>? WaitingDetected;
     public event Action<string>? Notify;
@@ -128,6 +138,7 @@ public sealed class SmartRoutingController
             {
                 _net = net;
                 _settings = settings;
+                _traffic?.SetAdapters(net.Adapters.Phone, net.Adapters.Lan);
                 if (net.Adapters.Lan is { } lan)
                 {
                     _lastLanName = lan.Name;
@@ -275,7 +286,14 @@ public sealed class SmartRoutingController
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_shutdown || _api is null) return;
+            if (_shutdown) return;
+            if (_api is null)
+            {
+                MeasureWithoutSingBox();
+                return;
+            }
+            // sing-box's own packets cross the physical adapters as well: counting them too would double the traffic.
+            DiscardMeasured();
             if (!_host.IsRunning)
             {
                 _liveSpeed = NoSpeed; // crashed: the exit event is queued behind the gate, a stale figure must not linger meanwhile
@@ -324,6 +342,66 @@ public sealed class SmartRoutingController
         }
     }
 
+    /// Smart routing is not running: count per-application traffic from Windows tracing instead. Under the gate.
+    void MeasureWithoutSingBox()
+    {
+        if (_traffic is null) return;
+        try
+        {
+            if (_measuring && !_traffic.IsRunning) StopMeasuring(noteGap: true); // the trace ended by itself
+            if (_traffic.EnsureRunning() is { } error)
+            {
+                FailMeasuring(error);
+                return;
+            }
+            _trafficError = null;
+
+            var before = _liveSpeed;
+            var wasMeasuring = _measuring;
+            _measuring = _isMeasuring = true;
+            var drained = _traffic.Drain();
+            _usage.AddMeasured(drained, _attribution, PhoneAdapterBytes(), _time.GetLocalNow());
+            _liveSpeed = _usage.Live;
+            _todayTotals = _usage.TodayTotals(Today());
+            if (drained.Count > 0 || _liveSpeed != before || !wasMeasuring) SafePublish(); // a quiet poll changes nothing to show
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            FailMeasuring(ex.Message);
+        }
+    }
+
+    void FailMeasuring(string message)
+    {
+        if (message != _trafficError) _log($"Usage tracking without Smart routing is unavailable: {message}"); // once per distinct reason: this runs every second
+        _trafficError = message;
+        StopMeasuring(noteGap: true);
+    }
+
+    void StopMeasuring(bool noteGap)
+    {
+        if (!_measuring) return;
+        _measuring = _isMeasuring = false;
+        if (noteGap) _usage.NoteGap(Today()); // the bytes since the last poll were not recorded
+        _usage.ClearRates();
+        _liveSpeed = NoSpeed;
+        SafePublish();
+    }
+
+    void DiscardMeasured()
+    {
+        if (_traffic is null) return;
+        _measuring = _isMeasuring = false;
+        try
+        {
+            _traffic.Drain();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log($"Smart routing: dropping measured traffic failed: {ex.Message}");
+        }
+    }
+
     /// The phone adapter's Windows byte counter, or null when it cannot be read (missed bytes are then split by the default exit).
     long? PhoneAdapterBytes()
     {
@@ -364,6 +442,8 @@ public sealed class SmartRoutingController
         {
             _shutdown = true;
             _liveSpeed = NoSpeed;
+            _measuring = _isMeasuring = false;
+            _traffic?.Dispose();
             await StopIfRunningAsync().ConfigureAwait(false);
         }
         finally
@@ -473,6 +553,8 @@ public sealed class SmartRoutingController
         }
         _apiFailures = 0;
         _graceLogged = false;
+        _usage.ResetBaselines(); // a new sing-box starts from zero totals and new connection ids (DropApi only resets when one was running)
+        _measuring = _isMeasuring = false;
         var net = _net!;
         try
         {
@@ -528,9 +610,14 @@ public sealed class SmartRoutingController
 
     void DropApi()
     {
-        if (_api is not null) _usage.NoteGap(Today()); // a running sing-box went away: the bytes just before that were not recorded
-        _usage.ResetBaselines(); // the next sing-box starts from zero totals and new connection ids
-        _liveSpeed = NoSpeed;
+        if (_api is not null)
+        {
+            _usage.NoteGap(Today()); // a running sing-box went away: the bytes just before that were not recorded
+            _usage.ResetBaselines(); // the next sing-box starts from zero totals and new connection ids
+            _liveSpeed = NoSpeed;
+        }
+        // Without a running sing-box nothing needs resetting: ApplyAsync calls this every 5-10 s while Smart is off, and
+        // resetting then would drop the Windows adapter baseline and the live speed that tracing keeps.
         var api = _api;
         _api = null;
         try

@@ -62,6 +62,39 @@ sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
     }
 }
 
+sealed class FakeTrafficSource : ITrafficSource
+{
+    public bool IsRunning { get; set; }
+    public string? StartError { get; set; }
+    public int StartAttempts { get; private set; }
+    public int Drains { get; private set; }
+    public bool Disposed { get; private set; }
+    public AdapterInfo? Phone { get; private set; }
+    public AdapterInfo? Lan { get; private set; }
+    public List<MeasuredTraffic> Pending { get; } = new();
+
+    public string? EnsureRunning()
+    {
+        if (IsRunning) return null;
+        StartAttempts++;
+        if (StartError is { } error) return error;
+        IsRunning = true;
+        return null;
+    }
+
+    public void SetAdapters(AdapterInfo? phone, AdapterInfo? lan) => (Phone, Lan) = (phone, lan);
+
+    public IReadOnlyList<MeasuredTraffic> Drain()
+    {
+        Drains++;
+        var taken = Pending.ToList();
+        Pending.Clear();
+        return taken;
+    }
+
+    public void Dispose() => Disposed = true;
+}
+
 sealed class FakeAdapterCounters : IAdapterCounters
 {
     public long? Bytes { get; set; }
