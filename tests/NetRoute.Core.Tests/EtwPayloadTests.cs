@@ -20,6 +20,17 @@ public class EtwPayloadTests
     }
 
     [Fact]
+    public void Real_values_from_the_probe_on_the_users_machine_decode_to_the_expected_addresses()
+    {
+        // Int32 payloads recorded by tools/EtwProbe (2026-10-14): the same connection seen as a send and as a receive.
+        Assert.Equal(IPAddress.Parse("172.19.0.1"), EtwPayload.ToAddress(16782252));
+        Assert.Equal(IPAddress.Parse("172.19.0.2"), EtwPayload.ToAddress(33559468));
+        Assert.Equal(IPAddress.Parse("192.168.42.11"), EtwPayload.ToAddress(187345088));   // the phone adapter, local side of a receive
+        Assert.Equal(IPAddress.Parse("172.64.148.235"), EtwPayload.ToAddress(-342605652)); // a public Cloudflare address, remote side
+        Assert.Equal(IPAddress.Parse("127.0.0.1"), EtwPayload.ToAddress(16777343));
+    }
+
+    [Fact]
     public void Byte_arrays_and_text_become_addresses()
     {
         Assert.Equal(IPAddress.Parse("1.1.1.1"), EtwPayload.ToAddress(new byte[] { 1, 1, 1, 1 }));

@@ -67,6 +67,13 @@ public class TrafficClassifierTests
     }
 
     [Fact]
+    public void A_public_172_64_address_is_not_mistaken_for_the_private_172_16_block()
+    {
+        // 172.64.148.235 is a Cloudflare address seen in the probe on the user's machine.
+        Assert.Equal(RouteExit.Phone, Classifier.ExitOf(Phone4, Ip("172.64.148.235")));
+    }
+
+    [Fact]
     public void Packets_of_other_adapters_are_ignored()
     {
         Assert.Null(Classifier.ExitOf(Ip("10.8.0.2"), Ip("8.8.8.8"))); // a VPN or virtual adapter

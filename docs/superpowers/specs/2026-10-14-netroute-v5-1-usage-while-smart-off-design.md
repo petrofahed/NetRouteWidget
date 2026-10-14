@@ -86,3 +86,11 @@ None. The tracker runs whenever the widget is elevated and Smart is off; there i
 - The TraceEvent package brings native files (roughly 10 MB in the install folder) and needs an entry in THIRD-PARTY-NOTICES.md.
 - Very short-lived processes count under "Other".
 - Packets NATed for VMs/WSL carry no owning process and may be missing, so the per-app total can be below the adapter total.
+
+## Probe results (2026-10-14, run by the user as administrator, 20 s, Smart routing ON)
+
+- **Data event ids** (provider `Microsoft-Windows-Kernel-Network`, keywords 0x30): TCP IPv4 send 10 / receive 11; TCP IPv6 send 26 / receive 27; UDP IPv4 send 42 / receive 43; UDP IPv6 send 58 / receive 59. This matches `KernelNetworkEvents`.
+- **Not data:** 12 (connect attempted), 13 (disconnect), 14 (retransmit), 15 (accepted), 16 (reconnect), and 18/34 ("protocol copied data on behalf of user"), which repeats the bytes of 11/27 and must stay ignored.
+- **Payload names:** `PID`, `size`, `saddr`, `daddr`, `sport`, `dport` (plus others). Types: `PID` and `size` are `Int32`; IPv4 addresses are `Int32` read as little-endian (`16777343` is 127.0.0.1); IPv6 addresses are `Byte[]` (16 bytes). On receive events `saddr` is the local address and `daddr` the remote one (192.168.42.11 appeared as `saddr` of a receive), which is why the classifier checks both.
+- **Seen on the wire:** sing-box's own traffic (discarded while it runs, as designed), loopback traffic of the widget to sing-box's API (ignored as local), UDP/QUIC traffic of browsers and other apps (events 43/59), and kernel traffic as `System` (pid 4).
+- **Short-lived processes:** one process id (about 420 KB in 20 s) had already exited when the probe resolved its name. Such bytes count under "Other", as the open risks say.
