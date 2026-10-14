@@ -85,6 +85,7 @@ public partial class App : Application
             _tray.ToggleCardRequested += ToggleCard;
             _tray.ShowCardRequested += ShowCard;
             _tray.StartWithWindowsToggled += ToggleStartWithWindows;
+            _tray.AutoHealToggled += ToggleAutoHeal;
             _tray.QuitRequested += Quit;
 
             _card = new CardWindow();
@@ -92,6 +93,7 @@ public partial class App : Application
             _card.HideRequested += HideCard;
             _card.Moved += (left, top) => controller.UpdateSettings(s => s with { CardLeft = left, CardTop = top });
             _card.StartWithWindowsToggled += ToggleStartWithWindows;
+            _card.AutoHealToggled += ToggleAutoHeal;
             _card.OpenNetworkSettingsRequested += OpenNetworkSettings;
             _card.ChooseAdaptersRequested += ChooseAdapters;
             _card.RestartAsAdminRequested += RestartAsAdmin;
@@ -203,8 +205,9 @@ public partial class App : Application
     void Render(NetworkStatus status)
     {
         var view = StatusPresenter.Present(status);
-        _tray?.Update(view, status.Mode, status.CanModify, _startupEnabled);
-        _card?.Render(view, status.Mode, status.CanModify, _startupEnabled);
+        var autoHeal = _controller?.Settings.AutoHeal ?? true;
+        _tray?.Update(view, status.Mode, status.CanModify, _startupEnabled, autoHeal);
+        _card?.Render(view, status.Mode, status.CanModify, _startupEnabled, autoHeal);
         if (_smart is { } smart) RenderSmartCard(smart.Status); // the Smart-off line names the mode, which just changed
     }
 
@@ -237,6 +240,14 @@ public partial class App : Application
     }
 
     void UpdatePollInterval() => _poll.Interval = _card?.IsVisible == true ? VisiblePoll : HiddenPoll;
+
+    void ToggleAutoHeal()
+    {
+        var on = !_controller!.Settings.AutoHeal;
+        _controller.UpdateSettings(s => s with { AutoHeal = on });
+        _log!.Info($"Auto-heal: {(on ? "on" : "off")}");
+        _ = _controller.RefreshAsync(measureLatency: false); // an active heal ends now and the menu shows the new state
+    }
 
     void ToggleStartWithWindows()
     {

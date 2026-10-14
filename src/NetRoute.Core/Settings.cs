@@ -12,6 +12,10 @@ public sealed record AppSettings
     public double? CardTop { get; init; }
     public bool CardVisible { get; init; } = true;
     public bool StartWithWindows { get; init; }
+
+    /// Moves the internet to the other connection while the preferred one has no internet. Off: the user's choice
+    /// always stands, so a flaky LAN can never push traffic onto the metered phone connection by itself.
+    public bool AutoHeal { get; init; } = true;
     public SmartRoutingSettings SmartRouting { get; init; } = new();
 
     [JsonIgnore]

@@ -6,7 +6,7 @@ A small Windows tray widget for PCs that are connected to **two networks at once
 - Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** the whole time.
 - Shows which connection is carrying internet right now, and the latency through each.
 - When the preferred connection **disconnects**, internet falls back to the other one automatically, and you get a notification.
-- **Auto-heal:** if the preferred connection is up but has **no internet** (for example, phone mobile data off, or the carrier blocking tethering), the widget switches to the other connection until it recovers.
+- **Auto-heal:** if the preferred connection is up but has **no internet** (for example, phone mobile data off, or the carrier blocking tethering), the widget switches to the other connection until it recovers. It waits until the connection has failed for a full minute, so short blips never move your traffic onto the other (maybe metered) connection. Turn it off entirely in the card's ⋮ menu or the tray menu.
   - Repeated failures make it wait longer before switching back.
   - If the preferred connection keeps failing, it stays on the working one and says so ("click Phone to retry").
 

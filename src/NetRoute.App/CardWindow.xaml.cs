@@ -17,6 +17,8 @@ public partial class CardWindow : Window
     public CardWindow()
     {
         InitializeComponent();
+        var version = typeof(CardWindow).Assembly.GetName().Version;
+        if (version is not null) VersionText.Text = $"v{version.Major}.{version.Minor}.{version.Build}";
         Theme.Apply(Resources);
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
     }
@@ -25,6 +27,7 @@ public partial class CardWindow : Window
     public event Action? HideRequested;
     public event Action<double, double>? Moved;
     public event Action? StartWithWindowsToggled;
+    public event Action? AutoHealToggled;
     public event Action? ChooseAdaptersRequested;
     public event Action? OpenNetworkSettingsRequested;
     public event Action? RestartAsAdminRequested;
@@ -52,7 +55,7 @@ public partial class CardWindow : Window
         Activate();
     }
 
-    public void Render(CardView view, RoutingMode mode, bool canModify, bool startWithWindows)
+    public void Render(CardView view, RoutingMode mode, bool canModify, bool startWithWindows, bool autoHeal)
     {
         _mode = mode;
         Header.Text = "🌐 " + view.Header;
@@ -66,6 +69,8 @@ public partial class CardWindow : Window
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
+        AutoHealItem.IsChecked = autoHeal;
+        AutoHealItem.IsEnabled = canModify;
     }
 
     public void RenderSmart(SmartRow row, bool smartOn)
@@ -176,6 +181,8 @@ public partial class CardWindow : Window
     void OnHide(object sender, RoutedEventArgs e) => HideRequested?.Invoke();
 
     void OnStartWithWindows(object sender, RoutedEventArgs e) => StartWithWindowsToggled?.Invoke();
+
+    void OnAutoHeal(object sender, RoutedEventArgs e) => AutoHealToggled?.Invoke();
 
     void OnChooseAdapters(object sender, RoutedEventArgs e) => ChooseAdaptersRequested?.Invoke();
 
