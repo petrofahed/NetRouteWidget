@@ -24,6 +24,7 @@ public class WindowsIntegrationTests
     {
         var expected = PowerShell(GetNetIpInterfaceScript)
             .Select(line => line.Split(','))
+            .Where(f => f[2].Length > 0) // an interface with no metric at all (Smart routing's own TUN) has nothing to compare
             .Select(f => (Index: int.Parse(f[0]), Family: f[1] == "IPv4" ? IpFamily.IPv4 : IpFamily.IPv6,
                           Metric: uint.Parse(f[2]), Automatic: f[3] == "1",
                           Fields: string.Join(",", f.Skip(2))))
@@ -76,7 +77,16 @@ public class WindowsIntegrationTests
     {
         var best = new WindowsRouteQuery().GetBestInterfaceIndex(RouteController.ProbeTargetV4);
 
-        var adapter = new WindowsAdapterSource().GetAdapters().Single(a => a.Index == best);
+        var adapters = new WindowsAdapterSource().GetAdapters();
+        var adapter = adapters.Single(a => a.Index == best);
+
+        if (adapter.Name == "NetRoute")
+        {
+            // While Smart routing runs its TUN carries the default route and has no gateway of its own: the internet
+            // adapters are the real ones beside it.
+            Assert.Contains(adapters, a => a.Name != "NetRoute" && a.IsUp && a.HasGateway && a.IPv4 is not null);
+            return;
+        }
 
         Assert.True(adapter.IsUp);
         Assert.True(adapter.HasGateway);
