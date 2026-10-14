@@ -615,6 +615,7 @@ public sealed class SmartRoutingController
             _usage.NoteGap(Today()); // a running sing-box went away: the bytes just before that were not recorded
             _usage.ResetBaselines(); // the next sing-box starts from zero totals and new connection ids
             _liveSpeed = NoSpeed;
+            DiscardMeasured(); // sing-box's own packets since the last poll: the API counted them under their applications
         }
         // Without a running sing-box nothing needs resetting: ApplyAsync calls this every 5-10 s while Smart is off, and
         // resetting then would drop the Windows adapter baseline and the live speed that tracing keeps.

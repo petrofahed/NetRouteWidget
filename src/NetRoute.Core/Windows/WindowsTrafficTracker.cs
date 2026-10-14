@@ -11,6 +11,14 @@ public sealed class WindowsTrafficTracker : ITrafficSource
 {
     public const string SessionName = "NetRouteWidget-Traffic";
     public static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(30);
+
+    /// Data events in a row, with none ever understood, after which the tracker reports a problem instead of claiming to
+    /// count: the field names or types of the trace are not what this code expects.
+    public const int UnreadableEventLimit = 1000;
+
+    /// The data events are small and a few thousand per second at most: a few MB of buffers are plenty (TraceEvent's default
+    /// is 64 MB, which a tray widget should not pin).
+    const int BufferSizeMb = 4;
     static readonly Guid KernelNetwork = new("7dd42a49-5329-4832-8dfd-43d979153a88");
     const ulong Ipv4AndIpv6Keywords = 0x10 | 0x20;
 
@@ -25,6 +33,9 @@ public sealed class WindowsTrafficTracker : ITrafficSource
     bool _disposed;
     string? _lastError;
     DateTimeOffset _nextTry;
+    volatile string? _problem; // set from the trace thread while running; read by EnsureRunning
+    long _parsed;
+    int _unreadable;
 
     public WindowsTrafficTracker(
         ProcessNameCache? names = null, TimeProvider? time = null,
@@ -37,16 +48,19 @@ public sealed class WindowsTrafficTracker : ITrafficSource
 
     public bool IsRunning => _running;
 
+    /// Why a running trace delivers nothing usable (events not understood, a callback failure), or null.
+    internal string? Problem => _problem;
+
     public string? EnsureRunning()
     {
-        if (_running) return null;
+        if (_running) return _problem; // running, but a problem means the numbers cannot be trusted: say so
         if (_disposed) return "stopped";
         var now = _time.GetUtcNow();
         if (now < _nextTry) return _lastError ?? "waiting to retry";
         try
         {
             StopSession(); // tidy a session whose thread ended
-            var session = new TraceEventSession(SessionName) { StopOnDispose = true }; // replaces a leftover session of the same name
+            var session = new TraceEventSession(SessionName) { StopOnDispose = true, BufferSizeMB = BufferSizeMb }; // replaces a leftover session of the same name
             session.EnableProvider(KernelNetwork, TraceEventLevel.Informational, Ipv4AndIpv6Keywords);
             session.Source.Dynamic.All += OnEvent;
             _session = session;
@@ -93,12 +107,40 @@ public sealed class WindowsTrafficTracker : ITrafficSource
 
     void OnEvent(TraceEvent data)
     {
-        var id = (int)data.ID;
-        if (!KernelNetworkEvents.IsData(id)) return;
-        if (EtwPayload.ToAddress(data.PayloadByName("saddr")) is not { } a || EtwPayload.ToAddress(data.PayloadByName("daddr")) is not { } b) return;
-        var size = EtwPayload.ToLong(data.PayloadByName("size"));
-        var pid = (int)EtwPayload.ToLong(data.PayloadByName("PID")); // the owning process, not the one that logged the event
-        Record(id, a, b, size, pid);
+        // Never let an exception escape: it would unwind into native ProcessTrace frames, which aborts the whole process.
+        try
+        {
+            var id = (int)data.ID;
+            if (!KernelNetworkEvents.IsData(id)) return;
+            // PID is the owning process, not the one that logged the event.
+            Observe(id, data.PayloadByName("saddr"), data.PayloadByName("daddr"), data.PayloadByName("size"), data.PayloadByName("PID"));
+        }
+        catch (Exception ex)
+        {
+            Fail($"kernel network event could not be read: {ex.Message}");
+        }
+    }
+
+    internal void Fail(string message) => _problem = message;
+
+    /// Reads one data event's raw payload values (any numeric width) and records it. A long run of data events that cannot
+    /// be read, with none ever understood, becomes a problem; a readable event clears it.
+    internal void Observe(int eventId, object? saddr, object? daddr, object? size, object? pid)
+    {
+        if (!KernelNetworkEvents.IsData(eventId)) return;
+        var a = EtwPayload.ToAddress(saddr);
+        var b = EtwPayload.ToAddress(daddr);
+        var bytes = EtwPayload.ToLong(size);
+        if (a is null || b is null || bytes <= 0)
+        {
+            if (_parsed == 0 && ++_unreadable >= UnreadableEventLimit)
+                _problem = "kernel network events could not be understood (unexpected fields); not counting";
+            return;
+        }
+        _parsed++;
+        _unreadable = 0;
+        _problem = null;
+        Record(eventId, a, b, bytes, (int)EtwPayload.ToLong(pid));
     }
 
     /// Adds one packet's bytes to the table when it is data on one of our adapters to a real internet address.
@@ -118,18 +160,30 @@ public sealed class WindowsTrafficTracker : ITrafficSource
 
     void Process(TraceEventSession session)
     {
+        string? error = null;
         try
         {
             session.Source.Process(); // blocks until the session is disposed or stopped
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _lastError = ex.Message;
+            error = ex.Message;
         }
         finally
         {
-            if (ReferenceEquals(_session, session)) _running = false; // a newer session must not be marked stopped by an old thread
+            TraceEnded(session, error);
         }
+    }
+
+    /// The trace thread ended. When it ended on its own (another tool stopped the session, the consumer failed) the reason
+    /// is kept and the next start waits RetryDelay, so a failing trace is neither restarted every second nor silent.
+    /// A thread of a session we already replaced or disposed changes nothing.
+    internal void TraceEnded(TraceEventSession? session, string? error)
+    {
+        if (!ReferenceEquals(_session, session)) return;
+        _running = false;
+        _lastError = error ?? "the kernel network trace stopped";
+        _nextTry = _time.GetUtcNow() + RetryDelay;
     }
 
     void StopSession()

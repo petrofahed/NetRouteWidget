@@ -1518,6 +1518,23 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
+    public async Task Sing_boxs_own_packets_seen_just_before_it_stops_are_not_booked_as_usage()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On()); // sing-box running
+        traffic.Pending.Add(Measured("sing-box.exe", RouteExit.Phone, 0, 700)); // its own packets, not yet discarded by a poll
+
+        await c.ApplyAsync(Net(), On(false)); // Smart off: sing-box stops
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 40));
+        await c.PollStatsAsync();
+
+        var rows = (await c.GetUsageAsync()).Days.Values.Single().Rows;
+        Assert.DoesNotContain("app:sing-box.exe", rows.Keys);
+        Assert.Equal(40, rows["app:chrome.exe"].Phone.Total);
+    }
+
+    [Fact]
     public async Task Without_a_traffic_source_nothing_changes()
     {
         var c = Create();

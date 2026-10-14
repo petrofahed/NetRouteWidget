@@ -379,6 +379,24 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task A_long_gap_between_checks_restarts_the_failure_window_so_waking_from_sleep_never_heals()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.42.11"] = null;
+        await RefreshTimes(controller, 2); // a 10 s blip...
+        _clock.Advance(TimeSpan.FromMinutes(10)); // ...then the PC sleeps
+
+        await RefreshTimes(controller, 1); // the first check after waking, still a miss
+        Assert.False(controller.Status.IsHealing);
+
+        await RefreshTimes(controller, HealChecks - 2); // the window runs from the wake-up
+        Assert.False(controller.Status.IsHealing);
+        await RefreshTimes(controller, 1);
+        Assert.True(controller.Status.IsHealing);
+    }
+
+    [Fact]
     public async Task Auto_heal_off_never_heals()
     {
         var controller = Create(new AppSettings { AutoHeal = false });

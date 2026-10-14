@@ -107,6 +107,71 @@ public class WindowsTrafficTrackerTests
     }
 
     [Fact]
+    public void Observe_reads_raw_payload_values_of_any_numeric_width()
+    {
+        var tracker = Create();
+
+        tracker.Observe(TcpRecv, Internet, Phone4, 900u, 7);                          // size as uint, pid as int
+        tracker.Observe(TcpSend, 0x0B2AA8C0u, 0x01010101u, (ushort)100, 7u);         // addresses as little-endian numbers
+
+        Assert.Equal([new MeasuredTraffic("chrome.exe", RouteExit.Phone, new Traffic(100, 900))], tracker.Drain());
+    }
+
+    [Fact]
+    public void A_stream_of_data_events_that_cannot_be_read_raises_a_problem_and_a_readable_event_clears_it()
+    {
+        var tracker = Create();
+
+        for (var i = 0; i < WindowsTrafficTracker.UnreadableEventLimit; i++) tracker.Observe(TcpRecv, "garbage", null, "x", null);
+        Assert.NotNull(tracker.Problem);
+
+        tracker.Observe(TcpRecv, Internet, Phone4, 10, 7);
+        Assert.Null(tracker.Problem);
+    }
+
+    [Fact]
+    public void A_few_unreadable_events_are_not_a_problem()
+    {
+        var tracker = Create();
+
+        for (var i = 0; i < WindowsTrafficTracker.UnreadableEventLimit - 1; i++) tracker.Observe(TcpRecv, "garbage", null, "x", null);
+
+        Assert.Null(tracker.Problem);
+    }
+
+    [Fact]
+    public void Events_that_are_not_data_are_never_counted_as_unreadable()
+    {
+        var tracker = Create();
+
+        for (var i = 0; i < WindowsTrafficTracker.UnreadableEventLimit * 2; i++) tracker.Observe(TcpConnect, null, null, null, null);
+
+        Assert.Null(tracker.Problem);
+    }
+
+    [Fact]
+    public void A_failure_inside_the_trace_callback_is_kept_as_the_problem_instead_of_escaping()
+    {
+        var tracker = Create();
+
+        tracker.Fail("kernel network event could not be read: boom");
+
+        Assert.Equal("kernel network event could not be read: boom", tracker.Problem);
+    }
+
+    [Fact]
+    public void A_trace_that_ended_waits_before_starting_again_and_says_why()
+    {
+        var tracker = Create();
+
+        tracker.TraceEnded(session: null, error: "session stopped by another tool");
+
+        Assert.False(tracker.IsRunning);
+        Assert.Equal("session stopped by another tool", tracker.EnsureRunning()); // inside the retry window: no new session
+        Assert.Equal("session stopped by another tool", tracker.EnsureRunning());
+    }
+
+    [Fact]
     public void A_disposed_tracker_does_not_start()
     {
         var tracker = Create();

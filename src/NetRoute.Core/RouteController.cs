@@ -31,6 +31,10 @@ public sealed class RouteController
     /// checks (a sleeping PC) is not read as a long outage.
     public const int HealAfterFailedChecks = 3;
 
+    /// A longer pause between two measured checks (the PC slept) restarts the failure window: misses before the pause
+    /// say nothing about the link after it.
+    public static readonly TimeSpan MaxGapBetweenChecks = TimeSpan.FromSeconds(30);
+
     /// Consecutive good checks of the preferred adapter before healing ends.
     public const int RecoverAfterGoodChecks = 3;
 
@@ -50,6 +54,7 @@ public sealed class RouteController
     bool _healing;
     int _healCount;
     DateTimeOffset? _failingSince;
+    DateTimeOffset? _lastCheckAt;
     int _recoverThreshold = RecoverAfterGoodChecks;
     int _checksSinceHealEnded;
     bool _hadHeal;
@@ -300,8 +305,17 @@ public sealed class RouteController
         // No IPv4 yet (e.g. DHCP pending after a replug): nothing was measured, so it is no evidence either way.
         if (!measured || preferred.IPv4 is null) return false;
 
+        var checkedAt = _time.GetUtcNow();
+        var afterPause = _lastCheckAt is { } previous && checkedAt - previous > MaxGapBetweenChecks;
+        _lastCheckAt = checkedAt;
+
         if (!_healing)
         {
+            if (afterPause)
+            {
+                _healCount = 0;
+                _failingSince = null;
+            }
             if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
             {
                 _checksSinceHealEnded++;

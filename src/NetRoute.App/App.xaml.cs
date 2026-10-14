@@ -404,7 +404,7 @@ public partial class App : Application
     {
         if (_card is not { } card) return;
         RenderTotals(smart);
-        if (smart.Status.State is not (SmartState.Running or SmartState.Starting) && !smart.IsMeasuring)
+        if (!LiveSpeedDisplay.IsShown(smart.Status.State, smart.IsMeasuring))
         {
             card.RenderSpeeds("", "");
             return;
@@ -428,7 +428,7 @@ public partial class App : Application
     void RenderSmart(SmartRoutingStatus status)
     {
         RenderSmartCard(status);
-        if (status.State is not (SmartState.Running or SmartState.Starting)) _card?.RenderSpeeds("", "");
+        if (!LiveSpeedDisplay.IsShown(status.State, _smart?.IsMeasuring == true)) _card?.RenderSpeeds("", "");
         RenderSmartWindow();
         if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone
             || status.State is SmartState.Off or SmartState.Unavailable or SmartState.Faulted)) // Starting is a transient restart: keep the popup
