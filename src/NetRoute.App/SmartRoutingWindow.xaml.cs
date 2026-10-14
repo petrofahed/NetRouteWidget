@@ -51,8 +51,8 @@ public partial class SmartRoutingWindow : Window
     public event Action? EditRulesFileRequested;
 
     /// Updates the Usage tab in place; safe to call every second.
-    public void RenderUsage(UsageReportModel model, UsageSort sort, string statusText, bool recording) =>
-        Usage.Render(model, sort, statusText, recording);
+    public void RenderUsage(UsageReportModel model, UsageSort sort, string statusText, bool recording, bool windowsTracking) =>
+        Usage.Render(model, sort, statusText, recording, windowsTracking);
 
     void OnEditRulesFile(object sender, RoutedEventArgs e) => EditRulesFileRequested?.Invoke();
 

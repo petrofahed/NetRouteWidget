@@ -348,7 +348,7 @@ public partial class App : Application
             if (usage.Unreadable) log.Error("usage.json could not be read; usage is kept in memory only this session and NOT saved");
             var smart = new SmartRoutingController(
                 _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next, usage.Usage, log.Info,
-                counters: new WindowsAdapterCounters());
+                counters: new WindowsAdapterCounters(), traffic: new WindowsTrafficTracker());
             smart.StatusChanged += s => Dispatcher.BeginInvoke(new Action(() => RenderSmart(s)));
             smart.Notify += m => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(m)));
             smart.WaitingDetected += names => Dispatcher.BeginInvoke(new Action(() => ShowWaitingPopup(names)));
@@ -398,13 +398,13 @@ public partial class App : Application
         if (_smart is { } smart) _ = smart.ApplyAsync(controller.Status, controller.Settings);
     }
 
-    /// The card's live speed next to each latency: the total through that exit right now. Blank whenever Smart routing
-    /// is not running, so a stale figure never lingers (it measures what passes through Smart routing).
+    /// The card's live speed next to each latency: the total through that exit right now. Blank whenever neither Smart
+    /// routing nor Windows tracing is counting, so a stale figure never lingers.
     void RenderLiveSpeeds(SmartRoutingController smart)
     {
         if (_card is not { } card) return;
         RenderTotals(smart);
-        if (smart.Status.State is not (SmartState.Running or SmartState.Starting))
+        if (smart.Status.State is not (SmartState.Running or SmartState.Starting) && !smart.IsMeasuring)
         {
             card.RenderSpeeds("", "");
             return;
@@ -492,7 +492,8 @@ public partial class App : Application
                 var canAssign = settings.Enabled && (status.State is SmartState.Running or SmartState.Starting);
                 var report = UsageReport.Build(
                     usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter, status.Profile);
-                window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text, recording: status.State == SmartState.Running);
+                window.RenderUsage(report, _usageSort, SmartRoutingPresenter.Row(status).Text,
+                    recording: status.State == SmartState.Running, windowsTracking: smart.IsMeasuring);
             }
             while (_renderAgain);
         }

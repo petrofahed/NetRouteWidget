@@ -90,13 +90,13 @@ A missing file changes nothing. A broken file (bad JSON, a bad `exit`, a duplica
 
 The ⚙ window has two tabs, **Usage** and **Config**. Config is the Smart routing page described above; Usage shows who is using your data.
 
-- **Measured through Smart routing,** so history only grows while it is running. Traffic to your home devices and anything while Smart routing is off is not counted.
+- **Recorded per application whether Smart routing is on or off.** With Smart on, sing-box counts it (including site rows such as YouTube). With Smart off, Windows network tracing counts it per application (no site rows; the widget needs administrator rights for this, and the tab says which source is counting). Traffic to your home devices is never counted.
 - **Phone and LAN, each split into ↑ Up, ↓ Down and Total**, per application or site, for **Today, 3, 7, 15 or 30 days** (click a column header to sort; the default is Phone ↑, largest first, so the heaviest uploaders over 4G are on top). Upload is data your PC sent; download is data it received. Two live columns, **Now phone** and **Now LAN**, show the current upload and download speed on each connection over the last ~3 seconds (shown only above 1 KB/s, otherwise a dash). Each connection is counted under exactly one row, so the Total row is a plain sum with nothing counted twice. The window opens wide (about 1250 px) and scrolls sideways when it is narrower.
 - **Filter box:** type part of a name (for example `youtube`) to narrow the list and its totals to the matching applications and sites; Esc clears it.
 - **Right-click a row** to **Send to exception** or **Exclude from exception** for the active profile (in Phone + exceptions that keeps it off 4G, in LAN + exceptions it makes it use the phone). Rows that are exceptions show a tag (`→ LAN` or `→ phone`). Rules can also be changed on the Config tab, and the numbers themselves are never changed.
 - **Unattributed:** connections that open and close between two one-second checks cannot be tied to an application, so they appear in an **Unattributed** row and the column totals stay right. The footer also shows the **exact phone adapter total** from Windows, to compare with the Phone column.
 - **Stored in `%AppData%\NetRouteWidget\usage.json`** for 35 days: only application names and byte totals, never URLs. **Clear usage history…** (Config tab) deletes it. The "kept off 4G" figure comes from this file too.
-- **Check the accuracy on your PC:** with Smart routing on and a quiet connection, run `tools\Check-UsageAccuracy.ps1`. It downloads a known amount and passes if the recorded growth is within 10 %. It only reads `usage.json`.
+- **Check the accuracy on your PC:** with Smart routing on and a quiet connection, run `tools\Check-UsageAccuracy.ps1`. It downloads a known amount and passes if the recorded growth is within 10 %. It only reads `usage.json`. With Smart routing **off**, run `tools\Check-UsageWhileSmartOff.ps1` from an administrator PowerShell instead.
 
 ## Install
 
