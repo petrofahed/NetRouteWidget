@@ -19,6 +19,32 @@ public partial class LocalNetworkTab : UserControl
     public LocalNetworkTab()
     {
         InitializeComponent();
+        AddRequested += () => ShowAddDialog("", "");
+        ScanRequested += ShowScanDialog;
+        RemoveRequested += row =>
+        {
+            if (_services is null) return;
+            _services.SaveDevices([.. _services.GetDevices().Where(d => !string.Equals(d.Address, row.Address, StringComparison.OrdinalIgnoreCase))]);
+            _selected = null;
+            Refresh();
+        };
+    }
+
+    void ShowAddDialog(string name, string address)
+    {
+        if (_services is null) return;
+        var dialog = new AddDeviceWindow(_services.GetDevices(), name, address) { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true || dialog.Result is not { } device) return;
+        _services.SaveDevices([.. _services.GetDevices(), device]);
+        Refresh();
+    }
+
+    void ShowScanDialog()
+    {
+        if (_services is null) return;
+        var dialog = new ScanWindow(_services.Scan, _services.GetDevices()) { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true || dialog.Result is not { } found) return;
+        ShowAddDialog(found.Name ?? "", found.Address.ToString()); // the add dialog lets the user edit the name before it is saved
     }
 
     public event Action? AddRequested;
