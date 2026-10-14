@@ -1,7 +1,7 @@
 # NetRoute Widget v5.2: Local network tab — Design
 
 **Date:** 2026-10-14
-**Status:** Draft, waiting for review.
+**Status:** Approved; implemented by `docs/superpowers/plans/2026-10-14-netroute-v5-2-local-network.md`. The real-machine check is still to be run by the user.
 **Builds on:** `2026-10-13-netroute-v5-path-map-design.md` (the network path window, `PathMonitor`, `IPathProbe`, `PathSamples`, `SampleStats`, `PathThresholds`).
 
 ## Goal
@@ -29,13 +29,13 @@ Top to bottom:
 3. **Device list:** one row per device: status dot (the path map's colours), name, address, average latency, loss over the 30 s window, and a small graph. The first row is always **Router** (the LAN adapter's default gateway, read from `IPInterfaceProperties.GatewayAddresses`). The rest are the user's devices. Clicking a row opens the same detail panel (stats and latency graph) the path map uses.
 4. **Buttons:** **Add device…** (name plus IPv4 address or hostname), **Remove** (the selected user device; the router row cannot be removed), **Scan network…**.
 
-The existing content of the window (headline, diagnosis, map, detail, legend) becomes the first tab, **Internet path**, unchanged. The **Pause display** button freezes both tabs.
+The existing content of the window (headline, diagnosis, map, detail, legend) becomes the first tab, **Internet path**, unchanged. The **Pause display** button stays on the Internet path tab and freezes that tab only; the Local network tab updates twice a second and needs no pause.
 
 ## Measuring
 
 - A new `LocalNetworkMonitor` (Core/PathMap) sends one ICMP echo per device per second, from the LAN adapter's IPv4 address, TTL 64, timeout 1 s, through the existing `IPathProbe`. It keeps the last 30 s per device in `PathSamples` and hands out immutable snapshots; it never touches the UI. Rounds start on a fixed rate with at most 3 outstanding, like `PathMonitor`.
 - It runs on its own `CancellationToken` from the moment the tab is first opened until the window closes. Nothing runs while the window is closed.
-- **Resolution:** a hostname is resolved to IPv4 when the monitor starts and each time the device is added or the LAN adapter changes. A name that does not resolve gives state "Unavailable (name not found)", never "no reply".
+- **Resolution:** a hostname is resolved the first time it is probed and again after a minute (a name that failed is asked again after 10 s). A name that does not resolve gives state "Name not found" (Unavailable samples), never "no reply".
 - **States** reuse `HopDisplay` and `SampleStats`/`PathThresholds`: Measuring until `HopMinSamples` valid samples; Answering; Suspect (loss at or above `LossyPercent`); Broken (`SilentConsecutive` lost in a row after it answered); Silent (never answered in a full window: "doesn't answer ping").
 - **No LAN adapter** (cable out): the monitor idles and the tab says "No LAN connection".
 
@@ -52,6 +52,8 @@ A pure function (`LocalVerdict`) of: the router's and each on-subnet device's st
 7. Everything local healthy and the internet failing: "Your local network is healthy: <list> answer with no loss. The fault is beyond your router (its link to the modem, the modem, or the line)."
 8. Everything local healthy and the internet fine or unknown: "Your local network is healthy."
 
+A device that never answers pings (grey, "doesn't answer ping") and a name that was not found count as neither healthy nor bad. With nothing healthy and nothing bad, the verdict says "No device on your local network can be measured yet. Add your NAS or another device that answers pings."
+
 ## Adding devices
 
 - **Add device…** opens a small dialog (like the existing add-rule dialog): name (optional, defaults to the address) and an IPv4 address or hostname. Validation: address must parse as IPv4 or be a valid hostname (at most 253 characters, letters/digits/dots/hyphens); name at most 40 characters; no duplicate address; at most 20 devices. Errors show in the dialog.
@@ -61,19 +63,19 @@ A pure function (`LocalVerdict`) of: the router's and each on-subnet device's st
 ## Scan
 
 - Subnet: the LAN adapter's address and prefix length; a prefix shorter than /24 scans the /24 around the address; a longer prefix scans its own subnet. Never more than 254 addresses.
-- Method: an ICMP echo to every address in the subnet (64 at a time, 500 ms timeout), merged with Windows' neighbour table (`GetIpNetTable2`, which also lists devices that do not answer pings but have talked to this PC). Names by reverse DNS with a 1 s timeout (8 at a time); the MAC comes from the neighbour table.
+- Method: an ICMP echo to every address in the subnet (64 at a time, 500 ms timeout), merged with Windows' neighbour table (`GetIpNetTable`, the IPv4 table, which also lists devices that do not answer pings but have talked to this PC). Names by reverse DNS with a 1 s timeout (8 at a time); the MAC comes from the neighbour table.
 - User-triggered only; takes a few seconds; shows progress; can be cancelled; results are not saved. Only the user's own subnet is touched.
 
 ## Architecture
 
 - **NetRoute.Core/PathMap:** `LocalDevice` (record: Name, Address), `LocalNetworkMonitor`, `LocalNetworkPresenter` (monitor snapshot + NIC stats + internet state → view model, calls `LocalVerdict`), `LocalVerdict`, `NetworkScanner` (uses `IPathProbe` and an `INeighborTable`), `LocalDeviceValidator` (name/address rules, shared by the dialog and the settings loader).
-- **NetRoute.Core/Windows:** `NeighborTable` (`GetIpNetTable2`), `NicStatsReader` (adapter speed, gateway and counters by name), both behind small interfaces so tests use fakes.
+- **NetRoute.Core/Windows:** `NeighborTable` (`GetIpNetTable`), `WindowsNetworkInfo` (adapter speed, gateway, prefix length and counters by name) and `HostResolver` (name lookups with short timeouts); the first two sit behind small interfaces so tests use fakes.
 - **NetRoute.Core:** `AppSettings.LocalDevices` (default empty) and its sanitising on load in `SettingsStore`.
 - **NetRoute.App:** `PathMapWindow` gains a `TabControl` (its current content moves under "Internet path"); a `LocalNetworkTab` user control (same refresh timer as the window); `AddDeviceWindow` and `ScanWindow` dialogs; `App` starts the local monitor with the window and passes settings read/write.
 
 ## Error handling
 
-- Probe failures are Unavailable samples, never exceptions (the `IPathProbe` contract). A monitor that throws is logged once and stops; the tab then says "Local checks stopped (see the log)".
+- Probe failures are Unavailable samples, never exceptions (the `IPathProbe` contract). A round that throws is logged once per message and the next round runs; if the monitor task itself faults it is logged.
 - A failing neighbour-table or statistics read leaves that part blank ("not available"); the rest of the tab works.
 - The scan never throws into the UI: a failure shows "Scan failed: <reason>" in its dialog.
 - Saving settings goes through the existing `UpdateSettings` and its unreadable-file protection.
