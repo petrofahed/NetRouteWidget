@@ -1,7 +1,7 @@
 # NetRoute Widget v5.1: Usage tracking while Smart routing is off — Design
 
 **Date:** 2026-10-14
-**Status:** Draft, waiting for review.
+**Status:** Approved; implemented by `docs/superpowers/plans/2026-10-14-netroute-v5-1-usage-while-smart-off.md`. The real-machine probe and accuracy check are still to be run by the user.
 **Builds on:** `2026-10-02-netroute-v3-usage-and-routing-design.md` (usage counter, Usage tab). That spec listed "Windows-level tracing (option B), if ever needed" as out of scope; this is that case.
 
 ## Goal
@@ -29,11 +29,11 @@ Usage is counted from sing-box's Clash API. With Smart off, sing-box is not runn
 
 - Starts an ETW session on the provider `Microsoft-Windows-Kernel-Network` using the TraceEvent library (MIT). It is a **named user-mode session**, so it never fights over Windows' single "NT Kernel Logger". It needs administrator rights, which the widget already has when it can change routing.
 - Subscribes to the TCP and UDP, IPv4 and IPv6 send and receive events. Each event carries the process ID, the byte count and two addresses.
-- **Exit classification** (pure function, unit-tested): a packet counts for the **Phone** when one of its two addresses is the Phone adapter's IP, and for the **LAN** when one is the LAN adapter's IP. Both addresses are checked instead of trusting a field, because the local/remote order differs between event types. The *other* address is the remote one.
+- **Exit classification** (pure function, unit-tested): a packet counts for the **Phone** when one of its two addresses is **any IPv4 or IPv6 address of the Phone adapter**, and for the **LAN** when one is any address of the LAN adapter (the addresses are looked up by adapter name on every apply, because `AdapterInfo` only knows the IPv4 address and IPv6 is common on mobile and home lines). Both addresses are checked instead of trusting a field, because the local/remote order differs between event types. The *other* address is the remote one.
 - **Ignored:** loopback, and remote addresses that are private, link-local, multicast or broadcast (the home network and the phone's own network are not counted, matching v3's "traffic to the home network is not counted"); the TUN and any other adapter (no match).
 - **Direction:** a send event is upload, a receive event is download.
 - **Process names:** resolved once per process ID and cached. A process that exits before it can be resolved counts under "Other".
-- **Aggregation:** the trace thread adds into a lock-free table keyed by (process ID, exit); it never blocks and never touches the UI or the counter.
+- **Aggregation:** the trace thread adds into a table keyed by (process ID, exit) under a short lock (one dictionary update); `Drain` swaps the table out. It never touches the UI or the counter.
 - `Drain()` returns and clears the table; `IsRunning` and the last start error are exposed for the UI and the log.
 
 The adapter addresses come from the controller's current detection result (`Phone`/`Lan` `AdapterInfo.IPv4`), passed to the tracker as a resolver function so the tracker follows a replugged phone.
@@ -85,3 +85,4 @@ None. The tracker runs whenever the widget is elevated and Smart is off; there i
 - ETW field order and UDP coverage on this machine are verified by the probe before the classifier is finalised.
 - The TraceEvent package brings native files (roughly 10 MB in the install folder) and needs an entry in THIRD-PARTY-NOTICES.md.
 - Very short-lived processes count under "Other".
+- Packets NATed for VMs/WSL carry no owning process and may be missing, so the per-app total can be below the adapter total.
