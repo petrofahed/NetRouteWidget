@@ -171,6 +171,43 @@ public sealed class UsageCounter
         RebuildLive(poll.Now);
     }
 
+    /// Records what Windows tracing measured while sing-box is not running: bytes per application and exit, attributed
+    /// like Update does (so history stays continuous), but with no host (no website rows) and nothing "kept off 4G".
+    /// Called once a second even when nothing was measured, so the live rates fade out when traffic stops.
+    public void AddMeasured(IReadOnlyList<MeasuredTraffic> samples, UsageAttribution attribution, long? phoneAdapterBytes, DateTimeOffset now)
+    {
+        var day = DateOnly.FromDateTime(now.DateTime);
+        if (day != _today)
+        {
+            _today = day;
+            Prune();
+        }
+        var dayData = DayFor(day);
+
+        long phone = 0, lan = 0;
+        foreach (var sample in samples)
+        {
+            if (sample.Traffic.Total <= 0) continue;
+            var key = attribution.Resolve(sample.ProcessName, host: null);
+            Add(dayData.Rows, key, sample.Exit, sample.Traffic, kept: 0);
+            AddRate(key, sample.Exit, sample.Traffic.Total, sample.Traffic.Up, now);
+            if (sample.Exit == RouteExit.Phone) phone += sample.Traffic.Total;
+            else lan += sample.Traffic.Total;
+        }
+
+        // Windows' own phone adapter counter keeps the footer's "exact" total comparable; same baseline rule as Update.
+        if (phoneAdapterBytes is { } adapterNow && _lastAdapter is { } adapterBefore && adapterNow >= adapterBefore)
+        {
+            dayData.PhoneAdapterBytes += adapterNow - adapterBefore;
+            _dirty = true;
+        }
+        _lastAdapter = phoneAdapterBytes;
+
+        if (phone + lan != 0) _liveSamples.Enqueue((now, phone, lan));
+        RebuildRates(now);
+        RebuildLive(now);
+    }
+
     /// An immutable copy of everything.
     public UsageSnapshot Snapshot()
     {
