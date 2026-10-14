@@ -36,8 +36,17 @@ public static class LocalNetworkPresenter
             x.Device.Key, x.Device.Name, x.Device.Address, x.State, LabelOf(x.State), MetricOf(x.Stats, x.State),
             x.Device.IsRouter, x.Device.IsRouter || OnSubnet(snap.Source, x.Device.Resolved, prefixLength))).ToList();
 
-        var verdict = LocalVerdict.Of(
-            rows.Zip(devices, (row, x) => new LocalVerdict.Entry(row.Name, row.State, row.IsRouter, row.OnSubnet, x.Stats.Valid)).ToList(), internet, t);
+        // The same machine listed twice (the router added by hand after a scan, "nas" and "nas.local") is judged once: the router
+        // wins, then the first device with that address. The duplicates stay in the list as rows.
+        var counted = new HashSet<IPAddress>();
+        if (devices.Where(x => x.Device.IsRouter).Select(x => x.Device.Resolved).FirstOrDefault() is { } routerAddress) counted.Add(routerAddress);
+        var entries = new List<LocalVerdict.Entry>();
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (!rows[i].IsRouter && devices[i].Device.Resolved is { } address && !counted.Add(address)) continue;
+            entries.Add(new LocalVerdict.Entry(rows[i].Name, rows[i].State, rows[i].IsRouter, rows[i].OnSubnet, devices[i].Stats.Valid));
+        }
+        var verdict = LocalVerdict.Of(entries, internet, t);
 
         var detail = selectedKey is null ? null : devices.Where(x => x.Device.Key == selectedKey).Select(x => DetailOf(x.Device, x.Stats, x.State, t)).FirstOrDefault();
         return new LocalNetworkView(true, "", verdict.Lines, verdict.Warning, nic is null ? null : NicOf(nic, nicBaseline), rows, detail);
@@ -176,7 +185,7 @@ static class LocalVerdict
         if (healthy.Count == 0)
             return Say(false, "No device on your local network can be measured yet. Add your NAS or another device that answers pings.");
         return internet == InternetState.Failing
-            ? Say(true, $"Your local network is healthy: {Join(healthy.Select(e => e.Name).ToList())} answer normally. The fault is beyond your router (its link to the modem, the modem, or the line).")
+            ? Say(true, $"Your local network is healthy: {Join(healthy.Select(e => e.Name).ToList())} {(healthy.Count == 1 ? "answers" : "answer")} normally. The fault is beyond your router (its link to the modem, the modem, or the line).")
             : Say(false, "Your local network is healthy.");
     }
 

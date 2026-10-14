@@ -523,7 +523,7 @@ public partial class App : Application
         var monitor = new PathMonitor(new IcmpPathProbe(), TcpEndpointProbe.Default(), TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
         var cts = new CancellationTokenSource();
         var localMonitor = new LocalNetworkMonitor(new IcmpPathProbe(), HostResolver.ResolveIPv4Async, TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
-        var netInfo = new WindowsNetworkInfo();
+        var netInfo = new CachingNetworkInfo(new WindowsNetworkInfo(), TimeProvider.System); // the tab asks several times a second; each real read lists every adapter
         var scanner = new NetworkScanner(new IcmpPathProbe(), new NeighborTable(), HostResolver.ReverseAsync);
         string? nicAdapter = null;
         NicStats? nicBaseline = null;

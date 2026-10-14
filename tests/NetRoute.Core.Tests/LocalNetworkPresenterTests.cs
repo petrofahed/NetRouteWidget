@@ -46,6 +46,46 @@ public class LocalNetworkPresenterTests
     }
 
     [Fact]
+    public void A_single_healthy_device_reads_as_answers_not_answer()
+    {
+        var view = Present(Snap(Router(PathKit.AllReply)), InternetState.Failing);
+
+        Assert.Equal("Your local network is healthy: Router answers normally. The fault is beyond your router (its link to the modem, the modem, or the line).", Verdict(view));
+    }
+
+    [Fact]
+    public void The_router_added_by_hand_is_not_counted_a_second_time()
+    {
+        // The Scan dialog lists the router, so a user can add 192.168.86.1 as a device. It is the same machine: when the router is
+        // the only one losing pings, the verdict must stay "the router may be de-prioritising pings", never "several devices".
+        var view = Present(Snap(
+            Router(PathKit.LostDuring(20)),
+            Device("My router", "192.168.86.1", PathKit.LostDuring(20)),
+            Device("NAS", "192.168.86.44", PathKit.AllReply)));
+
+        Assert.Equal("The router answers pings badly but your other devices are fine: the router may be de-prioritising pings. This does not point to a cable.", Verdict(view));
+    }
+
+    [Fact]
+    public void Two_names_for_one_machine_count_as_one_device()
+    {
+        var view = Present(Snap(
+            Router(PathKit.AllReply),
+            Device("NAS", "192.168.86.44", PathKit.LostDuring(20)),
+            Device("nas.local", "nas.local", PathKit.LostDuring(20), resolved: "192.168.86.44")));
+
+        Assert.Equal("NAS is losing packets while the router and the others are fine: check that device's cable and switch port.", Verdict(view));
+    }
+
+    [Fact]
+    public void The_duplicate_is_still_listed_as_a_row()
+    {
+        var view = Present(Snap(Router(PathKit.AllReply), Device("My router", "192.168.86.1", PathKit.AllReply)));
+
+        Assert.Equal(["Router", "My router"], view.Rows.Select(r => r.Name));
+    }
+
+    [Fact]
     public void Everything_local_healthy_and_the_internet_fine_or_unknown_just_says_healthy()
     {
         foreach (var internet in new[] { InternetState.Fine, InternetState.Unknown })

@@ -25,8 +25,8 @@ Add a second tab, **Local network**, to the network path window. It tests the wi
 Top to bottom:
 
 1. **Verdict** (plain words, one to three lines, see Verdict).
-2. **This PC's network card:** the LAN adapter's name, its link speed (`NetworkInterface.Speed`), and the error and discard counters (`GetIPStatistics`: incoming/outgoing errors and discards) as the **change since the tab was opened**, with the total since boot in the tooltip. Link speed below 1 Gbps on an Ethernet adapter is amber with the note "Gigabit is normal on modern cables; 100 Mbps often means a damaged cable or an old device in the path". Counters that grow while the tab is open are amber.
-3. **Device list:** one row per device: status dot (the path map's colours), name, address, average latency, loss over the 30 s window, and a small graph. The first row is always **Router** (the LAN adapter's default gateway, read from `IPInterfaceProperties.GatewayAddresses`). The rest are the user's devices. Clicking a row opens the same detail panel (stats and latency graph) the path map uses.
+2. **This PC's network card:** the LAN adapter's name, its link speed (`NetworkInterface.Speed`), and the error and discard counters (`GetIPStatistics`: incoming/outgoing errors and discards) as the **change since the tab was opened**. Link speed below 1 Gbps on an Ethernet adapter is amber with the note "Gigabit is normal on modern cables; 100 Mbps often means a damaged cable or an old device in the path". Counters that grow while the tab is open are amber.
+3. **Device list:** one row per device: status dot (the path map's colours), name, address, average latency and loss over the 30 s window (the latency graph is in the detail panel below the list). The first row is always **Router** (the LAN adapter's default gateway, read from `IPInterfaceProperties.GatewayAddresses`). The rest are the user's devices. Clicking a row opens the same detail panel (stats and latency graph) the path map uses.
 4. **Buttons:** **Add device…** (name plus IPv4 address or hostname), **Remove** (the selected user device; the router row cannot be removed), **Scan network…**.
 
 The existing content of the window (headline, diagnosis, map, detail, legend) becomes the first tab, **Internet path**, unchanged. The **Pause display** button stays on the Internet path tab and freezes that tab only; the Local network tab updates twice a second and needs no pause.
@@ -49,10 +49,10 @@ A pure function (`LocalVerdict`) of: the router's and each on-subnet device's st
 4. Exactly one on-subnet device (not the router) lossy: "<name> is losing packets while the router and the others are fine: check that device's cable and switch port."
 5. The router lossy but every other measured on-subnet device fine: "The router answers pings badly but your other devices are fine: the router may be de-prioritising pings. This does not point to a cable."
 6. The router lossy and no other device measured: "The router is losing packets. Add another device (like your NAS) to tell a PC-side cable problem from a router problem."
-7. Everything local healthy and the internet failing: "Your local network is healthy: <list> answer with no loss. The fault is beyond your router (its link to the modem, the modem, or the line)."
+7. Everything local healthy and the internet failing: "Your local network is healthy: <list> answer(s) normally. The fault is beyond your router (its link to the modem, the modem, or the line)."
 8. Everything local healthy and the internet fine or unknown: "Your local network is healthy."
 
-A device that never answers pings (grey, "doesn't answer ping") and a name that was not found count as neither healthy nor bad. With nothing healthy and nothing bad, the verdict says "No device on your local network can be measured yet. Add your NAS or another device that answers pings."
+The same machine listed twice (the router added by hand after a scan, two names with one address) is judged once: the router wins, then the first device with that address; the duplicates stay in the list. A device that never answers pings (grey, "doesn't answer ping") and a name that was not found count as neither healthy nor bad. With nothing healthy and nothing bad, the verdict says "No device on your local network can be measured yet. Add your NAS or another device that answers pings."
 
 ## Adding devices
 
