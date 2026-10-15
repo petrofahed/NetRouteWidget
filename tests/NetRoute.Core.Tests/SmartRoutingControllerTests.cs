@@ -24,11 +24,12 @@ public class SmartRoutingControllerTests
     ];
 
     SmartRoutingController Create(Func<int>? freePort = null, IAdapterCounters? counters = null, UsageSnapshot? restored = null,
-                                  IReadOnlyList<RuleItem>? catalog = null, ITrafficSource? traffic = null)
+                                  IReadOnlyList<RuleItem>? catalog = null, ITrafficSource? traffic = null, bool watched = true)
     {
         var c = new SmartRoutingController(catalog ?? Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters, traffic);
         c.WaitingDetected += _popups.Add;
         c.Notify += _notes.Add;
+        c.SetUsageWatched(watched);
         return c;
     }
 
@@ -1532,6 +1533,70 @@ public class SmartRoutingControllerTests
         var rows = (await c.GetUsageAsync()).Days.Values.Single().Rows;
         Assert.DoesNotContain("app:sing-box.exe", rows.Keys);
         Assert.Equal(40, rows["app:chrome.exe"].Phone.Total);
+    }
+
+    [Fact]
+    public async Task With_nobody_looking_at_the_usage_no_trace_runs_and_nothing_is_counted()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic, watched: false);
+        await c.ApplyAsync(Net(), On(false));
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 500));
+
+        await c.PollStatsAsync();
+
+        Assert.Equal(0, traffic.StartAttempts);
+        Assert.False(c.IsMeasuring);
+        Assert.Empty((await c.GetUsageAsync()).Days);
+    }
+
+    [Fact]
+    public async Task Opening_the_usage_view_starts_the_trace_on_the_next_poll()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic, watched: false);
+        await c.ApplyAsync(Net(), On(false));
+        await c.PollStatsAsync();
+
+        c.SetUsageWatched(true);
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 500));
+        await c.PollStatsAsync();
+
+        Assert.True(traffic.IsRunning);
+        Assert.True(c.IsMeasuring);
+        Assert.Equal(500, (await c.GetUsageAsync()).Days.Values.Single().Rows["app:chrome.exe"].Phone.Total);
+    }
+
+    [Fact]
+    public async Task Closing_the_usage_view_stops_the_trace_and_marks_a_gap_for_the_day()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+        traffic.Pending.Add(Measured("chrome.exe", RouteExit.Phone, 0, 10));
+        await c.PollStatsAsync();
+
+        c.SetUsageWatched(false);
+        await c.PollStatsAsync();
+
+        Assert.False(traffic.IsRunning);
+        Assert.False(c.IsMeasuring);
+        Assert.Equal(1, (await c.GetUsageAsync()).Days.Values.Single().Gaps);
+    }
+
+    [Fact]
+    public async Task While_sing_box_runs_the_trace_is_stopped_because_sing_box_counts_the_usage()
+    {
+        var traffic = new FakeTrafficSource();
+        var c = Create(traffic: traffic);
+        await c.ApplyAsync(Net(), On(false));
+        await c.PollStatsAsync();
+        Assert.True(traffic.IsRunning);
+
+        await c.ApplyAsync(Net(), On());
+        await c.PollStatsAsync();
+
+        Assert.False(traffic.IsRunning);
     }
 
     [Fact]

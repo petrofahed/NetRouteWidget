@@ -91,6 +91,17 @@ public class WindowsTrafficTrackerTests
     }
 
     [Fact]
+    public void Stop_forgets_what_was_counted_but_not_yet_drained()
+    {
+        var tracker = Create();
+        tracker.Record(TcpSend, Phone4, Internet, 10, pid: 7);
+
+        tracker.Stop();
+
+        Assert.Empty(tracker.Drain());
+    }
+
+    [Fact]
     public void Nothing_counts_until_the_adapters_are_known_and_it_follows_a_replug()
     {
         var tracker = new WindowsTrafficTracker(new ProcessNameCache(_ => "chrome.exe"), addressesOf: _ => []);

@@ -606,6 +606,7 @@ public partial class App : Application
             return;
         }
         var window = _smartWindow = new SmartRoutingWindow();
+        _smart?.SetUsageWatched(true); // its Usage tab is what the Windows tracing counts for; the trace starts on the next poll
         _usageFilter = ""; // the new window's filter box is empty
         _editingProfile = null; // a new window follows the active profile
         window.MasterToggled += on => ChangeSmart(s => s with { Enabled = on });
@@ -662,7 +663,11 @@ public partial class App : Application
                 _log?.Error("Clearing usage failed", ex); // an async void handler must never throw: it would end the app
             }
         };
-        window.Closed += (_, _) => _smartWindow = null;
+        window.Closed += (_, _) =>
+        {
+            _smartWindow = null;
+            _smart?.SetUsageWatched(false); // Windows tracing stops on the next poll
+        };
         RenderSmartWindow();
         window.Show();
     }

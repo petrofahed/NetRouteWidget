@@ -22,6 +22,9 @@ public interface ITrafficSource : IDisposable
 
     /// What was measured since the previous call (per process and exit), and forgets it.
     IReadOnlyList<MeasuredTraffic> Drain();
+
+    /// Ends the source when it is running, and forgets what it counted but did not drain. Cheap when it is not running.
+    void Stop();
 }
 
 /// Decides which exit a packet belongs to from its two addresses. Pure.

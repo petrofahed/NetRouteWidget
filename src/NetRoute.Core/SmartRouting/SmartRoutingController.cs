@@ -87,6 +87,7 @@ public sealed class SmartRoutingController
     volatile ExitTotals _todayTotals = ExitTotals.Zero;
     bool _measuring; // under the gate: Windows tracing is counting usage because sing-box is not running
     volatile bool _isMeasuring;
+    volatile bool _usageWatched; // set from the UI: the usage view is open, so Windows tracing is worth its cost
     string? _trafficError;
 
     public SmartRoutingController(
@@ -123,6 +124,10 @@ public sealed class SmartRoutingController
     /// True while usage is being counted by Windows tracing because sing-box is not running (the card shows live speeds and
     /// the Usage tab says so). Read without the gate.
     public bool IsMeasuring => _isMeasuring;
+
+    /// Whether someone is looking at the usage numbers (the Smart routing window is open). Windows tracing runs only then,
+    /// while sing-box is not running: nothing else needs per-packet work. Takes effect on the next poll.
+    public void SetUsageWatched(bool watched) => _usageWatched = watched;
 
     public event Action<SmartRoutingStatus>? StatusChanged;
     public event Action<IReadOnlyList<string>>? WaitingDetected;
@@ -346,6 +351,13 @@ public sealed class SmartRoutingController
     void MeasureWithoutSingBox()
     {
         if (_traffic is null) return;
+        if (!_usageWatched)
+        {
+            // Nobody is looking at the numbers: no per-packet tracing. Ending it marks a gap, since the bytes after this are not counted.
+            StopMeasuring(noteGap: true);
+            _traffic.Stop();
+            return;
+        }
         try
         {
             if (_measuring && !_traffic.IsRunning) StopMeasuring(noteGap: true); // the trace ended by itself
@@ -400,6 +412,7 @@ public sealed class SmartRoutingController
         {
             _log($"Smart routing: dropping measured traffic failed: {ex.Message}");
         }
+        _traffic.Stop(); // sing-box counts the usage now: the trace would only cost CPU
     }
 
     /// The phone adapter's Windows byte counter, or null when it cannot be read (missed bytes are then split by the default exit).

@@ -92,6 +92,14 @@ sealed class FakeTrafficSource : ITrafficSource
         return taken;
     }
 
+    public int Stops { get; private set; }
+
+    public void Stop()
+    {
+        Stops++;
+        IsRunning = false;
+    }
+
     public void Dispose() => Disposed = true;
 }
 

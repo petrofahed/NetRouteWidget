@@ -99,6 +99,13 @@ public sealed class WindowsTrafficTracker : ITrafficSource
         return merged.Select(m => new MeasuredTraffic(m.Key.Name, m.Key.Exit, m.Value)).ToList();
     }
 
+    /// Ends the trace and forgets what it counted but did not drain, so a later start does not book those old bytes.
+    public void Stop()
+    {
+        StopSession();
+        lock (_gate) _table = new();
+    }
+
     public void Dispose()
     {
         _disposed = true;
