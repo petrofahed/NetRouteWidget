@@ -346,6 +346,23 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
+    public async Task A_slow_but_answering_lan_is_not_offline()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(lanMs: 1500), On()); // congested LAN: slow handshakes, traffic still flows
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+        await c.ApplyAsync(Net(lanMs: 1500), On());
+
+        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync(FailLanOnly);
+
+        Assert.True(c.Status.LanOnline);
+        Assert.Empty(_popups);
+        Assert.Empty(c.Status.WaitingNames);
+    }
+
+    [Fact]
     public async Task Keep_waiting_suppresses_until_the_lan_returns()
     {
         var c = Create();

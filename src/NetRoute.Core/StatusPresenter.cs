@@ -14,6 +14,9 @@ public sealed record CardView(
 /// Pure mapping from status to what the card, tray icon and toasts show.
 public static class StatusPresenter
 {
+    /// A reply this slow (ms) or slower is amber: the adapter answers, but slowly (e.g. a congested link).
+    public const int SlowLatencyMs = 500;
+
     public static CardView Present(NetworkStatus s)
     {
         var noInternet = s.ActivePath == InternetPath.None;
@@ -81,7 +84,7 @@ public static class StatusPresenter
             return new(label, issue == DetectionIssue.Ambiguous ? "choose adapter…" : "not connected", "", Dot.Gray, false);
         var address = adapter.IPv4 ?? "no IPv4";
         return latencyMs is { } ms
-            ? new(label, address, $"{ms} ms", Dot.Green, active)
+            ? new(label, address, $"{ms} ms", ms >= SlowLatencyMs ? Dot.Amber : Dot.Green, active)
             : new(label, address, "no reply", Dot.Amber, active);
     }
 

@@ -4,7 +4,9 @@ A small Windows tray widget for PCs that are connected to **two networks at once
 
 - Sends **internet traffic through the phone**, through the LAN, or lets Windows decide, with one click.
 - Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** the whole time.
-- Shows which connection is carrying internet right now, and the latency through each.
+- Shows which connection is carrying internet right now, and the latency through each. The latency has two amber states:
+  - **"1250 ms" in amber:** the connection answers, but slowly (500 ms or more, for example a congested line). Traffic still flows.
+  - **"no reply" in amber:** two checks in a row got no answer within 4 seconds. This is also what Smart routing treats as the LAN being offline. A slow answer never counts as a failure, for Smart routing or for auto-heal.
 - When the preferred connection **disconnects**, internet falls back to the other one automatically, and you get a notification.
 - **Auto-heal:** if the preferred connection is up but has **no internet** (for example, phone mobile data off, or the carrier blocking tethering), the widget switches to the other connection until it recovers. It waits until the connection has failed for a full minute, so short blips never move your traffic onto the other (maybe metered) connection. Turn it off entirely in the card's ⋮ menu or the tray menu.
   - Repeated failures make it wait longer before switching back.
@@ -151,5 +153,6 @@ dotnet run --project src/NetRoute.App
 - **v4:** Smart routing profiles: the Phone / LAN buttons choose which connection carries everything else; each profile has its own exception list (AI tools and Omantel go through the phone in LAN + exceptions; update downloads always use the LAN), a Usage-tab right-click menu to move rows in and out of the exceptions, a user rules file merged over the built-in lists, an application icon, a roomier Usage grid, and today's total per connection on the card. See [the v4 spec](docs/superpowers/specs/2026-10-03-netroute-v4-profiles-design.md). ✅
 - **v5:** A network path map: a live drawing of the route from this PC to the internet over the LAN and the phone, opened from the card, with per-device health and an evidence-based diagnosis of where a connection stops answering. See [the v5 spec](docs/superpowers/specs/2026-10-13-netroute-v5-path-map-design.md). ✅
 - **v5.2:** A Local network tab in the path window: ping your router and chosen devices, scan the subnet, and tell a local cable or switch problem from a fault beyond the router. See [the v5.2 spec](docs/superpowers/specs/2026-10-14-netroute-v5-2-local-network-design.md). ✅
+- **v5.3:** A slow connection is no longer shown as dead: the latency check races both targets within one 4 s deadline, and a reply of 500 ms or more shows its figure in amber instead of "no reply". See [the v5.3 spec](docs/superpowers/specs/2026-10-20-netroute-v5-3-slow-vs-no-reply-design.md). ✅
 
 Design: [docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md](docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md)

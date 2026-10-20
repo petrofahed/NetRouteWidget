@@ -67,6 +67,17 @@ public class StatusPresenterTests
         Assert.Equal(new AdapterRow("Phone", "192.168.42.11", "no reply", Dot.Amber, true), view.Phone);
     }
 
+    [Theory]
+    [InlineData(499, Dot.Green)]
+    [InlineData(500, Dot.Amber)]
+    [InlineData(1250, Dot.Amber)]
+    public void Slow_reply_shows_its_figure_in_amber(int ms, Dot dot)
+    {
+        var view = StatusPresenter.Present(Status(lanMs: ms));
+
+        Assert.Equal(new AdapterRow("LAN", "192.168.86.42", $"{ms} ms", dot, false), view.Lan);
+    }
+
     [Fact]
     public void Ambiguous_adapter_asks_to_choose()
     {

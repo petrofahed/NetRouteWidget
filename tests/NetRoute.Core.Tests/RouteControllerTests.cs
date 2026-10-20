@@ -346,6 +346,22 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task A_slow_but_answering_preferred_adapter_is_not_a_failed_check()
+    {
+        _routes.BestV4 = 10;
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = 1500; // congested LAN: slow handshakes, traffic still flows
+
+        await RefreshTimes(controller, HealChecks * 2);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(1500, controller.Status.LanLatencyMs);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
     public async Task A_blip_shorter_than_the_window_never_heals()
     {
         var controller = Create();
