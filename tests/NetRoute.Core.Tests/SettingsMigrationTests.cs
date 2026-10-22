@@ -49,6 +49,27 @@ public class SettingsMigrationTests
     }
 
     [Fact]
+    public void A_wireless_match_wins_over_a_non_wireless_duplicate_mac()
+    {
+        // A Hyper-V vEthernet switch gets the same MAC as the physical NIC it binds to. Put the non-wireless
+        // duplicate first in the list to prove the wireless one isn't just picked by accident of ordering.
+        const string sharedMac = "AA-BB-CC-00-00-18";
+        var virtualDuplicate = TestAdapters.HyperV() with { Mac = sharedMac };
+        var wifi = TestAdapters.Wifi(mac: sharedMac);
+        var rule = new UserRule(UserRuleType.App, "Teams.exe");
+        var v5 = new AppSettings { Mode = RoutingMode.Lan, LanOverrideMac = sharedMac,
+            SmartRouting = new SmartRoutingSettings { PhoneUserRules = [rule] } };
+
+        var v6 = SettingsMigration.ToV6(v5, [virtualDuplicate, wifi]);
+
+        Assert.Equal(sharedMac, v6.WifiOverrideMac);
+        Assert.Null(v6.LanOverrideMac);
+        Assert.Equal(RoutingMode.Wifi, v6.Mode);
+        Assert.Equal([rule], v6.SmartRouting.WifiUserRules);
+        Assert.Equal(6, v6.SettingsVersion);
+    }
+
+    [Fact]
     public void No_lan_override_just_bumps_the_version()
     {
         var v5 = new AppSettings { Mode = RoutingMode.Phone };

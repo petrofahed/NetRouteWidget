@@ -13,9 +13,13 @@ public static class SettingsMigration
 
         if (settings.LanOverrideMac is { } mac)
         {
-            var adapter = adapters.FirstOrDefault(a => string.Equals(a.Mac, mac, StringComparison.OrdinalIgnoreCase));
-            if (adapter is null) return settings; // not present right now; retry next start
+            // Several present adapters can share a MAC (a Hyper-V vEthernet switch gets the same MAC as the physical
+            // NIC it binds to), so match on all of them first - collapsing straight to "the" adapter would wrongly
+            // fold "present but not wireless" into "absent" whenever a non-wireless duplicate happens to come first.
+            var matches = adapters.Where(a => string.Equals(a.Mac, mac, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matches.Count == 0) return settings; // not present right now; retry next start
 
+            var adapter = matches.FirstOrDefault(a => a.Kind == AdapterKind.Wireless) ?? matches[0];
             if (adapter.Kind != AdapterKind.Wireless) return settings with { SettingsVersion = AppSettings.CurrentVersion };
 
             var smartRouting = settings.SmartRouting with { WifiUserRules = [.. settings.SmartRouting.PhoneUserRules] };
