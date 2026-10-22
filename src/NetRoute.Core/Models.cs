@@ -25,8 +25,13 @@ public sealed record AdapterInfo(
     long? SpeedBps = null)
 {
     /// The CIDR text for an IPv4 address and prefix length, e.g. "192.168.86.0/24".
+    /// Throws when prefixLength is outside [0, 32]: C#'s shift-count masking would otherwise
+    /// silently fold an out-of-range value into a plausible-looking but wrong result.
     public static string? SubnetOf(string ipv4, int prefixLength)
     {
+        if (prefixLength is < 0 or > 32)
+            throw new ArgumentOutOfRangeException(nameof(prefixLength), prefixLength, "Must be between 0 and 32.");
+
         if (!IPAddress.TryParse(ipv4, out var address) || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
             return null;
 

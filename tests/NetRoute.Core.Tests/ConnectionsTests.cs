@@ -39,5 +39,11 @@ public class ConnectionsTests
     public void Subnet_of_an_address(string ip, int prefix, string expected) =>
         Assert.Equal(expected, AdapterInfo.SubnetOf(ip, prefix));
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(33)]
+    public void Subnet_of_rejects_an_out_of_range_prefix_length(int prefix) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => AdapterInfo.SubnetOf("192.168.86.42", prefix));
+
     public static TheoryData<ConnectionId> Every => new(Enum.GetValues<ConnectionId>());
 }
