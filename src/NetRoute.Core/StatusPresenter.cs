@@ -2,7 +2,7 @@ namespace NetRoute.Core;
 
 public enum Dot { Green, Amber, Gray }
 
-public enum TrayColor { Green, Blue, Gray }
+public enum TrayColor { Green, Blue, Gray, Purple }
 
 public sealed record AdapterRow(string Label, string Address, string Latency, Dot Dot, bool IsActive);
 
