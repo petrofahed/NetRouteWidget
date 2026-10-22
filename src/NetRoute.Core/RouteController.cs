@@ -23,7 +23,7 @@ public sealed class RouteController
     bool _hasRefreshed;
     bool _userChangePending;
 
-    /// The preferred adapter must fail this long without a single good check (while the backup answers) before
+    /// The preferred adapter must fail this long without a single good check (while a candidate answers) before
     /// healing. Short blips on a flaky link never move traffic onto the metered phone connection.
     public static readonly TimeSpan HealAfterFailingFor = TimeSpan.FromSeconds(60);
 
@@ -35,7 +35,7 @@ public sealed class RouteController
     /// say nothing about the link after it.
     public static readonly TimeSpan MaxGapBetweenChecks = TimeSpan.FromSeconds(30);
 
-    /// Consecutive good checks of the preferred adapter before healing ends.
+    /// Consecutive good checks before healing ends (recovery to main) or a higher-ranked candidate is stepped up to.
     public const int RecoverAfterGoodChecks = 3;
 
     /// Upper limit for the good checks needed before healing ends, however often healing repeats.
@@ -47,11 +47,11 @@ public sealed class RouteController
     /// Consecutive missed latency checks before the card shows "no reply"; a single miss keeps the last latency.
     public const int NoReplyAfterMissedChecks = 2;
 
-    int _phoneMisses;
-    int _lanMisses;
+    readonly Dictionary<ConnectionId, int> _misses = new();
 
     // Heal state is read and written only while holding _gate.
     bool _healing;
+    ConnectionId? _healTarget;
     int _healCount;
     DateTimeOffset? _failingSince;
     DateTimeOffset? _lastCheckAt;
@@ -60,7 +60,10 @@ public sealed class RouteController
     bool _hadHeal;
     bool _healSticky;
 
-    /// Good checks of the preferred adapter that end healing now; grows while healing keeps repeating.
+    /// Consecutive good checks per candidate ranked above the current heal target; cleared whenever the target changes.
+    readonly Dictionary<ConnectionId, int> _stepUpCounts = new();
+
+    /// Good checks that end healing now (recovery to main); grows while healing keeps repeating.
     internal int RecoverThreshold => _recoverThreshold;
 
     public RouteController(
@@ -115,27 +118,28 @@ public sealed class RouteController
             var mode = Settings.Mode;
             var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
 
-            var (phoneMs, lanMs) = measureLatency
+            var rawLatencies = measureLatency
                 ? await MeasureAsync(detection, ct)
-                : (detection.Phone is null ? null : before.PhoneLatencyMs, detection.Lan is null ? null : before.LanLatencyMs);
+                : Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null ? (int?)null : before.LatencyMs.GetValueOrDefault(id));
 
-            var stickyHealStarted = UpdateHealing(mode, detection, phoneMs, lanMs, before.CanModify, measureLatency);
+            var stickyHealStarted = UpdateHealing(mode, detection, rawLatencies, before.CanModify, measureLatency);
 
             // Healing above used the raw results; the card only reports "no reply" once a miss repeats.
-            var (shownPhoneMs, shownLanMs) = measureLatency
-                ? (Smooth(ref _phoneMisses, phoneMs, before.PhoneLatencyMs), Smooth(ref _lanMisses, lanMs, before.LanLatencyMs))
-                : (phoneMs, lanMs);
-            var effective = EffectiveMode(mode);
+            var shown = measureLatency
+                ? Connections.All.ToDictionary(id => id, id => Smooth(id, rawLatencies.GetValueOrDefault(id), before.LatencyMs.GetValueOrDefault(id)))
+                : rawLatencies;
+
+            var carrier = NetworkStatus.CarrierFor(mode, _healTarget, detection);
 
             string? error = null;
-            if (before.CanModify && !_engine.IsInSync(effective, detection))
+            if (before.CanModify && !_engine.IsInSync(mode, detection, carrier: _healTarget))
             {
-                _log($"Metrics differ from {effective} metrics; applying");
-                var result = _engine.Apply(effective, detection);
+                _log($"Metrics differ from {CarrierName(mode, detection)} metrics; applying");
+                var result = _engine.Apply(mode, detection, carrier: _healTarget);
                 if (!result.Success)
                 {
                     error = result.Error;
-                    _log($"Apply {effective} failed: {result.Error}");
+                    _log($"Apply {CarrierName(mode, detection)} failed: {result.Error}");
                 }
             }
 
@@ -147,12 +151,10 @@ public sealed class RouteController
                 Adapters = detection,
                 ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
-                LatencyMs = new Dictionary<ConnectionId, int?>
-                {
-                    [ConnectionId.Phone] = shownPhoneMs,
-                    [ConnectionId.Lan] = shownLanMs,
-                },
+                LatencyMs = shown,
                 Error = error,
+                HealTarget = _healTarget,
+                Carrier = carrier,
             };
 
             // Right after a user mode change the route table may settle a moment later:
@@ -160,7 +162,7 @@ public sealed class RouteController
             var settlingAfterUserChange = _userChangePending && !after.IsFallback;
             _userChangePending = false;
             // A heal turning sticky gets its own toast in place of the path-change one: one toast, not two.
-            var toast = stickyHealStarted ? StatusPresenter.StickyHealToast(mode)
+            var toast = stickyHealStarted ? StatusPresenter.StickyHealToast(mode, _healTarget!.Value)
                 : _hasRefreshed && !settlingAfterUserChange ? StatusPresenter.ToastFor(before, after)
                 : null;
             Publish(after, toast);
@@ -208,6 +210,8 @@ public sealed class RouteController
                 ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
                 Error = result.Error,
+                HealTarget = _healTarget,
+                Carrier = NetworkStatus.CarrierFor(mode, _healTarget, detection),
             }, toast: null);
             return result;
         }
@@ -223,14 +227,14 @@ public sealed class RouteController
         }
     }
 
-    /// Saves the user's adapter choice. An adapter that stops being phone/LAN is reset to the
+    /// Saves the user's adapter choice. An adapter that stops being present in its slot is reset to the
     /// automatic metric so a stale preferred metric cannot keep winning.
     public async Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default)
     {
         void SaveOverrides()
         {
-            UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac });
-            _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}");
+            UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac, WifiOverrideMac = overrides.WifiMac });
+            _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}, wifi={overrides.WifiMac ?? "auto"}");
         }
 
         if (Status.CanModify)
@@ -239,14 +243,14 @@ public sealed class RouteController
             try
             {
                 // Inside the gate: a refresh already queued must still see the old overrides,
-                // so Status.Adapters below is the pair we are replacing, not the new one.
+                // so Status.Adapters below is the set we are replacing, not the new one.
                 var previous = Status.Adapters;
                 ResetHealing();
                 SaveOverrides();
                 var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
-                foreach (var old in new[] { previous.Phone, previous.Lan })
+                foreach (var (_, old) in previous.Present)
                 {
-                    if (old is null || old.Index == next.Phone?.Index || old.Index == next.Lan?.Index) continue;
+                    if (next.Present.Any(p => p.Adapter.Index == old.Index)) continue;
                     var reset = _engine.Reset(old);
                     _log(reset.Success ? $"Reset {old.Name} to automatic metric" : $"Reset {old.Name} failed: {reset.Error}");
                 }
@@ -268,45 +272,45 @@ public sealed class RouteController
         await RefreshAsync(measureLatency: true, ct);
     }
 
-    /// While healing, the backup adapter gets the preferred metric; the saved mode never changes.
-    RoutingMode EffectiveMode(RoutingMode mode) => !_healing ? mode : mode switch
-    {
-        RoutingMode.Phone => RoutingMode.Lan,
-        RoutingMode.Lan => RoutingMode.Phone,
-        _ => mode,
-    };
+    static string CarrierName(RoutingMode mode, DetectionResult adapters) =>
+        Connections.Of(mode) is { } main ? Name(adapters, main) : mode.ToString();
+
+    static string Name(DetectionResult adapters, ConnectionId id) => adapters.Adapter(id)?.Name ?? Connections.Label(id);
 
     /// Drops all heal state, including the backoff: an explicit user action or scope loss starts fresh.
     void ResetHealing()
     {
         _healing = false;
+        _healTarget = null;
         _healCount = 0;
         _failingSince = null;
         _recoverThreshold = RecoverAfterGoodChecks;
         _checksSinceHealEnded = 0;
         _hadHeal = false;
         _healSticky = false;
+        _stepUpCounts.Clear();
     }
 
     /// Returns true when this check started a sticky heal.
-    bool UpdateHealing(RoutingMode mode, DetectionResult adapters, int? phoneMs, int? lanMs, bool canModify, bool measured)
+    bool UpdateHealing(RoutingMode mode, DetectionResult adapters, Dictionary<ConnectionId, int?> latencies, bool canModify, bool measured)
     {
-        var (preferred, backup, preferredMs, backupMs) = mode switch
-        {
-            RoutingMode.Phone => (adapters.Phone, adapters.Lan, phoneMs, lanMs),
-            RoutingMode.Lan => (adapters.Lan, adapters.Phone, lanMs, phoneMs),
-            _ => ((AdapterInfo?)null, (AdapterInfo?)null, (int?)null, (int?)null),
-        };
-
-        if (!canModify || !Settings.AutoHeal || preferred is null || backup is null)
+        var main = Connections.Of(mode);
+        if (!canModify || !Settings.AutoHeal || main is null)
         {
             if (_healing)
-                _log(Settings.AutoHeal ? "Auto-heal ended: preferred or backup adapter unavailable" : "Auto-heal ended: switched off");
+                _log(Settings.AutoHeal ? "Auto-heal ended: switching mode or losing control privilege" : "Auto-heal ended: switched off");
             ResetHealing();
             return false;
         }
-        // No IPv4 yet (e.g. DHCP pending after a replug): nothing was measured, so it is no evidence either way.
-        if (!measured || preferred.IPv4 is null) return false;
+
+        bool Answering(ConnectionId id) =>
+            adapters.Adapter(id) is { IPv4: not null } && latencies.GetValueOrDefault(id) is not null;
+
+        var candidates = Connections.FallbackOrder.Where(id => id != main.Value && adapters.Adapter(id) is { IPv4: not null }).ToList();
+
+        // No IPv4 yet on the main adapter (e.g. DHCP pending after a replug): nothing was measured for it,
+        // so this check is no evidence either way. An absent main adapter is simply "not answering" below.
+        if (!measured || adapters.Adapter(main.Value) is { IPv4: null }) return false;
 
         var checkedAt = _time.GetUtcNow();
         var afterPause = _lastCheckAt is { } previous && checkedAt - previous > MaxGapBetweenChecks;
@@ -326,7 +330,8 @@ public sealed class RouteController
             }
 
             var now = _time.GetUtcNow();
-            if (preferredMs is null && backupMs is not null)
+            var failing = !Answering(main.Value) && candidates.Any(Answering);
+            if (failing)
             {
                 _healCount++;
                 _failingSince ??= now;
@@ -337,16 +342,20 @@ public sealed class RouteController
                 _failingSince = null;
             }
             if (_healCount < HealAfterFailedChecks || now - _failingSince < HealAfterFailingFor) return false;
+
+            var target = candidates.First(Answering);
             _healing = true;
+            _healTarget = target;
             _healCount = 0;
             _failingSince = null;
+            _stepUpCounts.Clear();
             if (_hadHeal && _checksSinceHealEnded < CalmChecksToResetBackoff)
             {
                 if (_recoverThreshold == MaxRecoverAfterGoodChecks)
                 {
                     // Switching back keeps failing even after the longest wait: stop cycling until the user retries.
                     _healSticky = true;
-                    _log($"Auto-heal: {preferred.Name} keeps losing internet; staying on {backup.Name} until the user retries");
+                    _log($"Auto-heal: {Name(adapters, main.Value)} keeps losing internet; staying on {Name(adapters, target)} until the user retries");
                 }
                 else
                 {
@@ -354,21 +363,72 @@ public sealed class RouteController
                     _log($"Auto-heal: repeated failure; waiting for {_recoverThreshold} good checks before switching back");
                 }
             }
-            _log($"Auto-heal: {preferred.Name} has no internet; preferring {backup.Name}");
+            _log($"Auto-heal: {Name(adapters, main.Value)} has no internet; preferring {Name(adapters, target)}");
             return _healSticky;
         }
-        else if (backupMs is null && preferredMs is not null)
+
+        var currentTarget = _healTarget!.Value;
+
+        // Step 1: has main recovered? Threshold-counted, skipped while sticky. Only ends the heal once the
+        // threshold is reached; otherwise it falls through to steps 2/3 on this same tick.
+        if (!_healSticky)
         {
-            // The backup itself died while the preferred adapter answers: do not wait for the threshold.
-            EndHeal();
-            _log($"Auto-heal ended: {backup.Name} has no internet but {preferred.Name} answers");
+            _healCount = Answering(main.Value) ? _healCount + 1 : 0;
+            if (_healCount >= _recoverThreshold)
+            {
+                var mainName = Name(adapters, main.Value);
+                EndHeal();
+                _log($"Auto-heal ended: {mainName} has internet again");
+                return false;
+            }
         }
-        else if (!_healSticky) // a sticky heal ends only through the rule above or ResetHealing
+
+        // Step 2: has the current target stopped answering? Immediate, not threshold-counted, and not gated by sticky.
+        if (!Answering(currentTarget))
         {
-            _healCount = preferredMs is not null ? _healCount + 1 : 0;
-            if (_healCount < _recoverThreshold) return false;
-            EndHeal();
-            _log($"Auto-heal ended: {preferred.Name} has internet again");
+            ConnectionId? next = null;
+            foreach (var id in candidates)
+            {
+                if (id == currentTarget || !Answering(id)) continue;
+                next = id;
+                break;
+            }
+            if (next is { } n)
+            {
+                _log($"Auto-heal: {Name(adapters, currentTarget)} lost internet; stepping down to {Name(adapters, n)}");
+                _healTarget = n;
+                _stepUpCounts.Clear();
+            }
+            else
+            {
+                var targetName = Name(adapters, currentTarget);
+                EndHeal();
+                _log($"Auto-heal ended: {targetName} has no internet and nothing else answers");
+            }
+            return false;
+        }
+
+        // Step 3: has a candidate ranked above the current target answered RecoverAfterGoodChecks times in a row?
+        var targetRank = Connections.FallbackOrder.ToList().IndexOf(currentTarget);
+        ConnectionId? promoted = null;
+        foreach (var c in Connections.FallbackOrder.Take(targetRank).Where(id => id != main.Value))
+        {
+            if (Answering(c))
+            {
+                var count = _stepUpCounts.GetValueOrDefault(c) + 1;
+                _stepUpCounts[c] = count;
+                if (promoted is null && count >= RecoverAfterGoodChecks) promoted = c;
+            }
+            else
+            {
+                _stepUpCounts[c] = 0;
+            }
+        }
+        if (promoted is { } p)
+        {
+            _log($"Auto-heal: {Name(adapters, p)} is back; stepping up from {Name(adapters, currentTarget)}");
+            _healTarget = p;
+            _stepUpCounts.Clear();
         }
         return false;
     }
@@ -377,27 +437,32 @@ public sealed class RouteController
     void EndHeal()
     {
         _healing = false;
+        _healTarget = null;
         _healCount = 0;
         _hadHeal = true;
         _checksSinceHealEnded = 0;
         _healSticky = false;
+        _stepUpCounts.Clear();
     }
 
-    static int? Smooth(ref int misses, int? measured, int? previous)
+    int? Smooth(ConnectionId id, int? measured, int? previous)
     {
         if (measured is not null)
         {
-            misses = 0;
+            _misses[id] = 0;
             return measured;
         }
-        return ++misses >= NoReplyAfterMissedChecks ? null : previous;
+        var misses = _misses.GetValueOrDefault(id) + 1;
+        _misses[id] = misses;
+        return misses >= NoReplyAfterMissedChecks ? null : previous;
     }
 
-    async Task<(int?, int?)> MeasureAsync(DetectionResult adapters, CancellationToken ct)
+    async Task<Dictionary<ConnectionId, int?>> MeasureAsync(DetectionResult adapters, CancellationToken ct)
     {
-        var phone = Probe(adapters.Phone, ct);
-        var lan = Probe(adapters.Lan, ct);
-        return (await phone, await lan);
+        var pending = adapters.Present.Select(p => (p.Id, Task: Probe(p.Adapter, ct))).ToList();
+        var result = new Dictionary<ConnectionId, int?>();
+        foreach (var (id, task) in pending) result[id] = await task;
+        return result;
     }
 
     Task<int?> Probe(AdapterInfo? adapter, CancellationToken ct) =>

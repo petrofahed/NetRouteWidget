@@ -760,4 +760,171 @@ public class RouteControllerTests
         Assert.Equal(InternetPath.Lan, controller.Status.ActivePath);
         Assert.True(controller.Status.IsFallback);
     }
+
+    /// Adds the third, Wi-Fi connection to the fixture: present, with an IPv4 and a 20 ms probe reply.
+    void AddWifi()
+    {
+        _adapters.Adapters.Add(TestAdapters.Wifi());
+        _metrics.Add(18);
+        _probe.BySource["192.168.1.20"] = 20;
+    }
+
+    [Fact]
+    public async Task Lan_failing_heals_to_wifi_not_phone()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+
+        await RefreshTimes(controller, HealChecks);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(ConnectionId.Wifi, controller.Status.HealTarget);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(18, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, 60), _metrics.Get(31, IpFamily.IPv4));
+        // Note: ToastFor (unchanged in this task) does not yet name Wi-Fi for a non-Phone/Lan path;
+        // that generic rewrite is Task 10. Not asserting toast text here.
+    }
+
+    [Fact]
+    public async Task Wifi_target_dying_steps_down_to_phone_at_once()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+        await RefreshTimes(controller, HealChecks);
+        Assert.Equal(ConnectionId.Wifi, controller.Status.HealTarget);
+
+        _probe.BySource["192.168.1.20"] = null; // Wi-Fi, the current heal target, dies
+        await RefreshTimes(controller, 1);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(ConnectionId.Phone, controller.Status.HealTarget);
+    }
+
+    [Fact]
+    public async Task Wifi_back_steps_up_after_three_good_checks()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null; // LAN (main) fails
+        _probe.BySource["192.168.1.20"] = null;  // Wi-Fi is dead at the moment healing starts
+        await RefreshTimes(controller, HealChecks);
+        Assert.Equal(ConnectionId.Phone, controller.Status.HealTarget);
+
+        _probe.BySource["192.168.1.20"] = 20; // Wi-Fi answers again
+        await RefreshTimes(controller, 2);
+        Assert.Equal(ConnectionId.Phone, controller.Status.HealTarget);
+
+        await RefreshTimes(controller, 1);
+        Assert.Equal(ConnectionId.Wifi, controller.Status.HealTarget);
+    }
+
+    [Fact]
+    public async Task Step_moves_do_not_grow_the_backoff()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+        await RefreshTimes(controller, HealChecks);
+        Assert.Equal(ConnectionId.Wifi, controller.Status.HealTarget);
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+
+        _probe.BySource["192.168.1.20"] = null; // step down
+        await RefreshTimes(controller, 1);
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(ConnectionId.Phone, controller.Status.HealTarget);
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+
+        _probe.BySource["192.168.1.20"] = 20; // step up, three good checks later
+        await RefreshTimes(controller, 3);
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(ConnectionId.Wifi, controller.Status.HealTarget);
+        Assert.Equal(RouteController.RecoverAfterGoodChecks, controller.RecoverThreshold);
+    }
+
+    [Fact]
+    public async Task No_candidate_answering_means_no_heal()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+        _probe.BySource["192.168.1.20"] = null;
+        _probe.BySource["192.168.42.11"] = null;
+
+        await RefreshTimes(controller, HealChecks * 2);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Null(controller.Status.HealTarget);
+    }
+
+    [Fact]
+    public async Task Heal_skips_wifi_without_ipv4()
+    {
+        _adapters.Adapters.Add(TestAdapters.Wifi() with { IPv4 = null }); // present, but DHCP never answered
+        _metrics.Add(18);
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+
+        await RefreshTimes(controller, HealChecks);
+
+        Assert.True(controller.Status.IsHealing);
+        Assert.Equal(ConnectionId.Phone, controller.Status.HealTarget);
+    }
+
+    [Fact]
+    public async Task Wifi_main_unplugged_heals_to_lan_then_phone()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Wifi, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 18); // Wi-Fi, the main connection, unplugged
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(ConnectionId.Lan, controller.Status.Carrier); // metric fallback order, no heal needed yet
+        Assert.Null(controller.Status.HealTarget);
+
+        _probe.BySource["192.168.86.42"] = null; // now LAN fails too, for the full window
+        await RefreshTimes(controller, HealChecks);
+
+        Assert.Equal(ConnectionId.Phone, controller.Status.HealTarget);
+    }
+
+    [Fact]
+    public async Task Lan_recovering_ends_the_heal_from_wifi()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _probe.BySource["192.168.86.42"] = null;
+        await RefreshTimes(controller, HealChecks);
+        Assert.Equal(ConnectionId.Wifi, controller.Status.HealTarget);
+
+        _probe.BySource["192.168.86.42"] = 12; // LAN (main) answers again
+        await RefreshTimes(controller, RouteController.RecoverAfterGoodChecks);
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Null(controller.Status.HealTarget);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(10, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Choosing_not_used_for_wifi_resets_its_metric()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetOverridesAsync(new AdapterOverrides(null, null, AdapterOverrides.NotUsed));
+
+        Assert.Contains((18, IpFamily.IPv4, (uint?)null), _metrics.SetCalls);
+    }
 }

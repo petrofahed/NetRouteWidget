@@ -49,9 +49,9 @@ public static class StatusPresenter
     }
 
     /// Message for the moment a heal becomes sticky: the app stops switching back on its own.
-    public static string StickyHealToast(RoutingMode mode) => mode == RoutingMode.Lan
-        ? "LAN keeps losing internet — staying on Phone. Click LAN to retry."
-        : "Phone keeps losing internet — staying on LAN. Click Phone to retry.";
+    public static string StickyHealToast(RoutingMode mode, ConnectionId target) =>
+        $"{Connections.Label(Connections.Of(mode)!.Value)} keeps losing internet — staying on {Connections.Label(target)}. " +
+        $"Click {Connections.Label(Connections.Of(mode)!.Value)} to retry.";
 
     static string HeaderText(NetworkStatus s)
     {

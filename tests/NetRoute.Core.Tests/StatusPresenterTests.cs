@@ -241,10 +241,10 @@ public class StatusPresenterTests
     }
 
     [Theory]
-    [InlineData(RoutingMode.Phone, "Phone keeps losing internet — staying on LAN. Click Phone to retry.")]
-    [InlineData(RoutingMode.Lan, "LAN keeps losing internet — staying on Phone. Click LAN to retry.")]
-    public void Sticky_heal_toast_names_the_retry_button(RoutingMode mode, string toast)
+    [InlineData(RoutingMode.Phone, ConnectionId.Lan, "Phone keeps losing internet — staying on LAN. Click Phone to retry.")]
+    [InlineData(RoutingMode.Lan, ConnectionId.Phone, "LAN keeps losing internet — staying on Phone. Click LAN to retry.")]
+    public void Sticky_heal_toast_names_the_retry_button(RoutingMode mode, ConnectionId target, string toast)
     {
-        Assert.Equal(toast, StatusPresenter.StickyHealToast(mode));
+        Assert.Equal(toast, StatusPresenter.StickyHealToast(mode, target));
     }
 }

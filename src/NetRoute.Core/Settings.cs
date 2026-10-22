@@ -9,6 +9,7 @@ public sealed record AppSettings
     public RoutingMode Mode { get; init; } = RoutingMode.Phone;
     public string? PhoneOverride { get; init; }
     public string? LanOverrideMac { get; init; }
+    public string? WifiOverrideMac { get; init; }
     public double? CardLeft { get; init; }
     public double? CardTop { get; init; }
     public bool CardVisible { get; init; } = true;
@@ -23,7 +24,7 @@ public sealed record AppSettings
     public IReadOnlyList<LocalDevice> LocalDevices { get; init; } = Array.Empty<LocalDevice>();
 
     [JsonIgnore]
-    public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac);
+    public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac, WifiOverrideMac);
 }
 
 /// Unreadable: the file exists but could not be read (locked, access denied). It was left untouched, so the caller
