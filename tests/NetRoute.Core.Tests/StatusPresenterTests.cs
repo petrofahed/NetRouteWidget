@@ -14,6 +14,15 @@ public class StatusPresenterTests
             path, ipv6, new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = phone ? phoneMs : null, [ConnectionId.Lan] = lan ? lanMs : null },
             CanModify: true, error);
 
+    /// Three present adapters (Phone 38ms, LAN 12ms, Wi-Fi 20ms), ActivePath set to the mode's path.
+    static NetworkStatus StatusWith3(RoutingMode mode) =>
+        new(mode,
+            DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None, TestAdapters.Wifi(), DetectionIssue.None),
+            Connections.Of(mode) is { } id ? Connections.PathOf(id) : InternetPath.None,
+            InternetPath.None,
+            new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = 38, [ConnectionId.Lan] = 12, [ConnectionId.Wifi] = 20 },
+            CanModify: true, null);
+
     [Fact]
     public void Normal_phone_mode()
     {
@@ -247,4 +256,80 @@ public class StatusPresenterTests
     {
         Assert.Equal(toast, StatusPresenter.StickyHealToast(mode, target));
     }
+
+    [Theory]
+    [InlineData(RoutingMode.Phone, TrayColor.Green)]
+    [InlineData(RoutingMode.Lan, TrayColor.Blue)]
+    [InlineData(RoutingMode.Wifi, TrayColor.Purple)]
+    [InlineData(RoutingMode.Auto, TrayColor.Gray)]
+    public void Tray_colour_per_mode(RoutingMode mode, TrayColor color) =>
+        Assert.Equal(color, StatusPresenter.Present(StatusWith3(mode)).TrayColor);
+
+    [Fact]
+    public void Wifi_mode_header() =>
+        Assert.Equal("Internet via Wi-Fi", StatusPresenter.Present(StatusWith3(RoutingMode.Wifi) with { ActivePath = InternetPath.Wifi }).Header);
+
+    [Fact]
+    public void Healed_onto_wifi_header()
+    {
+        var view = StatusPresenter.Present(StatusWith3(RoutingMode.Lan) with { ActivePath = InternetPath.Wifi, IsHealing = true });
+
+        Assert.Equal("Internet via Wi-Fi (LAN has no internet)", view.Header);
+    }
+
+    [Fact]
+    public void Wifi_row_uses_the_network_name()
+    {
+        var withName = StatusPresenter.Present(StatusWith3(RoutingMode.Wifi) with { WifiNetwork = "pzhome" });
+        var withoutName = StatusPresenter.Present(StatusWith3(RoutingMode.Wifi));
+
+        Assert.Equal("pzhome", withName.Rows.Single(r => r.Id == ConnectionId.Wifi).Row.Label);
+        Assert.Equal("Wi-Fi", withoutName.Rows.Single(r => r.Id == ConnectionId.Wifi).Row.Label);
+    }
+
+    [Fact]
+    public void Unused_wifi_has_no_row()
+    {
+        var view = StatusPresenter.Present(Status());
+
+        Assert.Equal([ConnectionId.Phone, ConnectionId.Lan], view.Rows.Select(r => r.Id).ToArray());
+    }
+
+    [Fact]
+    public void Toast_when_lan_lost_and_wifi_took_over()
+    {
+        var before = StatusWith3(RoutingMode.Lan);
+        var after = before with { ActivePath = InternetPath.Wifi };
+
+        Assert.Equal("LAN lost internet — internet via Wi-Fi", StatusPresenter.ToastFor(before, after));
+    }
+
+    [Fact]
+    public void Sticky_toast_names_the_target() =>
+        Assert.Equal("LAN keeps losing internet — staying on Wi-Fi. Click LAN to retry.",
+            StatusPresenter.StickyHealToast(RoutingMode.Lan, ConnectionId.Wifi));
+
+    [Fact]
+    public void Tooltip_lists_every_other_connection()
+    {
+        var view = StatusPresenter.Present(StatusWith3(RoutingMode.Wifi) with { ActivePath = InternetPath.Wifi });
+
+        Assert.Equal("Internet: Wi-Fi (20 ms) · Phone ready · LAN ready", view.Tooltip);
+    }
+
+    [Fact]
+    public void Tooltip_has_no_dangling_separator_when_nothing_else_is_used()
+    {
+        var view = StatusPresenter.Present(Status(lan: false, missingLanIssue: DetectionIssue.NotUsed));
+
+        Assert.Equal("Internet: Phone (38 ms)", view.Tooltip);
+    }
+
+    [Theory]
+    [InlineData(RoutingMode.Lan, InternetPath.Phone, InternetPath.Lan, "LAN back — internet via LAN")]
+    [InlineData(RoutingMode.Auto, InternetPath.Lan, InternetPath.Phone, "Internet now via Phone")]
+    [InlineData(RoutingMode.Auto, InternetPath.Phone, InternetPath.Lan, "Internet now via LAN")]
+    [InlineData(RoutingMode.Phone, InternetPath.Phone, InternetPath.Other, "Internet now via another adapter (VPN?)")]
+    public void Toast_covers_the_remaining_switch_arms(RoutingMode mode, InternetPath before, InternetPath after, string toast) =>
+        Assert.Equal(toast, StatusPresenter.ToastFor(Status(mode: mode, path: before), Status(mode: mode, path: after)));
 }
