@@ -39,3 +39,10 @@ public interface ISubnetRoutes
     /// Sets that route's RouteMetric in ActiveStore. Throws when Windows rejects it.
     void SetOnLinkMetric(int ifIndex, string prefix, uint metric);
 }
+
+public interface INetworkNameSource
+{
+    /// The Windows connection-profile name for the network this adapter is joined to (for Wi-Fi, the SSID);
+    /// null when it can't be determined (not connected, lookup failed, etc.). Never throws.
+    string? NameOf(AdapterInfo adapter);
+}

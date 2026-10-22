@@ -18,11 +18,17 @@ public sealed class RouteController
     readonly Action<string> _log;
     readonly TimeProvider _time;
     readonly RoutePin? _pin;
+    readonly INetworkNameSource? _names;
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly Lock _settingsLock = new();
     AppSettings _settings;
     bool _hasRefreshed;
     bool _userChangePending;
+
+    // Wi-Fi network name lookup is cached by (Index, IPv4) so the WMI query only runs again after a
+    // reconnect (a changed IPv4), not on every ~5 s poll tick while nothing about the connection changed.
+    (int Index, string? IPv4)? _lastWifiKey;
+    string? _wifiNetworkName;
 
     /// The preferred adapter must fail this long without a single good check (while a candidate answers) before
     /// healing. Short blips on a flaky link never move traffic onto the metered phone connection.
@@ -70,7 +76,7 @@ public sealed class RouteController
     public RouteController(
         IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
         AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log, TimeProvider? time = null,
-        ISubnetRoutes? subnetRoutes = null)
+        ISubnetRoutes? subnetRoutes = null, INetworkNameSource? names = null)
     {
         _time = time ?? TimeProvider.System;
         _adapters = adapters;
@@ -81,6 +87,7 @@ public sealed class RouteController
         _persist = persist;
         _log = log;
         _pin = subnetRoutes is not null ? new RoutePin(subnetRoutes, log) : null;
+        _names = names;
         Status = NetworkStatus.Initial(settings.Mode, canModify);
     }
 
@@ -120,6 +127,7 @@ public sealed class RouteController
             var before = Status;
             var mode = Settings.Mode;
             var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
+            UpdateWifiNetworkName(detection);
 
             var rawLatencies = measureLatency
                 ? await MeasureAsync(detection, ct)
@@ -161,6 +169,7 @@ public sealed class RouteController
                 Error = error,
                 HealTarget = _healTarget,
                 Carrier = carrier,
+                WifiNetwork = _wifiNetworkName,
             };
 
             // Right after a user mode change the route table may settle a moment later:
@@ -311,6 +320,27 @@ public sealed class RouteController
             _log("ReleasePin: could not acquire the controller gate in time; releasing the route pin unsynchronized");
             _pin.Release();
         }
+    }
+
+    /// Refreshes `_wifiNetworkName` from `_names`, but only re-queries when the Wi-Fi adapter's
+    /// (Index, IPv4) pair has changed since the last lookup - a reconnect gets a fresh name, an
+    /// unchanged connection does not re-run the WMI query on every poll tick. No Wi-Fi adapter at
+    /// all clears the cache, so a later reconnect (even to the same Index/IPv4 as a past session)
+    /// is not served a stale name left over from before the disconnect.
+    void UpdateWifiNetworkName(DetectionResult detection)
+    {
+        if (detection.Wifi is not { } wifi)
+        {
+            _lastWifiKey = null;
+            _wifiNetworkName = null;
+            return;
+        }
+
+        var key = (wifi.Index, wifi.IPv4);
+        if (_lastWifiKey == key) return;
+
+        _lastWifiKey = key;
+        _wifiNetworkName = _names?.NameOf(wifi);
     }
 
     static string CarrierName(RoutingMode mode, DetectionResult adapters) =>

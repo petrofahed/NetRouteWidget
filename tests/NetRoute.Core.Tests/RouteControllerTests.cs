@@ -30,10 +30,10 @@ public class RouteControllerTests
         _probe.BySource["192.168.86.42"] = 12;
     }
 
-    RouteController Create(AppSettings? settings = null, bool canModify = true)
+    RouteController Create(AppSettings? settings = null, bool canModify = true, INetworkNameSource? names = null)
     {
         var controller = new RouteController(_adapters, _metrics, _routes, _probe,
-            settings ?? new AppSettings(), canModify, _saved.Add, _ => { }, _clock);
+            settings ?? new AppSettings(), canModify, _saved.Add, _ => { }, _clock, names: names);
         controller.AutoSwitched += _toasts.Add;
         return controller;
     }
@@ -1004,5 +1004,36 @@ public class RouteControllerTests
         await controller.SetOverridesAsync(new AdapterOverrides(null, null, AdapterOverrides.NotUsed));
 
         Assert.Contains((18, IpFamily.IPv4, (uint?)null), _metrics.SetCalls);
+    }
+
+    [Fact]
+    public async Task Wifi_network_name_is_published()
+    {
+        AddWifi();
+        var names = new FakeNetworkNameSource { Result = "pzhome" };
+        var controller = Create(new AppSettings { WifiOverrideMac = "AA-BB-CC-00-00-18" }, names: names);
+
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal("pzhome", controller.Status.WifiNetwork);
+    }
+
+    [Fact]
+    public async Task Name_is_looked_up_again_only_after_a_reconnect()
+    {
+        AddWifi();
+        var names = new FakeNetworkNameSource { Result = "pzhome" };
+        var controller = Create(new AppSettings { WifiOverrideMac = "AA-BB-CC-00-00-18" }, names: names);
+
+        await controller.RefreshAsync(measureLatency: true);
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(1, names.CallCount);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 18);
+        _adapters.Adapters.Add(TestAdapters.Wifi() with { IPv4 = "192.168.1.99" }); // simulated reconnect
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(2, names.CallCount);
     }
 }

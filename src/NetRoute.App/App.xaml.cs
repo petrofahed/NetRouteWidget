@@ -75,7 +75,8 @@ public partial class App : Application
 
             var controller = _controller = new RouteController(
                 new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
-                loaded.Settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info, subnetRoutes: new WindowsSubnetRoutes());
+                loaded.Settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info,
+                subnetRoutes: new WindowsSubnetRoutes(), names: new WindowsNetworkNames());
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 

@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
+    <PackageReference Include="System.Management" Version="9.0.0" />
   </ItemGroup>
 
   <!-- The only project that downloads sing-box; the App and the tests reference Core, so it is fetched once. -->

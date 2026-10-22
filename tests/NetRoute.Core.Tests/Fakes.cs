@@ -77,6 +77,18 @@ sealed class FakeSubnetRoutes : ISubnetRoutes
     }
 }
 
+sealed class FakeNetworkNameSource : INetworkNameSource
+{
+    public string? Result { get; set; }
+    public int CallCount { get; private set; }
+
+    public string? NameOf(AdapterInfo adapter)
+    {
+        CallCount++;
+        return Result;
+    }
+}
+
 sealed class BlockingLatencyProbe : ILatencyProbe
 {
     readonly TaskCompletionSource _gate = new();
