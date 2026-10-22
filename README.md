@@ -3,7 +3,7 @@
 A small Windows tray widget for PCs that are connected to **multiple networks at once**, such as a wired LAN, a phone's USB tethering, and (from v6.0) Wi-Fi as a third path.
 
 - Sends **internet traffic through the phone**, through the LAN, through Wi-Fi, or lets Windows decide, with one click.
-- Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** the whole time, even when Wi-Fi joins the same home network as the LAN cable.
+- Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** in Phone, LAN and Wi-Fi mode, even when Wi-Fi joins the same home network as the LAN cable (Windows default hands routing back to Windows entirely, so this does not apply there).
 - Shows which connection is carrying internet right now, and the latency through each. The latency has two amber states:
   - **"1250 ms" in amber:** the connection answers, but slowly (500 ms or more, for example a congested line). Traffic still flows.
   - **"no reply" in amber:** two checks in a row got no answer within 4 seconds. This is also what Smart routing treats as the LAN being offline. A slow answer never counts as a failure, for Smart routing or for auto-heal.
@@ -36,7 +36,7 @@ The widget mainly changes **interface metrics**, Windows' priority numbers for e
 | **Wi-Fi** (v6.0) | Wi-Fi metric 5, LAN 50, phone 60 |
 | **Windows default** (tray menu only) | restores Windows' own automatic metrics (what Restore-Network.cmd does); the card has no Auto button, and Smart routing pauses while it is active |
 
-It never deletes routes, so the other connections always remain a working fallback. Local-subnet traffic (your cameras, NAS, printer and so on) stays on the LAN cable in every mode — even when Wi-Fi joins the same home network as the LAN, which would otherwise let Wi-Fi's lower metric win that traffic. NetRoute checks for that overlap and, only when it is present, pins the LAN's own local-subnet route so it keeps winning; it un-pins the same route the moment the overlap goes away, on quit, or when you switch to Windows default.
+It never deletes routes, so the other connections always remain a working fallback. Local-subnet traffic (your cameras, NAS, printer and so on) stays on the LAN cable in Phone, LAN and Wi-Fi mode, and through healing between them — even when Wi-Fi joins the same home network as the LAN, which would otherwise let Wi-Fi's lower metric win that traffic. NetRoute checks for that overlap and, only when it is present, pins the LAN's own local-subnet route so it keeps winning; it un-pins the same route the moment the overlap goes away, on quit, or when you switch to Windows default, which hands routing back to Windows entirely and is excluded from this guarantee.
 
 ## Wi-Fi as a third connection (v6.0)
 
