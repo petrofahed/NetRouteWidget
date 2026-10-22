@@ -1031,6 +1031,51 @@ public class SmartRoutingControllerTests
         Assert.Equal(SmartState.Running, c.Status.State);
     }
 
+    // ---- Final-review fix C2: Mode=Wifi must pause even when Carrier has already moved off Wi-Fi ----
+
+    [Fact]
+    public async Task Wifi_mode_pauses_even_when_carrier_is_lan()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On()); // running first, to prove the host gets stopped
+
+        // Wi-Fi present but, e.g., healed off onto the LAN, or mid-reconnect with no gateway yet.
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Lan), On());
+
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
+        // Unmatched traffic must never fall onto the phone just because Carrier isn't (yet) Wi-Fi.
+        Assert.DoesNotContain(("default", "phone"), _api.Selects);
+    }
+
+    [Fact]
+    public async Task Wifi_mode_pauses_even_when_carrier_is_phone()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Phone), On());
+
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
+        Assert.DoesNotContain(("default", "phone"), _api.Selects);
+    }
+
+    [Fact]
+    public async Task Wifi_mode_pauses_when_wifi_adapter_entirely_absent()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+
+        // Mode is still Wifi (e.g. Wi-Fi just dropped) but no Wi-Fi adapter is detected at all; Carrier resolves
+        // to whatever else qualifies. Must not fall through to WantedExit/ProfileOf's phone-default behavior.
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: false, carrier: ConnectionId.Lan), On());
+
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
+        Assert.DoesNotContain(("default", "phone"), _api.Selects);
+    }
+
     // ---- Final pass M1: why it failed ----
 
     [Fact]

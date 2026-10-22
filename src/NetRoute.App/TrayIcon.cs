@@ -57,6 +57,7 @@ sealed class TrayIcon : IDisposable
     {
         _icon.Icon = IconFor(view.TrayColor, view.TrayBadge);
         _icon.Text = view.Tooltip.Length > 127 ? view.Tooltip[..127] : view.Tooltip;
+        _wifi.Visible = view.Rows.Any(r => r.Id == ConnectionId.Wifi); // hidden when no Wi-Fi adapter is configured, matching CardWindow's WifiButton
         _phone.Checked = mode == RoutingMode.Phone;
         _lan.Checked = mode == RoutingMode.Lan;
         _wifi.Checked = mode == RoutingMode.Wifi;

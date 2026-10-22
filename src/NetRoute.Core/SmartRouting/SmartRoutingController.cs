@@ -529,9 +529,12 @@ public sealed class SmartRoutingController
         if (!net.CanModify) return (SmartState.Unavailable, "Needs administrator rights");
         if (net.Mode == RoutingMode.Auto) return (SmartState.Unavailable, "Paused in Auto mode"); // the widget steps aside
         // sing-box doesn't route through Wi-Fi yet (v6.1): pause rather than send unmatched traffic to the phone or a
-        // dead connection. Takes priority over the "needs phone" check below. Qualified: "ConnectionId" below this point
+        // dead connection. Checks BOTH Mode and Carrier: Carrier alone goes stale the instant Wi-Fi is physically
+        // absent, has no gateway yet (DHCP pending right after every Wi-Fi reconnect), or has been healed off onto
+        // the LAN, even though Mode is still Wifi - any of those would otherwise fall through to the phone-default
+        // logic below. Takes priority over the "needs phone" check below. Qualified: "ConnectionId" below this point
         // is the log-line-parsing Regex field, not the enum.
-        if (net.Carrier == global::NetRoute.Core.ConnectionId.Wifi) return (SmartState.Unavailable, WifiPausedMessage);
+        if (net.Mode == RoutingMode.Wifi || net.Carrier == global::NetRoute.Core.ConnectionId.Wifi) return (SmartState.Unavailable, WifiPausedMessage);
         // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT, and neither
         // does never having seen it: LAN-only traffic has to wait for it, so sing-box runs against the last-known
         // (or saved, or placeholder) LAN adapter name. In the LAN profile the LAN list stays active too (it is not an

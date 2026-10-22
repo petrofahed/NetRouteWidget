@@ -69,13 +69,35 @@ public partial class App : Application
             var loaded = store.Load();
             if (loaded.Unreadable) log.Error("Settings file could not be read; running on defaults and NOT saving changes this session");
             else if (loaded.Recovered) log.Error("Settings file was unreadable or corrupt; using defaults");
+
+            var settings = loaded.Settings;
+            if (!loaded.Unreadable)
+            {
+                try
+                {
+                    var migrated = SettingsMigration.ToV6(settings, new WindowsAdapterSource().GetAdapters());
+                    if (migrated != settings)
+                    {
+                        settings = migrated;
+                        store.Save(settings);
+                        log.Info("Settings migrated to v6");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Migration is a one-shot convenience, retried on every start until it succeeds: a failure here
+                    // (adapter enumeration or the settings write) must not stop the widget from starting on defaults.
+                    log.Error("Settings migration to v6 failed; continuing unmigrated", ex);
+                }
+            }
+
             var elevated = Elevation.IsElevated();
             _startupEnabled = _startupTask.Exists();
-            log.Info($"Starting: elevated={elevated}, mode={loaded.Settings.Mode}, startWithWindows={_startupEnabled}");
+            log.Info($"Starting: elevated={elevated}, mode={settings.Mode}, startWithWindows={_startupEnabled}");
 
             var controller = _controller = new RouteController(
                 new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
-                loaded.Settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info,
+                settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info,
                 subnetRoutes: new WindowsSubnetRoutes(), names: new WindowsNetworkNames());
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
@@ -118,7 +140,7 @@ public partial class App : Application
 
             Render(controller.Status);
             RenderTotals(_smart); // restored history shows before the first poll
-            if (loaded.Settings.CardVisible) ShowCard();
+            if (settings.CardVisible) ShowCard();
             UpdatePollInterval();
             _poll.Start();
             if (_smart is { } smartForUsage)

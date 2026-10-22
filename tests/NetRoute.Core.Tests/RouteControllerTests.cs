@@ -154,6 +154,9 @@ public class RouteControllerTests
         Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
         Assert.Contains("Access is denied.", controller.Status.Error);
         Assert.DoesNotContain(_saved, s => s.Mode == RoutingMode.Lan);
+        // Carrier must agree with the Mode that actually stuck (Phone), not the rejected request (Lan): the
+        // LAN adapter has a gateway and IPv4, so computing Carrier from the rejected mode would wrongly say Lan.
+        Assert.Equal(ConnectionId.Phone, controller.Status.Carrier);
     }
 
     [Fact]
@@ -1004,6 +1007,25 @@ public class RouteControllerTests
         await controller.SetOverridesAsync(new AdapterOverrides(null, null, AdapterOverrides.NotUsed));
 
         Assert.Contains((18, IpFamily.IPv4, (uint?)null), _metrics.SetCalls);
+    }
+
+    [Fact]
+    public async Task Setting_wifi_to_not_used_while_in_wifi_mode_falls_back()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Wifi, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+
+        // Wi-Fi was Mode's connection; setting it to Not used (Phone/LAN left as they were) must not strand
+        // the user on a mode with nothing behind it. FallbackOrder = [Lan, Wifi, Phone] and LAN is present
+        // in this fixture, so it falls back to LAN.
+        await controller.SetOverridesAsync(new AdapterOverrides(null, null, AdapterOverrides.NotUsed));
+
+        Assert.Equal(RoutingMode.Lan, controller.Settings.Mode);
+        Assert.Equal(RoutingMode.Lan, controller.Status.Mode);
+        Assert.Equal(RoutingMode.Lan, _saved.Last().Mode);
+        // The new mode's metrics were applied on this same SetOverridesAsync call, not left for a later refresh.
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(10, IpFamily.IPv4));
     }
 
     [Fact]

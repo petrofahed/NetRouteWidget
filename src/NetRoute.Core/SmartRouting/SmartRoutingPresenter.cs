@@ -31,6 +31,7 @@ public static class SmartRoutingPresenter
         SmartState.Off or SmartState.Starting when !string.IsNullOrEmpty(s.Message) => new($"⚠ {s.Message}", SmartTone.Warning),
         SmartState.Off when mode == RoutingMode.Phone => new("Smart routing off · everything via the phone", SmartTone.Muted),
         SmartState.Off when mode == RoutingMode.Lan => new("Smart routing off · everything via the LAN", SmartTone.Muted),
+        SmartState.Off when mode == RoutingMode.Wifi => new("Smart routing off · everything via Wi-Fi", SmartTone.Muted),
         SmartState.Off => new("⚡ Smart routing off", SmartTone.Muted),
         SmartState.Starting => new("⚡ Smart routing starting…", SmartTone.Muted),
         SmartState.Unavailable when s.Message?.StartsWith("Paused ", StringComparison.Ordinal) == true =>

@@ -19,7 +19,11 @@ public sealed class WindowsNetworkNames : INetworkNameSource
         {
             var scope = new ManagementScope(@"root\StandardCimv2");
             var query = new ObjectQuery($"SELECT Name FROM MSFT_NetConnectionProfile WHERE InterfaceIndex = {adapter.Index}");
-            using var searcher = new ManagementObjectSearcher(scope, query);
+            // A short timeout: this runs on RouteController.RefreshAsync's synchronous prefix, while _gate is held,
+            // roughly every 5 s poll tick. A hung/slow WMI call must throw (caught below) well within that, rather
+            // than block every refresh - and so freeze the UI, which only re-renders once RefreshAsync completes.
+            var options = new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(2) };
+            using var searcher = new ManagementObjectSearcher(scope, query, options);
             using var results = searcher.Get();
             using var enumerator = results.GetEnumerator();
             if (!enumerator.MoveNext()) return null;

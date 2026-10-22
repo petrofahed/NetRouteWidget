@@ -232,7 +232,9 @@ public sealed class RouteController
                 Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
                 Error = result.Error,
                 HealTarget = _healTarget,
-                Carrier = NetworkStatus.CarrierFor(mode, _healTarget, detection),
+                // Settings.Mode, not the requested mode: if Apply failed, Mode above is already Settings.Mode
+                // (unchanged), and Carrier must agree with it rather than with a rejected mode nothing applied.
+                Carrier = NetworkStatus.CarrierFor(Settings.Mode, _healTarget, detection),
             }, toast: null);
             return result;
         }
@@ -269,6 +271,27 @@ public sealed class RouteController
                 ResetHealing();
                 SaveOverrides();
                 var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
+
+                // The connection the saved Mode points at may have just become "Not used" (e.g. Wi-Fi set to Not
+                // used while Mode=Wifi): fall back to the first still-used connection in rank order, or Auto if
+                // none are used, so the user is never stranded on a mode with nothing behind it. Done before the
+                // reset loop below, so a failure in that loop cannot skip this. Auto itself has no "current
+                // connection" (Connections.Of(Auto) is null), so this is a no-op while already in Auto.
+                if (Connections.Of(Settings.Mode) is { } currentMain && !next.IsUsed(currentMain))
+                {
+                    var oldMode = Settings.Mode;
+                    var fallback = Connections.FallbackOrder
+                        .Where(id => next.IsUsed(id))
+                        .Select(id => (ConnectionId?)id)
+                        .FirstOrDefault();
+                    var newMode = fallback is { } f ? Connections.ModeOf(f) : RoutingMode.Auto;
+                    if (newMode != oldMode)
+                    {
+                        UpdateSettings(s => s with { Mode = newMode });
+                        _log($"{oldMode} is no longer used; switching to {newMode}");
+                    }
+                }
+
                 foreach (var (_, old) in previous.Present)
                 {
                     if (next.Present.Any(p => p.Adapter.Index == old.Index)) continue;

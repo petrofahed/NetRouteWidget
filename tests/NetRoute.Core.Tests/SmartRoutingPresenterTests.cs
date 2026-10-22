@@ -34,6 +34,8 @@ public class SmartRoutingPresenterTests
             SmartRoutingPresenter.Row(Status(SmartState.Off), RoutingMode.Phone));
         Assert.Equal(new SmartRow("Smart routing off · everything via the LAN", SmartTone.Muted),
             SmartRoutingPresenter.Row(Status(SmartState.Off), RoutingMode.Lan));
+        Assert.Equal(new SmartRow("Smart routing off · everything via Wi-Fi", SmartTone.Muted),
+            SmartRoutingPresenter.Row(Status(SmartState.Off), RoutingMode.Wifi));
         Assert.Equal(new SmartRow("⚡ Smart routing starting…", SmartTone.Muted), SmartRoutingPresenter.Row(Status(SmartState.Starting)));
         Assert.Equal(new SmartRow("⚡ Smart routing paused — Needs both phone and LAN connected", SmartTone.Muted),
             SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Needs both phone and LAN connected")));
