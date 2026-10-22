@@ -325,6 +325,17 @@ public class StatusPresenterTests
         Assert.Equal("Internet: Phone (38 ms)", view.Tooltip);
     }
 
+    [Fact]
+    public void Tooltip_with_no_active_path_names_the_real_backup_not_a_hardcoded_lan()
+    {
+        // Wi-Fi-primary setup: no LAN cable at all (NotUsed), Wi-Fi is the only used connection.
+        var adapters = DetectionResult.Of(null, DetectionIssue.NotUsed, null, DetectionIssue.NotUsed, TestAdapters.Wifi(), DetectionIssue.None);
+        var status = new NetworkStatus(RoutingMode.Wifi, adapters, InternetPath.None, InternetPath.None,
+            new Dictionary<ConnectionId, int?> { [ConnectionId.Wifi] = 20 }, CanModify: true, null);
+
+        Assert.Equal("Internet: none · Wi-Fi ready", StatusPresenter.Present(status).Tooltip);
+    }
+
     [Theory]
     [InlineData(RoutingMode.Lan, InternetPath.Phone, InternetPath.Lan, "LAN back — internet via LAN")]
     [InlineData(RoutingMode.Auto, InternetPath.Lan, InternetPath.Phone, "Internet now via Phone")]

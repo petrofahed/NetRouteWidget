@@ -132,12 +132,17 @@ public static class StatusPresenter
             : s.ActivePath == InternetPath.Other ? "other adapter" : "none";
 
         // When there is no active connection of ours (None/Other), there's no "the rest" to
-        // enumerate against; keep today's single LAN-readiness line for that case.
+        // enumerate against; today's convention is a single line naming one backup, not every
+        // used connection (the existing 2-connection fixture pins this to exactly one entry).
+        // Pick the last used connection in CardOrder, instead of hardcoding LAN, so a setup
+        // without a LAN (e.g. Wi-Fi as the only backup) is reported correctly.
         var others = active is { } a
             ? Connections.CardOrder.Where(id => id != a && s.Adapters.IsUsed(id))
                 .Select(id => $"{Connections.Label(id)} {(s.Adapters.Adapter(id) is null ? "offline" : "ready")}")
                 .ToList()
-            : [$"LAN {(s.Adapters.Lan is null ? "offline" : "ready")}"];
+            : Connections.CardOrder.Where(id => s.Adapters.IsUsed(id)).Cast<ConnectionId?>().LastOrDefault() is { } fallback
+                ? [$"{Connections.Label(fallback)} {(s.Adapters.Adapter(fallback) is null ? "offline" : "ready")}"]
+                : [];
 
         return others.Count == 0 ? $"Internet: {path}" : $"Internet: {path} · {string.Join(" · ", others)}";
     }
