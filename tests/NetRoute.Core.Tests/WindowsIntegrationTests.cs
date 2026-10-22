@@ -91,6 +91,13 @@ public class WindowsIntegrationTests
         Assert.True(adapter.IsUp);
         Assert.True(adapter.HasGateway);
         Assert.NotNull(adapter.IPv4);
+
+        // Every adapter that is up with an IPv4 address should carry the facts added for v6 (id, prefix).
+        Assert.All(adapters.Where(a => a.IsUp && a.IPv4 is not null), a =>
+        {
+            Assert.NotNull(a.Id);
+            Assert.NotNull(a.PrefixLength);
+        });
     }
 
     [Fact]

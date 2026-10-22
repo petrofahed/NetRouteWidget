@@ -14,18 +14,24 @@ public sealed class WindowsAdapterSource : IAdapterSource
             var properties = nic.GetIPProperties();
             if (IndexOf(properties) is not { } index) continue;
 
-            var ipv4 = properties.UnicastAddresses
-                .FirstOrDefault(u => u.Address.AddressFamily == AddressFamily.InterNetwork)?.Address.ToString();
+            var ipv4Unicast = properties.UnicastAddresses
+                .FirstOrDefault(u => u.Address.AddressFamily == AddressFamily.InterNetwork);
+            var ipv4 = ipv4Unicast?.Address.ToString();
             var hasGateway = properties.GatewayAddresses
                 .Any(g => !g.Address.Equals(IPAddress.Any) && !g.Address.Equals(IPAddress.IPv6Any));
 
             var dnsServer = properties.DnsAddresses
                 .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)?.ToString();
 
+            var gateway = properties.GatewayAddresses
+                .Select(g => g.Address)
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork && !a.Equals(IPAddress.Any))
+                ?.ToString();
+
             adapters.Add(new AdapterInfo(
                 index, nic.Name, nic.Description, KindOf(nic.NetworkInterfaceType),
                 nic.OperationalStatus == OperationalStatus.Up, hasGateway, ipv4, FormatMac(nic.GetPhysicalAddress()),
-                dnsServer));
+                dnsServer, nic.Id, ipv4Unicast?.PrefixLength, gateway, nic.Speed > 0 ? nic.Speed : null));
         }
         return adapters;
     }

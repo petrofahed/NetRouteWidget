@@ -32,5 +32,12 @@ public class ConnectionsTests
     public void Labels() =>
         Assert.Equal(["Phone", "LAN", "Wi-Fi"], Connections.CardOrder.Select(Connections.Label));
 
+    [Theory]
+    [InlineData("192.168.86.42", 24, "192.168.86.0/24")]
+    [InlineData("10.5.0.2", 8, "10.0.0.0/8")]
+    [InlineData("172.19.0.1", 30, "172.19.0.0/30")]
+    public void Subnet_of_an_address(string ip, int prefix, string expected) =>
+        Assert.Equal(expected, AdapterInfo.SubnetOf(ip, prefix));
+
     public static TheoryData<ConnectionId> Every => new(Enum.GetValues<ConnectionId>());
 }
