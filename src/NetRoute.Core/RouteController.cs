@@ -330,7 +330,15 @@ public sealed class RouteController
             }
 
             var now = _time.GetUtcNow();
-            var failing = !Answering(main.Value) && candidates.Any(Answering);
+            // Whether to start counting a fresh failure is anchored to the connection the OS is
+            // already naturally routing through by metric alone (no heal override): when main's own
+            // adapter is entirely absent, that is the next present+routable connection in fallback
+            // order, not literal "main". This keeps a plain unplug of main (backup present and
+            // healthy) from spuriously starting a heal just because main itself is gone — the natural
+            // carrier already IS the backup, and it is answering. Once actively healing, recovery still
+            // checks literal main (below), since recovery means "the user's chosen connection is back".
+            var naturalCarrier = NetworkStatus.CarrierFor(mode, null, adapters);
+            var failing = naturalCarrier is { } nc && !Answering(nc) && candidates.Any(Answering);
             if (failing)
             {
                 _healCount++;

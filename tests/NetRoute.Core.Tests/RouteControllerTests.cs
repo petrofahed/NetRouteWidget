@@ -761,6 +761,23 @@ public class RouteControllerTests
         Assert.True(controller.Status.IsFallback);
     }
 
+    [Fact]
+    public async Task Plain_unplug_of_the_only_other_connection_present_does_not_spuriously_heal()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 31); // main (Phone) adapter entirely gone, not just a failed probe
+        _routes.BestV4 = 10; // Windows already routes via LAN on its own, no heal needed
+
+        await RefreshTimes(controller, HealChecks * 2); // well past the usual 60 s / 3-check window
+
+        Assert.False(controller.Status.IsHealing);
+        Assert.Null(controller.Status.HealTarget);
+        // LAN already carries via plain metric fallback (graded Backup, never promoted to Preferred by a heal).
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+    }
+
     /// Adds the third, Wi-Fi connection to the fixture: present, with an IPv4 and a 20 ms probe reply.
     void AddWifi()
     {
