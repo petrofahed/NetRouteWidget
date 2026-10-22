@@ -80,6 +80,14 @@ public class WindowsIntegrationTests
         var adapters = new WindowsAdapterSource().GetAdapters();
         var adapter = adapters.Single(a => a.Index == best);
 
+        // Every adapter that is up with an IPv4 address should carry the facts added for v6 (id, prefix),
+        // regardless of which branch below applies.
+        Assert.All(adapters.Where(a => a.IsUp && a.IPv4 is not null), a =>
+        {
+            Assert.NotNull(a.Id);
+            Assert.NotNull(a.PrefixLength);
+        });
+
         if (adapter.Name == "NetRoute")
         {
             // While Smart routing runs its TUN carries the default route and has no gateway of its own: the internet
@@ -91,13 +99,6 @@ public class WindowsIntegrationTests
         Assert.True(adapter.IsUp);
         Assert.True(adapter.HasGateway);
         Assert.NotNull(adapter.IPv4);
-
-        // Every adapter that is up with an IPv4 address should carry the facts added for v6 (id, prefix).
-        Assert.All(adapters.Where(a => a.IsUp && a.IPv4 is not null), a =>
-        {
-            Assert.NotNull(a.Id);
-            Assert.NotNull(a.PrefixLength);
-        });
     }
 
     [Fact]

@@ -12,16 +12,10 @@ static class TestAdapters
 
     public static AdapterInfo Wifi(int index = 18, string ipv4 = "192.168.1.20", string mac = "AA-BB-CC-00-00-18", bool hasGateway = true) =>
         new(index, "Wi-Fi", "Intel(R) Wi-Fi 6E AX211 160MHz", AdapterKind.Wireless, IsUp: true, HasGateway: hasGateway, ipv4, mac,
-            PrefixLength: 24, Gateway: hasGateway ? GatewayOf(ipv4) : null);
+            PrefixLength: 24, Gateway: hasGateway ? "192.168.1.1" : null);
 
     /// Wi-Fi joined to the same subnet as the LAN cable (the user's real starting setup).
-    public static AdapterInfo WifiOnLan() => Wifi(ipv4: "192.168.86.35");
-
-    static string GatewayOf(string ipv4)
-    {
-        var octets = ipv4.Split('.');
-        return $"{octets[0]}.{octets[1]}.{octets[2]}.1";
-    }
+    public static AdapterInfo WifiOnLan() => Wifi(ipv4: "192.168.86.35") with { Gateway = "192.168.86.1" };
 
     public static AdapterInfo VmNet(int index) =>
         new(index, $"VMware Network Adapter VMnet{index}", "VMware Virtual Ethernet Adapter for VMnet", AdapterKind.Ethernet, IsUp: true, HasGateway: true, "192.168.80.1", $"00-50-56-C0-00-{index:D2}");
