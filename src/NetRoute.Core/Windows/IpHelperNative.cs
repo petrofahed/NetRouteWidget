@@ -63,4 +63,62 @@ internal static class IpHelperNative
     /// destAddr is a raw SOCKADDR (sockaddr_in or sockaddr_in6).
     [DllImport("iphlpapi.dll")]
     public static extern int GetBestInterfaceEx(byte[] destAddr, out uint bestIfIndex);
+
+    /// SOCKADDR_INET, restricted to the IPv4 (SOCKADDR_IN) shape: a union of SOCKADDR_IN (16 bytes)
+    /// and SOCKADDR_IN6 (28 bytes), so its total size is 28 (the larger member). Family = AF_INET
+    /// for a real IPv4 endpoint, or 0 (AF_UNSPEC) for "unspecified" (e.g. NextHop on an on-link route).
+    /// Ipv4Addr holds the address in network byte order, i.e. BitConverter.ToUInt32(GetAddressBytes(), 0)
+    /// with no extra byte-swap - do not run it through HostToNetworkOrder, that would double-swap.
+    [StructLayout(LayoutKind.Explicit, Size = 28)]
+    public struct SOCKADDR_INET_V4
+    {
+        [FieldOffset(0)] public ushort Family;
+        [FieldOffset(2)] public ushort Port;
+        [FieldOffset(4)] public uint Ipv4Addr;
+    }
+
+    /// IP_ADDRESS_PREFIX = { SOCKADDR_INET Prefix; UINT8 PrefixLength; }, padded to 32 bytes.
+    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    public struct IP_ADDRESS_PREFIX
+    {
+        [FieldOffset(0)] public SOCKADDR_INET_V4 Prefix;
+        [FieldOffset(28)] public byte PrefixLength;
+    }
+
+    /// MIB_IPFORWARD_ROW2 (netioapi.h), x64 layout, 104 bytes total. Every field is pinned to its exact
+    /// documented offset with FieldOffset rather than left to automatic Sequential layout, specifically so
+    /// this cannot silently drift from the real native struct - Set writes this row straight into the live
+    /// route table, and a wrong offset here would corrupt whichever field lands on top of it.
+    /// IpHelperLayoutTests and the WindowsSubnetRoutes integration test guard this against the real machine.
+    [StructLayout(LayoutKind.Explicit, Size = 104)]
+    public struct MIB_IPFORWARD_ROW2
+    {
+        [FieldOffset(0)] public ulong InterfaceLuid;
+        [FieldOffset(8)] public uint InterfaceIndex;
+        [FieldOffset(12)] public IP_ADDRESS_PREFIX DestinationPrefix;
+        [FieldOffset(44)] public SOCKADDR_INET_V4 NextHop;
+        [FieldOffset(72)] public byte SitePrefixLength;
+        [FieldOffset(76)] public uint ValidLifetime;
+        [FieldOffset(80)] public uint PreferredLifetime;
+        [FieldOffset(84)] public uint Metric;
+        [FieldOffset(88)] public int Protocol;
+        [FieldOffset(92)] public byte Loopback;
+        [FieldOffset(93)] public byte AutoconfigureAddress;
+        [FieldOffset(94)] public byte Publish;
+        [FieldOffset(95)] public byte Immortal;
+        [FieldOffset(96)] public uint Age;
+        [FieldOffset(100)] public int Origin;
+    }
+
+    /// Looks up ONE specific route row: DestinationPrefix, NextHop and InterfaceIndex (or InterfaceLuid)
+    /// must be pre-filled on input to identify which row to fetch - this does not enumerate the table.
+    [DllImport("iphlpapi.dll")]
+    public static extern int GetIpForwardEntry2(ref MIB_IPFORWARD_ROW2 row);
+
+    /// Matches on DestinationPrefix + NextHop + interface and fails with ERROR_NOT_FOUND if no such
+    /// route exists. Always Get the row first, mutate only the field(s) you intend to change (e.g.
+    /// Metric), and Set that same row back - anything else risks writing stale or zeroed fields into
+    /// the real route table.
+    [DllImport("iphlpapi.dll")]
+    public static extern int SetIpForwardEntry2(ref MIB_IPFORWARD_ROW2 row);
 }

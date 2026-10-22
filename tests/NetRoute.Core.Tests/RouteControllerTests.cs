@@ -157,6 +157,28 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task Wifi_mode_pins_and_auto_releases()
+    {
+        var adapters = new FakeAdapterSource();
+        adapters.Adapters.AddRange([TestAdapters.Lan(), TestAdapters.WifiOnLan()]);
+        var metrics = new FakeInterfaceMetrics();
+        metrics.Add(10);
+        metrics.Add(18);
+        var routes = new FakeRouteQuery { BestV4 = 10 };
+        var subnetRoutes = new FakeSubnetRoutes { [(10, "192.168.86.0/24")] = 256 };
+        var settings = new AppSettings { WifiOverrideMac = TestAdapters.WifiOnLan().Mac };
+
+        var controller = new RouteController(adapters, metrics, routes, new FakeLatencyProbe(),
+            settings, canModify: true, _saved.Add, _ => { }, _clock, subnetRoutes);
+
+        await controller.SetModeAsync(RoutingMode.Wifi);
+        Assert.Equal(0u, subnetRoutes[(10, "192.168.86.0/24")]);
+
+        await controller.SetModeAsync(RoutingMode.Auto);
+        Assert.Equal(256u, subnetRoutes[(10, "192.168.86.0/24")]);
+    }
+
+    [Fact]
     public async Task Refresh_failure_is_reported_not_thrown()
     {
         var controller = Create();

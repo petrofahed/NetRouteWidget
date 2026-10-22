@@ -31,3 +31,11 @@ public interface ILatencyProbe
     /// Round-trip in ms from the given local address; null when there is no reply.
     Task<int?> MeasureAsync(IPAddress source, CancellationToken ct);
 }
+
+public interface ISubnetRoutes
+{
+    /// RouteMetric of the on-link IPv4 route for `prefix` (e.g. "192.168.86.0/24") on ifIndex in ActiveStore; null when absent.
+    uint? GetOnLinkMetric(int ifIndex, string prefix);
+    /// Sets that route's RouteMetric in ActiveStore. Throws when Windows rejects it.
+    void SetOnLinkMetric(int ifIndex, string prefix, uint metric);
+}

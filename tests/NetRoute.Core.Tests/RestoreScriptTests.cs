@@ -25,6 +25,15 @@ public class RestoreScriptTests
         Assert.Equal(before, MetricSnapshot());
     }
 
+    [Fact]
+    public void Script_resets_pinned_local_routes_via_ActiveStore()
+    {
+        var text = File.ReadAllText(Path.Combine(RepoRoot(), "tools", "Restore-Network.cmd"));
+
+        Assert.Contains("RouteMetric 256", text);
+        Assert.Contains("-PolicyStore ActiveStore", text);
+    }
+
     // ---- the settings rewrite step, run against a scratch %APPDATA% (the cmd itself is never executed) ----
 
     /// The PowerShell command of the "saved mode to Auto" step, lifted out of the script so the test exercises the real text.

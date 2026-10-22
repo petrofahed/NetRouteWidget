@@ -75,7 +75,7 @@ public partial class App : Application
 
             var controller = _controller = new RouteController(
                 new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
-                loaded.Settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info);
+                loaded.Settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info, subnetRoutes: new WindowsSubnetRoutes());
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 
@@ -197,6 +197,7 @@ public partial class App : Application
         // Do NOT stop Smart routing here: the sign-out can still be cancelled by another app, and ShutdownAsync latches
         // the controller for good. A real logoff ends the process, and the kill-on-close job object ends sing-box with it.
         Task.Run(() => SaveUsageAsync(force: true)).Wait(TimeSpan.FromSeconds(3));
+        _controller?.ReleasePin();
         _card?.ForceClose(); // a real close, so OnClosing does not persist CardVisible=false
         base.OnSessionEnding(e);
     }
@@ -287,6 +288,7 @@ public partial class App : Application
     void Quit()
     {
         StopSmartRouting();
+        _controller?.ReleasePin();
         _card?.ForceClose();
         Shutdown();
     }

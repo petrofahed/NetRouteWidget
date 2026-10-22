@@ -54,6 +54,29 @@ sealed class FakeLatencyProbe : ILatencyProbe
         Task.FromResult(BySource.TryGetValue(source.ToString(), out var ms) ? ms : null);
 }
 
+sealed class FakeSubnetRoutes : ISubnetRoutes
+{
+    public Dictionary<(int, string), uint> State { get; } = new();
+    public List<(int IfIndex, string Prefix, uint Metric)> SetCalls { get; } = new();
+    public bool FailOnSet { get; set; }
+
+    /// Test-only convenience so fixtures can seed/inspect state as `routes[(10, "192.168.86.0/24")]`.
+    public uint this[(int IfIndex, string Prefix) key]
+    {
+        get => State[key];
+        set => State[key] = value;
+    }
+
+    public uint? GetOnLinkMetric(int ifIndex, string prefix) => State.TryGetValue((ifIndex, prefix), out var m) ? m : null;
+
+    public void SetOnLinkMetric(int ifIndex, string prefix, uint metric)
+    {
+        SetCalls.Add((ifIndex, prefix, metric));
+        if (FailOnSet) throw new InvalidOperationException("Access is denied.");
+        State[(ifIndex, prefix)] = metric;
+    }
+}
+
 sealed class BlockingLatencyProbe : ILatencyProbe
 {
     readonly TaskCompletionSource _gate = new();

@@ -17,6 +17,7 @@ public sealed class RouteController
     readonly Action<AppSettings> _persist;
     readonly Action<string> _log;
     readonly TimeProvider _time;
+    readonly RoutePin? _pin;
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly Lock _settingsLock = new();
     AppSettings _settings;
@@ -68,7 +69,8 @@ public sealed class RouteController
 
     public RouteController(
         IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
-        AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log, TimeProvider? time = null)
+        AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log, TimeProvider? time = null,
+        ISubnetRoutes? subnetRoutes = null)
     {
         _time = time ?? TimeProvider.System;
         _adapters = adapters;
@@ -78,6 +80,7 @@ public sealed class RouteController
         _settings = settings;
         _persist = persist;
         _log = log;
+        _pin = subnetRoutes is not null ? new RoutePin(subnetRoutes, log) : null;
         Status = NetworkStatus.Initial(settings.Mode, canModify);
     }
 
@@ -143,6 +146,9 @@ public sealed class RouteController
                 }
             }
 
+            if (before.CanModify)
+                _pin?.Sync(RoutePin.Wanted(mode, _healTarget, detection));
+
             var after = before with
             {
                 Mode = mode,
@@ -199,6 +205,12 @@ public sealed class RouteController
             {
                 _log($"Mode {mode} failed: {result.Error}");
             }
+
+            // Pin against the mode that actually stuck, not the requested one: if Apply failed, the
+            // mode is unchanged, and a pin for the requested-but-rejected mode would be wrong until
+            // the next refresh corrected it anyway.
+            if (Status.CanModify)
+                _pin?.Sync(RoutePin.Wanted(Settings.Mode, _healTarget, detection));
 
             _userChangePending = true;
             Publish(Status with
@@ -271,6 +283,10 @@ public sealed class RouteController
 
         await RefreshAsync(measureLatency: true, ct);
     }
+
+    /// Reverts whatever subnet route is currently pinned back to RoutePin.DefaultMetric. Call on shutdown
+    /// so a pin never outlives the widget.
+    public void ReleasePin() => _pin?.Release();
 
     static string CarrierName(RoutingMode mode, DetectionResult adapters) =>
         Connections.Of(mode) is { } main ? Name(adapters, main) : mode.ToString();
