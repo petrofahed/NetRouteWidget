@@ -156,6 +156,30 @@ public static partial class AdapterDetector
             wifi?.Mac ?? AdapterOverrides.NotUsed);
     }
 
+    /// A human-readable summary of an adapter for the chosen slot, e.g.
+    /// "192.168.86.42 · gateway 192.168.86.1 · 1 Gbps". A down adapter shows just "not connected".
+    public static string DetailLine(AdapterInfo adapter, ConnectionId slot)
+    {
+        if (!adapter.IsUp) return "not connected";
+
+        var parts = new List<string> { adapter.IPv4 ?? "no IPv4" };
+        if (adapter.Gateway is { } gateway) parts.Add("gateway " + gateway);
+
+        if (slot == ConnectionId.Phone) parts.Add("USB tethering");
+        else if (adapter.SpeedBps is { } speed && SpeedLabel(speed) is { } label) parts.Add(label);
+
+        return string.Join(" · ", parts);
+    }
+
+    static string? SpeedLabel(long speedBps) => speedBps switch
+    {
+        >= 1_000_000_000 => $"{Round(speedBps, 1_000_000_000)} Gbps",
+        >= 1_000_000 => $"{Round(speedBps, 1_000_000)} Mbps",
+        _ => null,
+    };
+
+    static long Round(long value, long unit) => (long)Math.Round(value / (double)unit, MidpointRounding.AwayFromZero);
+
     /// Windows appends " #2", " #3"… when the same device is re-plugged.
     internal static string NormalizeDescription(string description) =>
         NumberSuffix().Replace(description.Trim(), "").ToUpperInvariant();

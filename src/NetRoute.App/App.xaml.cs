@@ -274,7 +274,7 @@ public partial class App : Application
     async void ChooseAdapters()
     {
         var candidates = AdapterDetector.Candidates(new WindowsAdapterSource().GetAdapters()).ToList();
-        var picker = new AdapterPickerWindow(candidates, _controller!.Settings.Overrides);
+        var picker = new AdapterPickerWindow(candidates, _controller!.Settings.Overrides, new WindowsNetworkNames());
         if (picker.ShowDialog() == true) await _controller.SetOverridesAsync(picker.Result);
     }
 

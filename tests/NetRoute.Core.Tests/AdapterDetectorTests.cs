@@ -184,4 +184,19 @@ public class AdapterDetectorTests
         Assert.Equal(DetectionIssue.NotFound, result.PhoneIssue);
         Assert.Equal([10], AdapterDetector.Candidates([TestAdapters.Lan(), tun]).Select(a => a.Index));
     }
+
+    [Fact]
+    public void Detail_line_for_lan() =>
+        Assert.Equal("192.168.86.42 · gateway 192.168.86.1 · 1 Gbps",
+            AdapterDetector.DetailLine(TestAdapters.Lan() with { SpeedBps = 1_000_000_000 }, ConnectionId.Lan));
+
+    [Fact]
+    public void Detail_line_for_phone() =>
+        Assert.Equal("192.168.42.11 · gateway 192.168.42.129 · USB tethering",
+            AdapterDetector.DetailLine(TestAdapters.Phone() with { Gateway = "192.168.42.129" }, ConnectionId.Phone));
+
+    [Fact]
+    public void Detail_line_for_down_adapter() =>
+        Assert.EndsWith("not connected",
+            AdapterDetector.DetailLine(TestAdapters.Wifi() with { IsUp = false, IPv4 = null }, ConnectionId.Wifi));
 }

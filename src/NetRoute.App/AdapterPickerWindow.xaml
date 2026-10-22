@@ -8,14 +8,36 @@
         Background="{DynamicResource WindowBackground}" Foreground="{DynamicResource TextPrimary}">
     <StackPanel Margin="16">
         <TextBlock Text="Phone (carries internet in Phone mode)" FontWeight="SemiBold" />
-        <ComboBox x:Name="PhoneBox" Margin="0,4,0,12" DisplayMemberPath="Label" />
+        <ComboBox x:Name="PhoneBox" Margin="0,4,0,0" DisplayMemberPath="Label" SelectionChanged="OnPhoneChanged" />
+        <TextBlock x:Name="PhoneDetail" Margin="0,2,0,12" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+
         <TextBlock Text="LAN (printer, NAS, other PCs)" FontWeight="SemiBold" />
-        <ComboBox x:Name="LanBox" Margin="0,4,0,12" DisplayMemberPath="Label" />
-        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
-                   Text="Automatic finds the phone by its USB-tethering driver and the LAN as the wired adapter that has a gateway." />
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-            <Button Content="OK" Width="80" IsDefault="True" Click="OnOk" />
-            <Button Content="Cancel" Width="80" Margin="8,0,0,0" IsCancel="True" />
-        </StackPanel>
+        <ComboBox x:Name="LanBox" Margin="0,4,0,0" DisplayMemberPath="Label" SelectionChanged="OnLanChanged" />
+        <TextBlock x:Name="LanDetail" Margin="0,2,0,12" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+
+        <TextBlock Text="Wi-Fi" FontWeight="SemiBold" />
+        <Grid Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <ComboBox x:Name="WifiAdapterBox" Grid.Column="0" DisplayMemberPath="Label" SelectionChanged="OnWifiChanged" />
+            <ComboBox x:Name="WifiNetworkBox" Grid.Column="2" IsEnabled="False" DisplayMemberPath="Label" />
+        </Grid>
+        <TextBlock x:Name="WifiDetail" Margin="0,2,0,12" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}" />
+
+        <DockPanel Margin="0,4,0,0">
+            <Button x:Name="DetectButton" DockPanel.Dock="Left" Content="Detect automatically" Padding="8,2" Click="OnDetect" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="OK" Width="80" IsDefault="True" Click="OnOk" />
+                <Button Content="Cancel" Width="80" Margin="8,0,0,0" IsCancel="True" />
+            </StackPanel>
+        </DockPanel>
+
+        <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                   Text="Detect fills each box with what it finds: the phone by its USB-tethering driver, the LAN as the cable with a gateway, Wi-Fi as the wireless adapter. You can still change any of them." />
+        <TextBlock x:Name="ErrorText" Foreground="{DynamicResource Warning}" Margin="0,6,0,0" TextWrapping="Wrap" Visibility="Collapsed"
+                   Text="An adapter can fill only one slot" />
     </StackPanel>
 </Window>
