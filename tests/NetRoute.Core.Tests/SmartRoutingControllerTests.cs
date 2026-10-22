@@ -40,7 +40,9 @@ public class SmartRoutingControllerTests
         new(mode,
             DetectionResult.Of(phone ? TestAdapters.Phone(phoneIndex) : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
                 lan ? TestAdapters.Lan() with { Name = lanName, DnsServer = lanDns } : null, lan ? DetectionIssue.None : DetectionIssue.NotFound),
-            InternetPath.Phone, InternetPath.None, 30, lan ? lanMs : null, canModify, null, IsHealing: healing);
+            InternetPath.Phone, InternetPath.None,
+            new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = 30, [ConnectionId.Lan] = lan ? lanMs : null },
+            canModify, null, IsHealing: healing);
 
     [Fact]
     public async Task Disabled_does_not_start()
@@ -883,7 +885,9 @@ public class SmartRoutingControllerTests
 
     static NetworkStatus LanModeWithLan(AdapterInfo lan) =>
         new(RoutingMode.Lan, DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, lan, DetectionIssue.None),
-            InternetPath.Lan, InternetPath.None, 30, 12, true, null);
+            InternetPath.Lan, InternetPath.None,
+            new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = 30, [ConnectionId.Lan] = 12 },
+            true, null);
 
     [Fact]
     public async Task Lan_mode_with_a_normal_lan_keeps_the_default_on_the_lan()

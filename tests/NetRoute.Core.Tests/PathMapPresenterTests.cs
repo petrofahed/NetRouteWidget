@@ -8,7 +8,9 @@ public class PathMapPresenterTests
     static NetworkStatus Status() => new(
         RoutingMode.Phone,
         DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None),
-        InternetPath.Phone, InternetPath.None, 38, 12, CanModify: true, Error: null);
+        InternetPath.Phone, InternetPath.None,
+        new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = 38, [ConnectionId.Lan] = 12 },
+        CanModify: true, Error: null);
 
     static LaneSnapshot Lan(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>
         new("LAN", TestAdapters.Lan(), trace, hops.Select(h => (IReadOnlyList<Sample>)h).ToList(), endpoint);

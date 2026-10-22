@@ -147,8 +147,11 @@ public sealed class RouteController
                 Adapters = detection,
                 ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
-                PhoneLatencyMs = shownPhoneMs,
-                LanLatencyMs = shownLanMs,
+                LatencyMs = new Dictionary<ConnectionId, int?>
+                {
+                    [ConnectionId.Phone] = shownPhoneMs,
+                    [ConnectionId.Lan] = shownLanMs,
+                },
                 Error = error,
             };
 

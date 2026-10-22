@@ -11,7 +11,8 @@ public class StatusPresenterTests
             DetectionResult.Of(
                 phone ? TestAdapters.Phone() : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
                 lan ? TestAdapters.Lan() : null, lan ? DetectionIssue.None : missingLanIssue),
-            path, ipv6, phone ? phoneMs : null, lan ? lanMs : null, CanModify: true, error);
+            path, ipv6, new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = phone ? phoneMs : null, [ConnectionId.Lan] = lan ? lanMs : null },
+            CanModify: true, error);
 
     [Fact]
     public void Normal_phone_mode()
@@ -169,6 +170,54 @@ public class StatusPresenterTests
         Assert.Equal(InternetPath.Lan, NetworkStatus.ResolvePath(10, adapters));
         Assert.Equal(InternetPath.Other, NetworkStatus.ResolvePath(40, adapters));
         Assert.Equal(InternetPath.None, NetworkStatus.ResolvePath(null, adapters));
+    }
+
+    [Fact]
+    public void Wifi_path_resolves_to_wifi()
+    {
+        var adapters = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None, TestAdapters.Wifi(), DetectionIssue.None);
+        Assert.Equal(InternetPath.Wifi, NetworkStatus.ResolvePath(18, adapters));
+    }
+
+    [Theory]
+    [InlineData(RoutingMode.Wifi, InternetPath.Lan, true)]
+    [InlineData(RoutingMode.Wifi, InternetPath.Wifi, false)]
+    [InlineData(RoutingMode.Lan, InternetPath.Wifi, true)]
+    [InlineData(RoutingMode.Auto, InternetPath.Wifi, false)]
+    public void Fallback_is_any_path_other_than_the_main(RoutingMode mode, InternetPath path, bool expected) =>
+        Assert.Equal(expected, (NetworkStatus.Initial(mode, true) with { ActivePath = path }).IsFallback);
+
+    [Fact]
+    public void Carrier_is_the_main_when_present()
+    {
+        var all = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None, TestAdapters.Wifi(), DetectionIssue.None);
+        Assert.Equal(ConnectionId.Wifi, NetworkStatus.CarrierFor(RoutingMode.Wifi, null, all));
+        Assert.Equal(ConnectionId.Phone, NetworkStatus.CarrierFor(RoutingMode.Lan, ConnectionId.Phone, all));
+    }
+
+    [Fact]
+    public void Carrier_falls_to_wifi_when_the_lan_cable_is_out()
+    {
+        var noLan = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, null, DetectionIssue.NotFound, TestAdapters.Wifi(), DetectionIssue.None);
+        Assert.Equal(ConnectionId.Wifi, NetworkStatus.CarrierFor(RoutingMode.Lan, null, noLan));
+    }
+
+    [Fact]
+    public void Carrier_skips_adapter_without_gateway_or_ipv4()
+    {
+        var pending = TestAdapters.Wifi() with { IPv4 = null };
+        var adapters = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, null, DetectionIssue.NotFound, pending, DetectionIssue.None);
+        Assert.Equal(ConnectionId.Phone, NetworkStatus.CarrierFor(RoutingMode.Wifi, null, adapters));
+    }
+
+    [Fact]
+    public void WithLatency_sets_one_connection_without_mutating_the_original()
+    {
+        var initial = NetworkStatus.Initial(RoutingMode.Auto, true);
+        var updated = initial.WithLatency(ConnectionId.Wifi, 7);
+
+        Assert.Equal(7, updated.WifiLatencyMs);
+        Assert.Null(initial.WifiLatencyMs);
     }
 
     [Fact]
