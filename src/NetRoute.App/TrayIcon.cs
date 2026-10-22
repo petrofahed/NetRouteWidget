@@ -6,13 +6,14 @@ using Forms = System.Windows.Forms;
 
 namespace NetRoute.App;
 
-/// Tray icon: globe coloured by mode (green Phone, blue LAN, gray Auto), amber badge on fallback.
+/// Tray icon: globe coloured by mode (green Phone, blue LAN, purple Wi-Fi, gray Auto), amber badge on fallback.
 sealed class TrayIcon : IDisposable
 {
     readonly Forms.NotifyIcon _icon = new();
     readonly Dictionary<(TrayColor, bool), Icon> _icons = new();
     readonly Forms.ToolStripMenuItem _phone = new("Phone");
     readonly Forms.ToolStripMenuItem _lan = new("LAN");
+    readonly Forms.ToolStripMenuItem _wifi = new("Wi-Fi");
     readonly Forms.ToolStripMenuItem _auto = new("Windows default (restore)");
     readonly Forms.ToolStripMenuItem _show = new("Show card");
     readonly Forms.ToolStripMenuItem _startup = new("Start with Windows");
@@ -23,6 +24,7 @@ sealed class TrayIcon : IDisposable
     {
         _phone.Click += (_, _) => ModeRequested?.Invoke(RoutingMode.Phone);
         _lan.Click += (_, _) => ModeRequested?.Invoke(RoutingMode.Lan);
+        _wifi.Click += (_, _) => ModeRequested?.Invoke(RoutingMode.Wifi);
         _auto.Click += (_, _) => ModeRequested?.Invoke(RoutingMode.Auto);
         _show.Click += (_, _) => ShowCardRequested?.Invoke();
         _startup.Click += (_, _) => StartWithWindowsToggled?.Invoke();
@@ -32,7 +34,7 @@ sealed class TrayIcon : IDisposable
         var menu = new Forms.ContextMenuStrip();
         menu.Items.AddRange(new Forms.ToolStripItem[]
         {
-            _phone, _lan, _auto, new Forms.ToolStripSeparator(), _show, _startup, _autoHeal, new Forms.ToolStripSeparator(), _quit,
+            _phone, _lan, _wifi, _auto, new Forms.ToolStripSeparator(), _show, _startup, _autoHeal, new Forms.ToolStripSeparator(), _quit,
         });
         _icon.ContextMenuStrip = menu;
         _icon.MouseClick += (_, e) =>
@@ -57,8 +59,9 @@ sealed class TrayIcon : IDisposable
         _icon.Text = view.Tooltip.Length > 127 ? view.Tooltip[..127] : view.Tooltip;
         _phone.Checked = mode == RoutingMode.Phone;
         _lan.Checked = mode == RoutingMode.Lan;
+        _wifi.Checked = mode == RoutingMode.Wifi;
         _auto.Checked = mode == RoutingMode.Auto;
-        _phone.Enabled = _lan.Enabled = _auto.Enabled = canModify;
+        _phone.Enabled = _lan.Enabled = _wifi.Enabled = _auto.Enabled = canModify;
         _startup.Checked = startWithWindows;
         _startup.Enabled = canModify;
         _autoHeal.Checked = autoHeal;
@@ -92,6 +95,7 @@ sealed class TrayIcon : IDisposable
             {
                 TrayColor.Green => Color.FromArgb(0x2E, 0xA0, 0x43),
                 TrayColor.Blue => Color.FromArgb(0x25, 0x63, 0xEB),
+                TrayColor.Purple => Color.FromArgb(0x8B, 0x5C, 0xF6),
                 _ => Color.FromArgb(0x8B, 0x94, 0x9E),
             };
             using var globe = new SolidBrush(fill);

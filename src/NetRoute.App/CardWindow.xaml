@@ -127,8 +127,11 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="22" />
-                    <RowDefinition Height="22" />
+                    <RowDefinition x:Name="PhoneRowDef" Height="22" />
+                    <RowDefinition x:Name="LanRowDef" Height="22" />
+                    <!-- Height starts at 0 (not 22+Collapsed cells): a fixed row height would leave an empty band
+                         below the LAN row while Wi-Fi isn't configured. Render sets this to 22 once Wi-Fi is used. -->
+                    <RowDefinition x:Name="WifiRowDef" Height="0" />
                 </Grid.RowDefinitions>
                 <Ellipse x:Name="PhoneDot" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
                 <TextBlock x:Name="PhoneLabel" Grid.Column="1" Style="{StaticResource Primary}" />
@@ -144,15 +147,24 @@
                 <TextBlock x:Name="LanLatency" Grid.Row="1" Grid.Column="4" Style="{StaticResource Secondary}" />
                 <TextBlock x:Name="LanTotal" Grid.Row="1" Grid.Column="5" Style="{StaticResource Total}" Visibility="Collapsed"
                            ToolTip="Data through the LAN today (measured by Smart routing)" />
+                <Ellipse x:Name="WifiDot" Grid.Row="2" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" Visibility="Collapsed" />
+                <TextBlock x:Name="WifiLabel" Grid.Row="2" Grid.Column="1" Style="{StaticResource Primary}" Visibility="Collapsed" />
+                <TextBlock x:Name="WifiAddress" Grid.Row="2" Grid.Column="2" Style="{StaticResource Secondary}" Visibility="Collapsed" />
+                <TextBlock x:Name="WifiSpeed" Grid.Row="2" Grid.Column="3" Style="{StaticResource Speed}" Visibility="Collapsed" />
+                <TextBlock x:Name="WifiLatency" Grid.Row="2" Grid.Column="4" Style="{StaticResource Secondary}" Visibility="Collapsed" />
+                <TextBlock x:Name="WifiTotal" Grid.Row="2" Grid.Column="5" Style="{StaticResource Total}" Visibility="Collapsed"
+                           ToolTip="Data through Wi-Fi today (measured by Smart routing)" />
             </Grid>
 
             <Border Height="1" Margin="0,8" Background="{DynamicResource CardBorder}" />
 
-            <UniformGrid Columns="3">
+            <UniformGrid x:Name="ModeGrid" Columns="3">
                 <ToggleButton x:Name="PhoneButton" Content="Phone" Tag="Phone" Style="{StaticResource ModeButton}" Click="OnMode"
                               ToolTip="Everything through the phone. With Smart on: your LAN list (and update downloads) go through the LAN" />
                 <ToggleButton x:Name="LanButton" Content="LAN" Tag="Lan" Style="{StaticResource ModeButton}" Click="OnMode"
                               ToolTip="Everything through the LAN. With Smart on: your phone list (AI tools, Omantel) goes through the phone" />
+                <ToggleButton x:Name="WifiButton" Content="Wi-Fi" Tag="Wifi" Style="{StaticResource ModeButton}" Click="OnMode" Visibility="Collapsed"
+                              ToolTip="Everything through Wi-Fi. Smart routing pauses on Wi-Fi until a later update" />
                 <ToggleButton x:Name="SmartButton" Content="⚡ Smart" Style="{StaticResource ModeButton}" Click="OnSmart"
                               ToolTip="Smart on: the exceptions list goes the other way. Smart off: everything through the selected side only" />
             </UniformGrid>
