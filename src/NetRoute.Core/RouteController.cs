@@ -327,6 +327,12 @@ public sealed class RouteController
     /// unchanged connection does not re-run the WMI query on every poll tick. No Wi-Fi adapter at
     /// all clears the cache, so a later reconnect (even to the same Index/IPv4 as a past session)
     /// is not served a stale name left over from before the disconnect.
+    ///
+    /// A null result is NOT cached against the key: the app auto-starts with Windows, so "Wi-Fi
+    /// associates while the app is also starting up" is a plausible race where DHCP (which gives
+    /// IPv4) finishes slightly before Windows has actually named the connection profile. Settling
+    /// for null here forever (until the next reconnect) would defeat the feature for the rest of
+    /// the session; instead, a null keeps the key unset so the very next poll tries again.
     void UpdateWifiNetworkName(DetectionResult detection)
     {
         if (detection.Wifi is not { } wifi)
@@ -339,8 +345,9 @@ public sealed class RouteController
         var key = (wifi.Index, wifi.IPv4);
         if (_lastWifiKey == key) return;
 
-        _lastWifiKey = key;
-        _wifiNetworkName = _names?.NameOf(wifi);
+        var name = _names?.NameOf(wifi);
+        _wifiNetworkName = name;
+        if (name is not null) _lastWifiKey = key;
     }
 
     static string CarrierName(RoutingMode mode, DetectionResult adapters) =>

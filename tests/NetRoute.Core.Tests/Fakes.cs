@@ -80,12 +80,15 @@ sealed class FakeSubnetRoutes : ISubnetRoutes
 sealed class FakeNetworkNameSource : INetworkNameSource
 {
     public string? Result { get; set; }
+    /// When set, consumed one value per call (in order) instead of `Result` - for tests that need the
+    /// lookup to return different values on successive calls (e.g. null, then a real name).
+    public Queue<string?>? Results { get; set; }
     public int CallCount { get; private set; }
 
     public string? NameOf(AdapterInfo adapter)
     {
         CallCount++;
-        return Result;
+        return Results is { Count: > 0 } queue ? queue.Dequeue() : Result;
     }
 }
 

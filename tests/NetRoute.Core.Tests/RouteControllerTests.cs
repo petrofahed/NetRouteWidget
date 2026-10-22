@@ -1036,4 +1036,25 @@ public class RouteControllerTests
 
         Assert.Equal(2, names.CallCount);
     }
+
+    /// Windows naming the connection profile can race behind DHCP handing out the IPv4, especially
+    /// right after this app auto-starts with Windows. A null lookup must not stick for the rest of
+    /// the session (until an actual reconnect changes the IPv4): the next poll has to try again.
+    [Fact]
+    public async Task Null_lookup_result_is_retried_on_the_next_poll_not_cached()
+    {
+        AddWifi();
+        var names = new FakeNetworkNameSource { Results = new Queue<string?>(new string?[] { null, "pzhome" }) };
+        var controller = Create(new AppSettings { WifiOverrideMac = "AA-BB-CC-00-00-18" }, names: names);
+
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Equal(1, names.CallCount);
+        Assert.Null(controller.Status.WifiNetwork);
+
+        // Same Wi-Fi adapter, same (Index, IPv4) - no reconnect simulated.
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(2, names.CallCount);
+        Assert.Equal("pzhome", controller.Status.WifiNetwork);
+    }
 }
