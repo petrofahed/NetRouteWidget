@@ -3,7 +3,7 @@ namespace NetRoute.Core.Tests;
 public class RoutingEngineTests
 {
     static DetectionResult Both(AdapterInfo? phone = null) =>
-        new(phone ?? TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None);
+        DetectionResult.Of(phone ?? TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None);
 
     static FakeInterfaceMetrics MetricsFor(params int[] indexes)
     {
@@ -67,7 +67,7 @@ public class RoutingEngineTests
     public void Missing_phone_only_touches_lan()
     {
         var metrics = MetricsFor(10);
-        var lanOnly = new DetectionResult(null, DetectionIssue.NotFound, TestAdapters.Lan(), DetectionIssue.None);
+        var lanOnly = DetectionResult.Of(null, DetectionIssue.NotFound, TestAdapters.Lan(), DetectionIssue.None);
 
         var result = new RoutingEngine(metrics).Apply(RoutingMode.Phone, lanOnly);
 

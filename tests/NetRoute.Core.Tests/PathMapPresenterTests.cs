@@ -7,7 +7,7 @@ public class PathMapPresenterTests
 {
     static NetworkStatus Status() => new(
         RoutingMode.Phone,
-        new DetectionResult(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None),
+        DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None),
         InternetPath.Phone, InternetPath.None, 38, 12, CanModify: true, Error: null);
 
     static LaneSnapshot Lan(PathTrace? trace, List<Sample> endpoint, params List<Sample>[] hops) =>

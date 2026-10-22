@@ -38,7 +38,7 @@ public class SmartRoutingControllerTests
     static NetworkStatus Net(RoutingMode mode = RoutingMode.Phone, int phoneIndex = 31, bool lan = true, int? lanMs = 12,
                              bool healing = false, bool canModify = true, bool phone = true, string lanName = "Ethernet", string? lanDns = "192.168.86.1") =>
         new(mode,
-            new DetectionResult(phone ? TestAdapters.Phone(phoneIndex) : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
+            DetectionResult.Of(phone ? TestAdapters.Phone(phoneIndex) : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
                 lan ? TestAdapters.Lan() with { Name = lanName, DnsServer = lanDns } : null, lan ? DetectionIssue.None : DetectionIssue.NotFound),
             InternetPath.Phone, InternetPath.None, 30, lan ? lanMs : null, canModify, null, IsHealing: healing);
 
@@ -882,7 +882,7 @@ public class SmartRoutingControllerTests
     // ---- Live-fix 1 (L3) ----
 
     static NetworkStatus LanModeWithLan(AdapterInfo lan) =>
-        new(RoutingMode.Lan, new DetectionResult(TestAdapters.Phone(), DetectionIssue.None, lan, DetectionIssue.None),
+        new(RoutingMode.Lan, DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, lan, DetectionIssue.None),
             InternetPath.Lan, InternetPath.None, 30, 12, true, null);
 
     [Fact]

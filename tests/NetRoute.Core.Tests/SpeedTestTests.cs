@@ -21,7 +21,7 @@ public class SpeedTestTests
     public async Task Runs_both_adapters_from_their_own_addresses()
     {
         var probe = new FixedProbe();
-        var adapters = new DetectionResult(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None);
+        var adapters = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None);
 
         var result = await SpeedTest.RunAsync(probe, adapters);
 
@@ -251,7 +251,7 @@ public class SpeedTestTests
     public async Task Malformed_adapter_address_is_not_measured_and_does_not_stop_the_other_probe()
     {
         var probe = new FixedProbe();
-        var adapters = new DetectionResult(TestAdapters.Phone(), DetectionIssue.None,
+        var adapters = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None,
             TestAdapters.Lan() with { IPv4 = "not-an-ip" }, DetectionIssue.None);
 
         var result = await SpeedTest.RunAsync(probe, adapters);

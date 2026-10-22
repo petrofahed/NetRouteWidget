@@ -80,12 +80,74 @@ public class AdapterDetectorTests
     }
 
     [Fact]
-    public void Wifi_is_not_auto_detected_as_lan_but_can_be_chosen_by_override()
+    public void Wifi_is_never_auto_detected_as_lan()
+    {
+        var result = AdapterDetector.Detect([TestAdapters.Lan(), TestAdapters.Wifi()], AdapterOverrides.None);
+
+        Assert.Equal(10, result.Lan?.Index);
+        Assert.Null(result.Wifi);
+    }
+
+    [Fact]
+    public void Wifi_is_not_used_until_chosen()
+    {
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan(), TestAdapters.Wifi()], AdapterOverrides.None);
+        Assert.Null(result.Wifi);
+        Assert.Equal(DetectionIssue.NotUsed, result.WifiIssue);
+        Assert.False(result.IsUsed(ConnectionId.Wifi));
+    }
+
+    [Fact]
+    public void Wifi_override_detects_wifi_as_wifi()
+    {
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan(), TestAdapters.Wifi()],
+            new AdapterOverrides(null, null, "AA-BB-CC-00-00-18"));
+        Assert.Equal(18, result.Wifi?.Index);
+        Assert.Equal(10, result.Lan?.Index);
+    }
+
+    [Fact]
+    public void Not_used_phone_and_lan()
+    {
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()],
+            new AdapterOverrides(AdapterOverrides.NotUsed, AdapterOverrides.NotUsed));
+        Assert.Equal(DetectionIssue.NotUsed, result.PhoneIssue);
+        Assert.Equal(DetectionIssue.NotUsed, result.LanIssue);
+        Assert.Empty(result.Present);
+    }
+
+    [Fact]
+    public void One_adapter_never_fills_two_slots()
     {
         var wifi = TestAdapters.Wifi();
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), wifi], new AdapterOverrides(null, wifi.Mac, wifi.Mac));
+        Assert.Equal(18, result.Wifi?.Index);
+        Assert.Null(result.Lan);
+    }
 
-        Assert.Equal(DetectionIssue.NotFound, AdapterDetector.Detect([wifi], AdapterOverrides.None).LanIssue);
-        Assert.Equal(18, AdapterDetector.Detect([wifi], new AdapterOverrides(null, wifi.Mac)).Lan?.Index);
+    [Fact]
+    public void Suggest_fills_every_slot_it_can()
+    {
+        var s = AdapterDetector.Suggest([TestAdapters.Phone(), TestAdapters.Lan(), TestAdapters.Wifi(), TestAdapters.VmNet(29)]);
+        Assert.Equal("SAMSUNG Mobile USB Remote NDIS Network Device", s.PhoneDescription);
+        Assert.Equal("AA-BB-CC-00-00-10", s.LanMac);
+        Assert.Equal("AA-BB-CC-00-00-18", s.WifiMac);
+    }
+
+    [Fact]
+    public void Suggest_marks_missing_or_ambiguous_slots_not_used()
+    {
+        var s = AdapterDetector.Suggest([TestAdapters.Lan(), TestAdapters.Wifi(), TestAdapters.Wifi(index: 19, mac: "AA-BB-CC-00-00-19")]);
+        Assert.Equal(AdapterOverrides.NotUsed, s.PhoneDescription);
+        Assert.Equal(AdapterOverrides.NotUsed, s.WifiMac);
+    }
+
+    [Fact]
+    public void Results_with_the_same_picks_are_equal()
+    {
+        Assert.Equal(
+            DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None),
+            DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None));
     }
 
     [Fact]

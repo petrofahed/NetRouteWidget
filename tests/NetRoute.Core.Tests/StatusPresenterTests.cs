@@ -8,7 +8,7 @@ public class StatusPresenterTests
         string? error = null, InternetPath ipv6 = InternetPath.None,
         DetectionIssue missingLanIssue = DetectionIssue.NotFound) =>
         new(mode,
-            new DetectionResult(
+            DetectionResult.Of(
                 phone ? TestAdapters.Phone() : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
                 lan ? TestAdapters.Lan() : null, lan ? DetectionIssue.None : missingLanIssue),
             path, ipv6, phone ? phoneMs : null, lan ? lanMs : null, CanModify: true, error);
