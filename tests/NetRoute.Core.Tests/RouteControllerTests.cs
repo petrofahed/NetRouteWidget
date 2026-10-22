@@ -178,6 +178,45 @@ public class RouteControllerTests
         Assert.Equal(256u, subnetRoutes[(10, "192.168.86.0/24")]);
     }
 
+    /// ReleasePin must not touch the same RoutePin instance while a RefreshAsync already holds _gate
+    /// and is itself about to call RoutePin.Sync - that would be two unsynchronized writers racing on
+    /// RoutePin._pinned. Blocks a refresh mid-flight on the latency probe (which _gate is held across),
+    /// fires ReleasePin concurrently, and checks it waits rather than running immediately.
+    [Fact]
+    public async Task ReleasePin_waits_for_the_gate_instead_of_racing_a_refresh()
+    {
+        var adapters = new FakeAdapterSource();
+        adapters.Adapters.AddRange([TestAdapters.Lan(), TestAdapters.WifiOnLan()]);
+        var metrics = new FakeInterfaceMetrics();
+        metrics.Add(10);
+        metrics.Add(18);
+        var routes = new FakeRouteQuery { BestV4 = 10 };
+        var probe = new BlockingLatencyProbe();
+        probe.SetLatency("192.168.86.42", 10);
+        probe.SetLatency("192.168.86.35", 20);
+        var subnetRoutes = new FakeSubnetRoutes { [(10, "192.168.86.0/24")] = 256 };
+        var settings = new AppSettings { Mode = RoutingMode.Wifi, WifiOverrideMac = TestAdapters.WifiOnLan().Mac };
+
+        var controller = new RouteController(adapters, metrics, routes, probe,
+            settings, canModify: true, _ => { }, _ => { }, _clock, subnetRoutes);
+
+        var refreshTask = controller.RefreshAsync(measureLatency: true); // enters _gate, then parks inside the probe
+        await Task.Delay(200); // let the refresh actually reach and block on the probe
+
+        var releaseTask = Task.Run(() => controller.ReleasePin());
+        await Task.Delay(200); // ReleasePin must be blocked on the same gate, not racing ahead
+
+        Assert.False(releaseTask.IsCompleted, "ReleasePin ran without waiting for the in-flight refresh's gate");
+        Assert.Equal(256u, subnetRoutes[(10, "192.168.86.0/24")]); // refresh hasn't pinned yet - still parked on the probe
+
+        probe.Unblock();
+        await refreshTask;
+        await releaseTask;
+
+        // The refresh (holding the gate first) pinned the route; ReleasePin only ran once the gate freed, and reverted it.
+        Assert.Equal(256u, subnetRoutes[(10, "192.168.86.0/24")]);
+    }
+
     [Fact]
     public async Task Refresh_failure_is_reported_not_thrown()
     {

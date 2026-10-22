@@ -284,9 +284,34 @@ public sealed class RouteController
         await RefreshAsync(measureLatency: true, ct);
     }
 
+    /// How long ReleasePin waits for _gate before giving up and releasing unsynchronized. Short, so a
+    /// stuck refresh never hangs shutdown, but long enough to cover an in-flight RefreshAsync/SetModeAsync
+    /// (which can hold the gate for the full duration of detection, metric apply and latency probing).
+    static readonly TimeSpan ReleasePinGateTimeout = TimeSpan.FromSeconds(2);
+
     /// Reverts whatever subnet route is currently pinned back to RoutePin.DefaultMetric. Call on shutdown
     /// so a pin never outlives the widget.
-    public void ReleasePin() => _pin?.Release();
+    ///
+    /// RoutePin._pinned is mutated by Sync, which RefreshAsync/SetModeAsync call while HOLDING _gate; this
+    /// must not touch the same RoutePin instance unsynchronized while one of those is in flight, or the two
+    /// writes can race. Acquires _gate synchronously (Wait, not WaitAsync - shutdown call sites are not
+    /// async) before releasing the pin; if the gate cannot be acquired within ReleasePinGateTimeout, falls
+    /// back to a best-effort unsynchronized release rather than hanging shutdown indefinitely, and logs it.
+    public void ReleasePin()
+    {
+        if (_pin is null) return;
+
+        if (_gate.Wait(ReleasePinGateTimeout))
+        {
+            try { _pin.Release(); }
+            finally { _gate.Release(); }
+        }
+        else
+        {
+            _log("ReleasePin: could not acquire the controller gate in time; releasing the route pin unsynchronized");
+            _pin.Release();
+        }
+    }
 
     static string CarrierName(RoutingMode mode, DetectionResult adapters) =>
         Connections.Of(mode) is { } main ? Name(adapters, main) : mode.ToString();
