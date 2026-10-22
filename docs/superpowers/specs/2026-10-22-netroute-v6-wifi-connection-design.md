@@ -1,7 +1,7 @@
 # NetRoute Widget v6: Wi-Fi as a third connection — Design
 
 **Date:** 2026-10-22
-**Status:** Draft for review.
+**Status:** Reviewed by a builder check; awaiting the user's approval.
 **Builds on:**
 - `2026-10-02-netroute-widget-v1-design.md`: card, modes, metrics, auto-heal.
 - `2026-10-02-netroute-v2-smart-routing-design.md`: sing-box, waiting list, popup.
@@ -125,7 +125,12 @@ Each box shows a **concrete adapter**. There is no "Automatic" entry. Under each
 
 **After saving (call).** NetRoute uses exactly the saved adapters. A saved adapter that is not present shows as "(not connected)" in the dialog, and its row on the card reads "not connected". This is today's behaviour for a saved choice.
 
-**Unsaved slots (call).** A user who has never opened the dialog keeps today's automatic behaviour, because null still means detect. The difference is that Wi-Fi is now detected too.
+**"Not used" (call).** Every box has a **Not used** entry, stored explicitly. A slot set to Not used gets no row, no button, no metric changes and no probes.
+
+**Defaults when nothing is saved:**
+- **Phone and LAN (call).** They keep today's behaviour: nothing saved means detect.
+- **Wi-Fi (call).** Nothing saved means **Not used**. The Wi-Fi row and button appear only after the user picks an adapter, either by hand or with Detect followed by OK. That matches "if Wi-Fi is enabled". Upgrading alone never changes which buttons show or how Wi-Fi is routed.
+- **Detect finds nothing.** The box shows Not used.
 
 **On OK,** any adapter that stops being one of the three is reset to the automatic metric. That's today's `SetOverridesAsync` behaviour, generalised to all slots.
 
@@ -181,7 +186,10 @@ Healing works on an ordered list instead of a single pair.
 
 - **When the main connection fails** (same 60 s rule, thresholds and backoff as today), heal to the **first connection in `FallbackOrder`**, skipping the main, whose own probe is currently answering. If none is answering, there is no heal.
 - **When the heal target fails,** move to the next answering connection in order. If none is left, end the heal and restore the main connection's metrics. Today a dying backup simply ends the heal; this generalises that.
-- **Recovery** (going back to the main) and sticky-heal behaviour are unchanged.
+- **Stepping down (call).** When the heal target fails, the move to the next answering connection is **immediate**, as today's "backup died" rule is. It does not wait for the 60 s rule.
+- **Stepping back up (call).** While the main is still down, a **higher-priority** connection that answers 3 checks in a row takes over from the current target, for example Wi-Fi taking back from the Phone. This keeps mobile data the last resort. It is the same 3-check count used to revert today.
+- **Backoff (call).** Moves inside one heal do not count towards the heal backoff or the sticky heal. Only entering a heal does.
+- **Recovery** (going back to the main) and sticky-heal behaviour are otherwise unchanged.
 - **Known limit.** LAN and Wi-Fi currently share Google Wifi and the ISP router, so they usually fail together, and healing then reaches the Phone. That is correct behaviour. It improves once Wi-Fi is on the ISP router directly.
 - **Probing.** `MeasureAsync` probes every chosen connection in parallel. The probe is already per source address. "no reply" smoothing (2 misses) is kept per connection.
 
@@ -193,9 +201,11 @@ This is a hard requirement.
 
 **Requirement.** In **every** mode, with Smart routing on or off, traffic to the LAN adapter's own IPv4 subnet uses the LAN adapter whenever the LAN is connected. "Every mode" means Phone, Wi-Fi, LAN, and healing. Auto is excluded: it means hands-off.
 
-**Smart routing on.** The `ip_is_private` rule must send the destination to the connection **whose own subnet contains it**. When several connections share that subnet, the LAN wins. Otherwise the destination goes to the LAN, and to the main connection if there is no LAN. The same applies to the router-local DNS detour (`lan-dns`).
+**Smart routing never sees local traffic.** `SingBoxConfigBuilder.ExcludedRanges` (10/8, 172.16/12, 192.168/16 and others) goes to sing-box as `route_exclude_address`. Camera traffic therefore never enters the TUN, and Windows' own routes decide it **whether Smart is on or off**. The `ip_is_private` rule never sees it. The route pin below is therefore the **only** mechanism, in every Smart state.
 
-**Smart routing off.** Interface metrics alone cannot split internet traffic from local traffic, so the builder adds a **route-level pin**. Two ways to do it:
+**Router-local DNS.** The `lan-dns` detour (names like `*.lan`, `*.home`) keeps going to the LAN's DNS server over the LAN, as today.
+
+**The pin.** Interface metrics alone cannot split internet traffic from local traffic, so the builder adds a **route-level pin**. Two ways to do it:
 - lower the metric of the LAN's on-link subnet route; or
 - raise the metric of the non-main default routes.
 
@@ -204,7 +214,7 @@ Either way, the pin must meet all of these:
 - **Checked on every refresh and re-applied,** as metrics are today, so it survives DHCP renewals and reconnects.
 - **Kept in `ActiveStore`,** never persisted.
 - **Reverted** on mode change to Auto, on quit, and by `Restore-Network.cmd`. The script needs a new step for this.
-- **Spiked first:** a short spike on the user's machine (Ethernet and Wi-Fi both on pzhome) proves the chosen route change makes `Find-NetRoute -RemoteIPAddress 192.168.86.x` pick Ethernet while `1.1.1.1` picks Wi-Fi. That result decides the mechanism. If neither works, stop and come back to the user before building Phase 1's routing part.
+- **Spiked first:** a short spike on the user's machine (Ethernet and Wi-Fi both on pzhome) proves the chosen route change makes `Find-NetRoute -RemoteIPAddress 192.168.86.x` pick Ethernet while `1.1.1.1` picks Wi-Fi. Run it **with sing-box running and without**. That result decides the mechanism. If neither works, stop and come back to the user before building Phase 1's routing part.
 
 **Wi-Fi on a different subnet** (the later ISP-router setup, 192.168.1.x). There is no overlap, so no pin is needed, and Windows' direct routes already keep each subnet on its own adapter.
 
@@ -218,15 +228,31 @@ Either way, the pin must meet all of these:
 - One `default` selector over all connections.
 - The config key that restarts sing-box includes every chosen adapter's name.
 
+**Generic principle (call): never spill onto mobile data automatically.**
+- A rule whose target is a non-metered connection (LAN or Wi-Fi) falls back automatically to the **next answering non-metered connection in `FallbackOrder`**. When none answers, it waits.
+- It reaches the Phone only through the user's "Use <x> until <target> is back" button.
+- A rule whose target is the Phone falls back to the profile's current internet path.
+
+**Selectors.**
+- `only-<id>` lists `[<id>, the other non-metered connections in FallbackOrder]`. The phone is added only while the user's button is active.
+- `only-phone` lists `[phone, <current path>]`.
+- This replaces today's two-entry `lan-only`, and it covers "LAN profile healed onto Wi-Fi": LAN-only items then use Wi-Fi, not the phone.
+
+**"Home" target (call).** Built-in items with exit `lan`, and user rules with no `Exit` in `UserRules`, mean **home**. Home is the first answering of LAN, then Wi-Fi. It waits only when neither answers. So with only Wi-Fi chosen, these rules use Wi-Fi.
+
+**Every profile includes the home items and the rules with non-metered targets (call).** Today `RuleSet.Build` loads the Phone profile's `UserRules` and the home items into the LAN profile so they stay off the phone during a heal. v6 does the same in **every** profile:
+- **Main is LAN or Wi-Fi:** these rules ride the main.
+- **During a heal onto the phone:** they wait, or use the other home connection.
+
 **Built-in catalog.** It keeps its two exits: `lan` means "a home connection", `phone` means the phone. "wifi" stays invalid in `builtin.json` and `rules.user.json`, and the two existing rejection tests stay. Per profile:
 
 | Built-in group | Catalog exit | Phone profile | LAN profile | Wi-Fi profile |
 |---|---|---|---|---|
-| updates, sync, video, games | lan | → LAN (as today)* | main (not an exception) | main (not an exception) |
+| updates, sync, video, games | lan (home) | → home: LAN, else Wi-Fi | main; home-only during a heal | main; home-only during a heal |
 | ai-tools, isp | phone | main | → Phone (as today) | → Phone |
-| ai-updates (carve-out) | lan | → LAN (as today)* | → LAN, beats ai-tools (as today) | → **Wi-Fi** (the main), beats ai-tools |
+| ai-updates (carve-out) | lan (home) | → home: LAN, else Wi-Fi | → home, beats ai-tools (as today) | → home (Wi-Fi first, as the main), beats ai-tools |
 
-\* **(call)** In the Phone profile, "home" items go to the LAN when a LAN is chosen, and to Wi-Fi when only Wi-Fi is.
+"Home-only during a heal" means: when the profile's main is healed onto the phone, these items use the other home connection or wait. They never use the phone automatically.
 
 **User rules.**
 - Each profile has its own list:
@@ -246,7 +272,12 @@ Either way, the pin must meet all of these:
 - The button reads "Use <main> until <target> is back". It adds "(uses mobile data)" only when the main is metered.
 - Three healthy checks bring it back, and the "<target> back" toast fires, as today.
 
-**Phase 1 behaviour.** Until Smart routing learns Wi-Fi (Phase 2), Smart routing **pauses in Wi-Fi mode**, as it does in Auto. The card footer says so.
+**Phase 1 behaviour (call).** Until Smart routing learns Wi-Fi (Phase 2), Smart routing **pauses whenever Wi-Fi is the connection actually carrying internet**, as it does in Auto. That covers three cases:
+- Wi-Fi mode.
+- Healing onto Wi-Fi.
+- The main connection unplugged, so Windows falls to Wi-Fi by metric.
+
+Without this, sing-box would keep sending unmatched traffic to the phone (mobile data) or to a dead LAN. The card footer says "Smart routing paused while on Wi-Fi". Smart resumes when the path leaves Wi-Fi.
 
 ## Usage, live speed, speed test
 
@@ -265,6 +296,8 @@ Either way, the pin must meet all of these:
 **Speed test.** Runs once per connected connection. Only the Phone carries the mobile-data note.
 
 **Live speed and totals.** The card shows them on every row, Wi-Fi included.
+
+**Before v6.2 (call).** v6.0 and v6.1 ship with the Wi-Fi row's live speed and today's total shown as "—". Address and latency work from v6.0. Until v6.2, Wi-Fi bytes the counter sees are booked in the LAN share, which is today's behaviour for unknown non-phone traffic. The phone figure stays exact throughout.
 
 ## Path map
 
@@ -289,7 +322,10 @@ Either way, the pin must meet all of these:
 
 **Backup before the first v6 save.** v5.3 treats an unknown enum value as a corrupt file and overwrites it with defaults, so a downgrade would lose the user's rules. Before v6 first writes `settings.json`, it copies it once to `settings.v5-backup.json`, and only if no such backup exists. The README's downgrade note points to it.
 
-**An existing LAN choice that is wireless.** The v5.3 picker allowed this. If `LanOverrideMac` (or `SmartRouting.LastLanInterface`) names a wireless adapter, v6 moves it to `WifiOverrideMac` on first load and clears the LAN choice, so the LAN goes back to detection.
+**An existing LAN choice that is wireless.** The v5.3 picker allowed this, and the user may be set up this way right now. If `LanOverrideMac` (or `SmartRouting.LastLanInterface`) names a wireless adapter, v6 migrates on first load so that **traffic keeps going where it went (call)**:
+- The MAC moves to `WifiOverrideMac`, and the LAN choice is cleared, so the LAN goes back to detection.
+- `Mode = Lan` becomes `Mode = Wifi`.
+- The "LAN + exceptions" list (`PhoneUserRules`) is **copied** to `WifiUserRules`. It is kept in place too, so nothing is lost.
 
 **`Restore-Network.cmd`.** Already resets every adapter with a manual metric, Wi-Fi included. It gains the route-pin reset, and keeps setting `Mode='Auto'` and turning Smart off.
 
