@@ -40,6 +40,9 @@ public sealed class SmartRoutingController
 
     const string FaultMessage = "Smart routing stopped — sing-box keeps crashing (see log)";
     const string NeedsBothMessage = "Needs both phone and LAN connected";
+    /// sing-box doesn't understand Wi-Fi as a routing exit yet (v6.1): while Wi-Fi carries the internet, Smart routing
+    /// pauses entirely rather than send unmatched traffic to the phone (mobile data) or to a dead connection.
+    public const string WifiPausedMessage = "Paused while on Wi-Fi";
 
     readonly IReadOnlyList<RuleItem> _catalog;
     readonly ISingBoxHost _host;
@@ -525,6 +528,10 @@ public sealed class SmartRoutingController
         if (_faulted) return (SmartState.Faulted, FaultMessage);
         if (!net.CanModify) return (SmartState.Unavailable, "Needs administrator rights");
         if (net.Mode == RoutingMode.Auto) return (SmartState.Unavailable, "Paused in Auto mode"); // the widget steps aside
+        // sing-box doesn't route through Wi-Fi yet (v6.1): pause rather than send unmatched traffic to the phone or a
+        // dead connection. Takes priority over the "needs phone" check below. Qualified: "ConnectionId" below this point
+        // is the log-line-parsing Regex field, not the enum.
+        if (net.Carrier == global::NetRoute.Core.ConnectionId.Wifi) return (SmartState.Unavailable, WifiPausedMessage);
         // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT, and neither
         // does never having seen it: LAN-only traffic has to wait for it, so sing-box runs against the last-known
         // (or saved, or placeholder) LAN adapter name. In the LAN profile the LAN list stays active too (it is not an

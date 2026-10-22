@@ -36,13 +36,16 @@ public class SmartRoutingControllerTests
     static AppSettings On(bool enabled = true) => new() { SmartRouting = new SmartRoutingSettings { Enabled = enabled } };
 
     static NetworkStatus Net(RoutingMode mode = RoutingMode.Phone, int phoneIndex = 31, bool lan = true, int? lanMs = 12,
-                             bool healing = false, bool canModify = true, bool phone = true, string lanName = "Ethernet", string? lanDns = "192.168.86.1") =>
+                             bool healing = false, bool canModify = true, bool phone = true, string lanName = "Ethernet", string? lanDns = "192.168.86.1",
+                             bool wifi = false, ConnectionId? carrier = null) =>
         new(mode,
             DetectionResult.Of(phone ? TestAdapters.Phone(phoneIndex) : null, phone ? DetectionIssue.None : DetectionIssue.NotFound,
-                lan ? TestAdapters.Lan() with { Name = lanName, DnsServer = lanDns } : null, lan ? DetectionIssue.None : DetectionIssue.NotFound),
+                lan ? TestAdapters.Lan() with { Name = lanName, DnsServer = lanDns } : null, lan ? DetectionIssue.None : DetectionIssue.NotFound,
+                wifi ? TestAdapters.Wifi() : null, wifi ? DetectionIssue.None : DetectionIssue.NotUsed),
             InternetPath.Phone, InternetPath.None,
             new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = 30, [ConnectionId.Lan] = lan ? lanMs : null },
-            canModify, null, IsHealing: healing);
+            canModify, null, IsHealing: healing)
+        { Carrier = carrier };
 
     [Fact]
     public async Task Disabled_does_not_start()
@@ -967,6 +970,65 @@ public class SmartRoutingControllerTests
 
         Assert.Equal(1, _host.Stops);
         Assert.Equal((SmartState.Unavailable, "Paused in Auto mode"), (c.Status.State, c.Status.Message));
+    }
+
+    // ---- Task 11: Smart routing pauses while Wi-Fi carries the internet ----
+
+    [Fact]
+    public async Task Wifi_mode_pauses_smart_routing()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On()); // running first, to prove the host gets stopped
+
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Wifi), On());
+
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
+
+        // The card footer: the existing "Paused " transform in SmartRoutingPresenter.Row must produce this, not a doubled message.
+        var row = SmartRoutingPresenter.Row(c.Status);
+        Assert.Equal(("⚡ Smart routing paused while on Wi-Fi", SmartTone.Muted), (row.Text, row.Tone));
+    }
+
+    [Fact]
+    public async Task Lan_unplugged_with_wifi_present_pauses()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On()); // running on the LAN
+
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false, wifi: true, carrier: ConnectionId.Wifi), On());
+
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
+        // Unmatched traffic must never fall onto the phone just because the LAN vanished while Wi-Fi carries.
+        Assert.DoesNotContain(("default", "phone"), _api.Selects);
+    }
+
+    [Fact]
+    public async Task Leaving_wifi_resumes()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On()); // running on the LAN
+
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false, wifi: true, carrier: ConnectionId.Wifi), On());
+        Assert.Equal(1, _host.Stops);
+        Assert.Equal(SmartState.Unavailable, c.Status.State);
+
+        await c.ApplyAsync(Net(RoutingMode.Lan, wifi: true, carrier: ConnectionId.Lan), On());
+
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(2, _host.Starts.Count);
+    }
+
+    [Fact]
+    public async Task Phone_carrier_keeps_running()
+    {
+        var c = Create();
+
+        // Healed from LAN to the phone; Wi-Fi present but not involved.
+        await c.ApplyAsync(Net(RoutingMode.Lan, healing: true, wifi: true, carrier: ConnectionId.Phone), On());
+
+        Assert.Equal(SmartState.Running, c.Status.State);
     }
 
     // ---- Final pass M1: why it failed ----
