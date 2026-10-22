@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>NetRouteWidget</AssemblyName>
-    <Version>5.3.0</Version>
+    <Version>6.0.0</Version>
     <RootNamespace>NetRoute.App</RootNamespace>
     <ApplicationIcon>Assets\NetRouteWidget.ico</ApplicationIcon>
     <!-- ThemeMode (Fluent theme per window) is experimental in .NET 10; used only on the management/dialog windows. -->

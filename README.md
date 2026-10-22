@@ -1,14 +1,14 @@
 # NetRoute Widget
 
-A small Windows tray widget for PCs that are connected to **two networks at once**, such as a wired LAN and a phone's USB tethering.
+A small Windows tray widget for PCs that are connected to **multiple networks at once**, such as a wired LAN, a phone's USB tethering, and (from v6.0) Wi-Fi as a third path.
 
-- Sends **internet traffic through the phone**, through the LAN, or lets Windows decide, with one click.
-- Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** the whole time.
+- Sends **internet traffic through the phone**, through the LAN, through Wi-Fi, or lets Windows decide, with one click.
+- Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** the whole time, even when Wi-Fi joins the same home network as the LAN cable.
 - Shows which connection is carrying internet right now, and the latency through each. The latency has two amber states:
   - **"1250 ms" in amber:** the connection answers, but slowly (500 ms or more, for example a congested line). Traffic still flows.
   - **"no reply" in amber:** two checks in a row got no answer within 4 seconds. This is also what Smart routing treats as the LAN being offline. A slow answer never counts as a failure, for Smart routing or for auto-heal.
-- When the preferred connection **disconnects**, internet falls back to the other one automatically, and you get a notification.
-- **Auto-heal:** if the preferred connection is up but has **no internet** (for example, phone mobile data off, or the carrier blocking tethering), the widget switches to the other connection until it recovers. It waits until the connection has failed for a full minute, so short blips never move your traffic onto the other (maybe metered) connection. Turn it off entirely in the card's ⋮ menu or the tray menu.
+- When the preferred connection **disconnects**, internet falls back to the next one automatically, in order **LAN → Wi-Fi → Phone**, and you get a notification.
+- **Auto-heal:** if the preferred connection is up but has **no internet** (for example, phone mobile data off, or the carrier blocking tethering), the widget switches to the next connection in that same order until it recovers, and steps back up as higher-priority connections come back. It waits until the connection has failed for a full minute, so short blips never move your traffic onto a worse (maybe metered) connection. Turn it off entirely in the card's ⋮ menu or the tray menu.
   - Repeated failures make it wait longer before switching back.
   - If the preferred connection keeps failing, it stays on the working one and says so ("click Phone to retry").
 
@@ -21,20 +21,32 @@ A small Windows tray widget for PCs that are connected to **two networks at once
 | **Usage tab** (v3) | Who used how much data: Phone and LAN (upload, download and total) per application or site for Today / 3 / 7 / 15 / 30 days, live **Now phone** and **Now LAN** speeds, filter box, accurate counting reconciled with Windows' own phone-adapter counter. |
 | **Profiles** (v4) | **Phone + exceptions** and **LAN + exceptions**: choose which connection carries everything else; AI tools (Claude, ChatGPT, Codex, VS Code, Copilot, Gemini, Cursor, Perplexity) and `*.omantel.om` can use the phone while the rest uses the LAN; update downloads always use the LAN. |
 | **Network path** (v5) | Click the card's status line, or the network icon next to ⏱ and ⚙, for a live map of the route from this PC to the internet over the LAN and over the phone: your router, the devices behind it, the internet. It shows where a connection stops answering, and says so only when the evidence supports it. |
+| **Wi-Fi as a third connection** (v6.0) | Choose a Wi-Fi adapter in **Choose adapters** and route through it with its own card button and tray item, alongside Phone and LAN. Auto-heal now falls back in order (LAN → Wi-Fi → Phone), and local devices stay on the LAN cable even when Wi-Fi joins the same home network. Smart routing pauses while Wi-Fi is actually carrying the internet (full support is a later update). |
 | **On the card** | The live speed through each connection next to its latency, and today's total data through each connection at the right edge. |
 | **Your own lists** | Right-click a row in the Usage tab to *Send to exception* / *Exclude from exception* (a tag marks exceptions), edit either profile's list on the Config tab, or manage the lists from JSON in `%AppData%\NetRouteWidget\rules.user.json`. |
 
 ## How it works
 
-The widget only changes **interface metrics**, Windows' priority numbers for each connection:
+The widget mainly changes **interface metrics**, Windows' priority numbers for each connection. The chosen connection gets metric 5, and the others become graded backups in a fixed order (LAN, then Wi-Fi, then Phone, skipping whichever is the chosen one):
 
 | Mode | What it does |
 |---|---|
-| **Phone** | phone metric 5, LAN 50 |
-| **LAN** | phone 50, LAN 5 |
+| **Phone** | phone metric 5, LAN 50, Wi-Fi 60 |
+| **LAN** | LAN metric 5, Wi-Fi 50, phone 60 |
+| **Wi-Fi** (v6.0) | Wi-Fi metric 5, LAN 50, phone 60 |
 | **Windows default** (tray menu only) | restores Windows' own automatic metrics (what Restore-Network.cmd does); the card has no Auto button, and Smart routing pauses while it is active |
 
-It never deletes routes, so the other connection always remains a working fallback. LAN-subnet traffic always uses the LAN, because Windows has a direct route for it.
+It never deletes routes, so the other connections always remain a working fallback. Local-subnet traffic (your cameras, NAS, printer and so on) stays on the LAN cable in every mode — even when Wi-Fi joins the same home network as the LAN, which would otherwise let Wi-Fi's lower metric win that traffic. NetRoute checks for that overlap and, only when it is present, pins the LAN's own local-subnet route so it keeps winning; it un-pins the same route the moment the overlap goes away, on quit, or when you switch to Windows default.
+
+## Wi-Fi as a third connection (v6.0)
+
+Wi-Fi now routes exactly like Phone and LAN do, with the same one-click card button and tray item.
+
+- **Choosing it:** open **Choose adapters** (the card's ⋮ menu) to pick a Wi-Fi adapter, alongside the Phone and LAN adapters. Each box shows what is actually selected, never a hidden "Automatic": pick **Not used** to leave Wi-Fi out of routing entirely, or click **Detect automatically** to have NetRoute fill in a best guess for every box (the result is always shown, so you can change it). A Wi-Fi row that was previously chosen but is not currently connected is told apart from one you set to "Not used".
+- **The Wi-Fi button:** once a Wi-Fi adapter is chosen, the card and tray menu gain a **Wi-Fi** button next to Phone and LAN. Click it to send internet traffic through Wi-Fi, the same way Phone and LAN already work.
+- **Auto-heal's fallback order is now LAN → Wi-Fi → Phone:** mobile data is always the last resort. If your chosen connection loses internet, NetRoute heals to the next connection in that order that is actually answering, and steps back up as higher-priority connections recover, exactly as it already did for the two-connection case.
+- **Local devices stay on the cable:** adding Wi-Fi never risks your cameras, NAS or printer. When Wi-Fi joins the same home network as the LAN (for example both on `pzhome`), NetRoute pins the LAN's local-subnet route so it keeps winning that traffic no matter which connection is carrying the internet — see the metric table above.
+- **Smart routing and Wi-Fi:** Smart routing currently **pauses** while Wi-Fi is the connection actually carrying the internet — in Wi-Fi mode, healed onto Wi-Fi, or if the main connection is unplugged and Windows falls to Wi-Fi by metric. Full Smart-routing support for Wi-Fi (its own profile, usage counting, speed) is a later update; see [the v6.0 spec](docs/superpowers/specs/2026-10-22-netroute-v6-wifi-connection-design.md).
 
 ## Smart routing (v2)
 
@@ -53,7 +65,7 @@ Keep data-hungry traffic off 4G while the PC uses the phone:
 - **Live speed on the card:** while Smart routing runs, the card shows the current total speed through the phone and through the LAN (all applications together, over the last ~3 seconds, shown only above 1 KB/s) next to each latency. It measures what passes through Smart routing, so nothing is shown while Smart routing is off.
 - **Today's total on the card:** to the right of each latency the card shows how much data went through that connection today (the same numbers as the Usage tab's Today total), while there is any history.
 
-Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights, runs in Phone and LAN modes and pauses in Auto mode. Items that go through the LAN wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
+Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights, runs in Phone and LAN modes and pauses in Auto mode, and (v6.0) also pauses whenever Wi-Fi is the connection actually carrying the internet — Wi-Fi mode, healed onto Wi-Fi, or the main connection unplugged so Windows falls to Wi-Fi by metric. The card footer says "Smart routing paused while on Wi-Fi"; full Smart-routing support for Wi-Fi is a later update. Items that go through the LAN wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
 
 ## Profiles (v4)
 
@@ -120,17 +132,22 @@ The install goes under *Program Files* on purpose. That folder is writable only 
 
 - stops the widget and the Smart routing helper (sing-box);
 - gives every adapter back to Windows' automatic priority;
+- restores any local-subnet route NetRoute pinned (v6.0's Wi-Fi route pin, see above) back to its normal metric;
 - sets the widget to Auto mode and switches Smart routing off in its saved settings;
 - offers to remove the startup task.
 
-Run `Restore-Network.cmd /check` first to see what it would do without changing anything (it also reports whether a leftover `NetRoute` adapter is present).
+Run `Restore-Network.cmd /check` first to see what it would do without changing anything (it also reports whether a leftover `NetRoute` adapter is present, or a pinned local route that was never released).
 
 > Note: the restore script resets **all** adapters that have a manual metric, including any you set yourself.
+
+> **Downgrading from v6.0:** installing v6.0 keeps a one-time backup of your previous settings at `%AppData%\NetRouteWidget\settings.v5-backup.json`. If you go back to an older version, restore that file over `settings.json` first.
 
 Manual equivalent (administrator PowerShell):
 
 ```powershell
 Get-NetIPInterface | Where-Object AutomaticMetric -eq Disabled | Set-NetIPInterface -AutomaticMetric Enabled
+Get-NetRoute -PolicyStore ActiveStore -AddressFamily IPv4 | Where-Object { $_.NextHop -eq "0.0.0.0" -and $_.RouteMetric -eq 0 } |
+    Set-NetRoute -RouteMetric 256 -Confirm:$false
 schtasks /Delete /TN NetRouteWidget /F
 Remove-Item -Recurse "$env:APPDATA\NetRouteWidget"
 ```
@@ -154,5 +171,6 @@ dotnet run --project src/NetRoute.App
 - **v5:** A network path map: a live drawing of the route from this PC to the internet over the LAN and the phone, opened from the card, with per-device health and an evidence-based diagnosis of where a connection stops answering. See [the v5 spec](docs/superpowers/specs/2026-10-13-netroute-v5-path-map-design.md). ✅
 - **v5.2:** A Local network tab in the path window: ping your router and chosen devices, scan the subnet, and tell a local cable or switch problem from a fault beyond the router. See [the v5.2 spec](docs/superpowers/specs/2026-10-14-netroute-v5-2-local-network-design.md). ✅
 - **v5.3:** A slow connection is no longer shown as dead: the latency check races both targets within one 4 s deadline, and a reply of 500 ms or more shows its figure in amber instead of "no reply". See [the v5.3 spec](docs/superpowers/specs/2026-10-20-netroute-v5-3-slow-vs-no-reply-design.md). ✅
+- **v6.0:** Wi-Fi as a third, equal connection alongside Phone and LAN, with its own row, card button and tray item; auto-heal now falls back in order (LAN → Wi-Fi → Phone); local traffic stays on the LAN cable even when Wi-Fi shares the LAN's home network, via a route pin. See [the v6.0 spec](docs/superpowers/specs/2026-10-22-netroute-v6-wifi-connection-design.md). ✅
 
 Design: [docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md](docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md)

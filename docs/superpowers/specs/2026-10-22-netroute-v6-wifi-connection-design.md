@@ -1,7 +1,7 @@
 # NetRoute Widget v6: Wi-Fi as a third connection — Design
 
 **Date:** 2026-10-22
-**Status:** Reviewed by a builder check; awaiting the user's approval.
+**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). v6.1-v6.4 (Smart routing, usage, path map, network picker) to follow. The cable-pull heal check on the real machine is still to be run by the user.
 **Builds on:**
 - `2026-10-02-netroute-widget-v1-design.md`: card, modes, metrics, auto-heal.
 - `2026-10-02-netroute-v2-smart-routing-design.md`: sing-box, waiting list, popup.
