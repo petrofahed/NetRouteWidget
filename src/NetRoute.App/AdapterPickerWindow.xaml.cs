@@ -82,14 +82,20 @@ public partial class AdapterPickerWindow : Window
         UpdateWifiDetail(choice);
     }
 
+    /// A choice with no live AdapterInfo is either the explicit "Not used" entry, or a saved
+    /// adapter identifier that doesn't match any adapter Windows reports right now (the
+    /// "{value} (not connected)" entry Fill synthesizes) — those two must read differently, or a
+    /// user with a merely-unplugged saved choice would think it silently reset to Not used.
+    static string NotPresentDetail(Choice choice) => choice.Value == AdapterOverrides.NotUsed ? "Not used" : "not connected";
+
     static void UpdateDetail(TextBlock detail, ConnectionId slot, Choice choice) =>
-        detail.Text = choice.Adapter is { } adapter ? AdapterDetector.DetailLine(adapter, slot) : "Not used";
+        detail.Text = choice.Adapter is { } adapter ? AdapterDetector.DetailLine(adapter, slot) : NotPresentDetail(choice);
 
     void UpdateWifiDetail(Choice choice)
     {
         if (choice.Adapter is not { } adapter)
         {
-            WifiDetail.Text = "Not used";
+            WifiDetail.Text = NotPresentDetail(choice);
             WifiNetworkBox.ItemsSource = new[] { new Choice("not connected", null, null) };
             WifiNetworkBox.SelectedIndex = 0;
             return;
