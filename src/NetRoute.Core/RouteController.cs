@@ -332,7 +332,11 @@ public sealed class RouteController
     /// associates while the app is also starting up" is a plausible race where DHCP (which gives
     /// IPv4) finishes slightly before Windows has actually named the connection profile. Settling
     /// for null here forever (until the next reconnect) would defeat the feature for the rest of
-    /// the session; instead, a null keeps the key unset so the very next poll tries again.
+    /// the session; instead, a null CLEARS the key (rather than leaving it at whatever it was),
+    /// so the very next poll tries again - including a poll that lands back on a key that
+    /// previously resolved to a real name (e.g. a DHCP renewal or reconnect briefly changes the
+    /// IPv4 and then reverts): leaving the old key in place there would make that returning key
+    /// match the stale pre-null cache entry and short-circuit forever on a cached null.
     void UpdateWifiNetworkName(DetectionResult detection)
     {
         if (detection.Wifi is not { } wifi)
@@ -347,7 +351,7 @@ public sealed class RouteController
 
         var name = _names?.NameOf(wifi);
         _wifiNetworkName = name;
-        if (name is not null) _lastWifiKey = key;
+        _lastWifiKey = name is null ? null : key;
     }
 
     static string CarrierName(RoutingMode mode, DetectionResult adapters) =>

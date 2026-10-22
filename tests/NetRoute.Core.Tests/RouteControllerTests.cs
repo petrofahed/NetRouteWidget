@@ -1057,4 +1057,34 @@ public class RouteControllerTests
         Assert.Equal(2, names.CallCount);
         Assert.Equal("pzhome", controller.Status.WifiNetwork);
     }
+
+    /// Regression for a round-trip through a different key: K1 resolves to a real name, K2 (e.g. a DHCP
+    /// renewal or reconnect briefly changing the IPv4) resolves to null, then the key goes back to K1
+    /// (Wi-Fi present throughout - not a disconnect). Leaving the cache key at K1 across the null lookup
+    /// at K2 would make the later return to K1 match the stale cache entry and short-circuit on the
+    /// cached null forever, instead of re-querying.
+    [Fact]
+    public async Task Null_result_does_not_poison_a_later_return_to_a_previously_good_key()
+    {
+        AddWifi(); // index 18, IPv4 "192.168.1.20" (K1)
+        var names = new FakeNetworkNameSource { Results = new Queue<string?>(new string?[] { "pzhome", null, "pzhome" }) };
+        var controller = Create(new AppSettings { WifiOverrideMac = "AA-BB-CC-00-00-18" }, names: names);
+
+        await controller.RefreshAsync(measureLatency: true); // K1 -> "pzhome"
+        Assert.Equal(1, names.CallCount);
+        Assert.Equal("pzhome", controller.Status.WifiNetwork);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 18);
+        _adapters.Adapters.Add(TestAdapters.Wifi() with { IPv4 = "192.168.1.99" }); // K2
+        await controller.RefreshAsync(measureLatency: true); // K2 -> null
+        Assert.Equal(2, names.CallCount);
+        Assert.Null(controller.Status.WifiNetwork);
+
+        _adapters.Adapters.RemoveAll(a => a.Index == 18);
+        _adapters.Adapters.Add(TestAdapters.Wifi()); // back to K1 ("192.168.1.20") - Wi-Fi never dropped
+        await controller.RefreshAsync(measureLatency: true); // K1 again -> must re-query, not short-circuit
+
+        Assert.Equal(3, names.CallCount);
+        Assert.Equal("pzhome", controller.Status.WifiNetwork);
+    }
 }
