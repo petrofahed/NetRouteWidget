@@ -78,8 +78,8 @@ public partial class App : Application
                     var migrated = SettingsMigration.ToV6(settings, new WindowsAdapterSource().GetAdapters());
                     if (migrated != settings)
                     {
+                        store.Save(migrated); // written before settings is updated: if this throws, in-memory and on-disk stay the old, unmigrated settings together
                         settings = migrated;
-                        store.Save(settings);
                         log.Info("Settings migrated to v6");
                     }
                 }
