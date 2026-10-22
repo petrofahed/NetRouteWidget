@@ -6,20 +6,20 @@ public sealed record ApplyResult(bool Success, string? Error)
 }
 
 /// Sets interface metrics for a mode and verifies them by reading back.
-/// Never deletes routes: the non-preferred adapter keeps its default route as fallback.
+/// Never deletes routes: non-main adapters keep their default route as fallback.
 public sealed class RoutingEngine(IInterfaceMetrics metrics)
 {
     static readonly IpFamily[] Families = [IpFamily.IPv4, IpFamily.IPv6];
 
-    public ApplyResult Apply(RoutingMode mode, DetectionResult adapters) =>
-        ApplyTargets(Targets(adapters, MetricPolicy.For(mode)));
+    public ApplyResult Apply(RoutingMode mode, DetectionResult adapters, ConnectionId? carrier = null) =>
+        ApplyTargets(Targets(adapters, MetricPolicy.For(mode, carrier)));
 
     /// Hands an adapter back to Windows' automatic metric.
     public ApplyResult Reset(AdapterInfo adapter) => ApplyTargets([(adapter, null)]);
 
-    public bool IsInSync(RoutingMode mode, DetectionResult adapters)
+    public bool IsInSync(RoutingMode mode, DetectionResult adapters, ConnectionId? carrier = null)
     {
-        foreach (var (adapter, metric) in Targets(adapters, MetricPolicy.For(mode)))
+        foreach (var (adapter, metric) in Targets(adapters, MetricPolicy.For(mode, carrier)))
         foreach (var family in Families)
         {
             var state = metrics.Get(adapter.Index, family);
@@ -53,9 +53,14 @@ public sealed class RoutingEngine(IInterfaceMetrics metrics)
     static bool Matches(InterfaceMetricState state, uint? metric) =>
         metric is { } m ? !state.UseAutomatic && state.Metric == m : state.UseAutomatic;
 
-    static IEnumerable<(AdapterInfo, uint?)> Targets(DetectionResult adapters, MetricTarget target)
+    /// An absent connection doesn't hold a backup grade: re-grade the present backups in rank order,
+    /// so a missing one never leaves a gap (e.g. Lan main with no Wi-Fi still grades Phone 50, not 60).
+    static IEnumerable<(AdapterInfo, uint?)> Targets(DetectionResult adapters, IReadOnlyDictionary<ConnectionId, uint?> target)
     {
-        if (adapters.Phone is { } phone) yield return (phone, target.Phone);
-        if (adapters.Lan is { } lan) yield return (lan, target.Lan);
+        uint[] grades = [MetricPolicy.Backup, MetricPolicy.SecondBackup];
+        var backups = adapters.Present.Where(p => target[p.Id] is > MetricPolicy.Preferred)
+            .OrderBy(p => target[p.Id]).Select(p => p.Id).ToList();
+        return adapters.Present.Select(p =>
+            (p.Adapter, target[p.Id] is > MetricPolicy.Preferred ? grades[backups.IndexOf(p.Id)] : target[p.Id]));
     }
 }

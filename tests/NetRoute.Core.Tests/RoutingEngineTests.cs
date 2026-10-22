@@ -5,6 +5,9 @@ public class RoutingEngineTests
     static DetectionResult Both(AdapterInfo? phone = null) =>
         DetectionResult.Of(phone ?? TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None);
 
+    static DetectionResult All3(AdapterInfo? wifi = null) => DetectionResult.Of(
+        TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None, wifi ?? TestAdapters.Wifi(), DetectionIssue.None);
+
     static FakeInterfaceMetrics MetricsFor(params int[] indexes)
     {
         var metrics = new FakeInterfaceMetrics();
@@ -129,5 +132,44 @@ public class RoutingEngineTests
         Assert.True(result.Success, result.Error);
         Assert.True(metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
         Assert.True(metrics.Get(10, IpFamily.IPv6)!.UseAutomatic);
+    }
+
+    [Theory]
+    [InlineData(RoutingMode.Phone, 5u, 50u, 60u)]
+    [InlineData(RoutingMode.Lan, 60u, 5u, 50u)]
+    [InlineData(RoutingMode.Wifi, 60u, 50u, 5u)]
+    public void Every_mode_grades_the_backups_in_fallback_order(RoutingMode mode, uint phone, uint lan, uint wifi)
+    {
+        var metrics = MetricsFor(31, 10, 18);
+        new RoutingEngine(metrics).Apply(mode, All3());
+        Assert.Equal(new InterfaceMetricState(false, phone), metrics.Get(31, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, lan), metrics.Get(10, IpFamily.IPv4));
+        Assert.Equal(new InterfaceMetricState(false, wifi), metrics.Get(18, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public void Carrier_overrides_the_mode_while_healing()
+    {
+        var metrics = MetricsFor(31, 10, 18);
+        new RoutingEngine(metrics).Apply(RoutingMode.Lan, All3(), carrier: ConnectionId.Wifi);
+        Assert.Equal(5u, metrics.Get(18, IpFamily.IPv4)!.Metric);
+        Assert.Equal(50u, metrics.Get(10, IpFamily.IPv4)!.Metric);
+        Assert.Equal(60u, metrics.Get(31, IpFamily.IPv4)!.Metric);
+    }
+
+    [Fact]
+    public void Auto_returns_all_three_to_automatic()
+    {
+        var metrics = MetricsFor(31, 10, 18);
+        new RoutingEngine(metrics).Apply(RoutingMode.Auto, All3());
+        Assert.All(new[] { 31, 10, 18 }, i => Assert.True(metrics.Get(i, IpFamily.IPv4)!.UseAutomatic));
+    }
+
+    [Fact]
+    public void Unused_wifi_is_never_touched()
+    {
+        var metrics = MetricsFor(31, 10, 18);
+        new RoutingEngine(metrics).Apply(RoutingMode.Phone, DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None));
+        Assert.DoesNotContain(metrics.SetCalls, c => c.Index == 18);
     }
 }

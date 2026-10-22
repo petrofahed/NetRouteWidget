@@ -1,18 +1,27 @@
 namespace NetRoute.Core;
 
-/// Desired interface metric per adapter; null = Windows automatic metric.
-public sealed record MetricTarget(uint? Phone, uint? Lan);
-
 public static class MetricPolicy
 {
     public const uint Preferred = 5;
     public const uint Backup = 50;
+    public const uint SecondBackup = 60;
 
-    public static MetricTarget For(RoutingMode mode) => mode switch
+    /// Desired metric per connection: the main (carrier, or the mode's connection) gets
+    /// Preferred; the other connections get graded backups in Connections.FallbackOrder
+    /// (skipping the main). Auto with no carrier returns null (automatic) for every connection.
+    public static IReadOnlyDictionary<ConnectionId, uint?> For(RoutingMode mode, ConnectionId? carrier = null)
     {
-        RoutingMode.Phone => new(Preferred, Backup),
-        RoutingMode.Lan => new(Backup, Preferred),
-        RoutingMode.Auto => new(null, null),
-        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
-    };
+        var main = carrier ?? Connections.Of(mode);
+        if (main is null) return Connections.All.ToDictionary(id => id, _ => (uint?)null);
+
+        var result = new Dictionary<ConnectionId, uint?> { [main.Value] = Preferred };
+        var grades = new[] { Backup, SecondBackup };
+        var i = 0;
+        foreach (var id in Connections.FallbackOrder)
+        {
+            if (id == main.Value) continue;
+            result[id] = grades[i++];
+        }
+        return result;
+    }
 }
