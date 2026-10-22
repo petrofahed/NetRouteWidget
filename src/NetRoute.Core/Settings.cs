@@ -6,6 +6,11 @@ namespace NetRoute.Core;
 
 public sealed record AppSettings
 {
+    /// Schema version of this settings file. 0 (the default) means an old file written before this field existed
+    /// (v5.3 and earlier) — System.Text.Json leaves missing properties at their default, which is exactly 0 here.
+    public const int CurrentVersion = 6;
+
+    public int SettingsVersion { get; init; }
     public RoutingMode Mode { get; init; } = RoutingMode.Phone;
     public string? PhoneOverride { get; init; }
     public string? LanOverrideMac { get; init; }
@@ -41,6 +46,10 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
         Converters = { new JsonStringEnumConverter() },
     };
 
+    /// A one-time, untouched copy of the pre-v6 file, written the first time an old file is loaded. Sits next to the
+    /// live settings file so a bad migration can be undone by hand.
+    public string BackupPath => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, "settings.v5-backup.json");
+
     /// Missing file: defaults (written). Corrupt file: defaults (rewritten), Recovered = true.
     /// Unreadable file (locked, access denied): defaults, Recovered = true, Unreadable = true, file left as it is.
     /// A locked file (IOException) is retried a few times first; access denied is not.
@@ -55,12 +64,14 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
 
         try
         {
-            var settings = JsonSerializer.Deserialize<AppSettings>(ReadWithRetry(), Options)
+            var raw = ReadWithRetry();
+            var settings = JsonSerializer.Deserialize<AppSettings>(raw, Options)
                 ?? throw new JsonException("Settings file is null");
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
             if (settings.SmartRouting is null) settings = settings with { SmartRouting = new SmartRoutingSettings() };
             settings = settings with { LocalDevices = LocalDeviceValidator.Sanitize(settings.LocalDevices) }; // bad entries are dropped, never a failed load
             if (!settings.SmartRouting.IsValid()) throw new JsonException("Invalid Smart routing settings");
+            if (settings.SettingsVersion < AppSettings.CurrentVersion) BackupOnce();
             return new(settings, false);
         }
         catch (JsonException)
@@ -74,6 +85,20 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
         {
             return new(new AppSettings(), Recovered: true, Unreadable: true);
         }
+    }
+
+    /// Copies the pre-migration file to BackupPath byte-for-byte (so a BOM, if any, survives), once.
+    /// A failed backup must never block loading.
+    void BackupOnce()
+    {
+        if (File.Exists(BackupPath)) return;
+        try
+        {
+            var temp = BackupPath + ".tmp";
+            File.Copy(path, temp, overwrite: true);
+            File.Move(temp, BackupPath, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     string ReadWithRetry()

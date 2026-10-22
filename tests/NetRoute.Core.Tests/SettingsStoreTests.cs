@@ -115,4 +115,50 @@ public sealed class SettingsStoreTests : IDisposable
 
         Assert.Equal(new AdapterOverrides("P", "M"), settings.Overrides);
     }
+
+    const string V5Json = """{ "Mode": "Lan", "LanOverrideMac": "AA-BB-CC-00-00-18" }""";
+
+    [Fact]
+    public void Loading_a_v5_file_writes_the_backup_once()
+    {
+        // written with a BOM so the backup is checked byte-for-byte, not just text-for-text
+        File.WriteAllText(FilePath, V5Json, new System.Text.UTF8Encoding(true));
+        var store = new SettingsStore(FilePath);
+        var originalBytes = File.ReadAllBytes(FilePath);
+
+        var result = store.Load();
+
+        Assert.True(result.Settings.SettingsVersion < AppSettings.CurrentVersion);
+        Assert.True(File.Exists(store.BackupPath));
+        Assert.Equal(originalBytes, File.ReadAllBytes(store.BackupPath));
+
+        store.Save(result.Settings with { CardLeft = 42 });
+        store.Load();
+
+        Assert.Equal(originalBytes, File.ReadAllBytes(store.BackupPath));
+    }
+
+    [Fact]
+    public void A_v6_file_writes_no_backup()
+    {
+        var store = new SettingsStore(FilePath);
+        store.Save(new AppSettings { SettingsVersion = AppSettings.CurrentVersion });
+
+        store.Load();
+
+        Assert.False(File.Exists(store.BackupPath));
+    }
+
+    [Fact]
+    public void A_v5_3_file_without_new_fields_loads()
+    {
+        File.WriteAllText(FilePath, """{ "Mode": "Lan", "LanOverrideMac": "AA-BB-CC-00-00-10" }""");
+
+        var result = new SettingsStore(FilePath).Load();
+
+        Assert.False(result.Recovered);
+        Assert.Null(result.Settings.WifiOverrideMac);
+        Assert.Equal(0, result.Settings.SettingsVersion);
+        Assert.Empty(result.Settings.SmartRouting.WifiUserRules);
+    }
 }

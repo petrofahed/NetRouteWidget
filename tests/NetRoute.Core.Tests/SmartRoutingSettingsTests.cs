@@ -206,4 +206,36 @@ public sealed class SmartRoutingSettingsTests : IDisposable
         Assert.Equal("user:website:example.com", UserRule.IdOf(rule));
         Assert.Equal("phone-user:website:example.com", UserRule.PhoneIdOf(rule));
     }
+
+    [Fact]
+    public void Wifi_rules_take_part_in_equality_and_validity()
+    {
+        Assert.NotEqual(new SmartRoutingSettings(), new SmartRoutingSettings { WifiUserRules = [new UserRule(UserRuleType.App, "a.exe")] });
+        Assert.False((new SmartRoutingSettings { WifiUserRules = null! }).IsValid());
+        Assert.False(new SmartRoutingSettings { WifiUserRules = [new UserRule(UserRuleType.App, " ")] }.IsValid());
+    }
+
+    [Fact]
+    public void A_settings_file_without_wifi_rules_loads_with_none()
+    {
+        var loaded = System.Text.Json.JsonSerializer.Deserialize<SmartRoutingSettings>("""{"Enabled":true}""");
+
+        Assert.Empty(loaded!.WifiUserRules);
+        Assert.True(loaded.IsValid());
+    }
+
+    [Fact]
+    public void Wifi_rules_round_trip_independently_of_the_other_lists()
+    {
+        var rule = new UserRule(UserRuleType.App, "claude.exe");
+        var s = new SmartRoutingSettings { WifiUserRules = [rule] };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(s);
+        var back = System.Text.Json.JsonSerializer.Deserialize<SmartRoutingSettings>(json)!;
+
+        Assert.Equal(s, back);
+        Assert.Single(back.WifiUserRules);
+        Assert.Empty(back.UserRules);
+        Assert.Empty(back.PhoneUserRules);
+    }
 }

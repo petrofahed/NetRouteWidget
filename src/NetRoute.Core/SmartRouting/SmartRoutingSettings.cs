@@ -69,6 +69,10 @@ public sealed record SmartRoutingSettings
     /// else. (UserRules is the "Phone + exceptions" list, whose rules go through the LAN.)
     public IReadOnlyList<UserRule> PhoneUserRules { get; init; } = [];
 
+    /// Wi-Fi's own exceptions list, added in v6 alongside the Wi-Fi connection. Storage only for now; Smart routing
+    /// itself starts consuming it in a later phase.
+    public IReadOnlyList<UserRule> WifiUserRules { get; init; } = [];
+
     /// Built-in items not mentioned in Items fall back to their catalog default (ON).
     public bool IsItemOn(RuleItem item) => Items.TryGetValue(item.Id, out var on) ? on : item.DefaultOn;
 
@@ -99,8 +103,8 @@ public sealed record SmartRoutingSettings
 
     /// False for hand-edited or corrupt content that would crash later (null collections or rules, blank values, unknown rule types).
     public bool IsValid() =>
-        Items is not null && UserRules is not null && PhoneUserRules is not null
-        && UserRules.All(ValidRule) && PhoneUserRules.All(ValidRule);
+        Items is not null && UserRules is not null && PhoneUserRules is not null && WifiUserRules is not null
+        && UserRules.All(ValidRule) && PhoneUserRules.All(ValidRule) && WifiUserRules.All(ValidRule);
 
     static bool ValidRule(UserRule r) => r is not null && !string.IsNullOrWhiteSpace(r.Value) && Enum.IsDefined(r.Type);
 
@@ -112,7 +116,8 @@ public sealed record SmartRoutingSettings
         && Items.Count == other.Items.Count
         && Items.All(kv => other.Items.TryGetValue(kv.Key, out var v) && v == kv.Value)
         && UserRules.SequenceEqual(other.UserRules)
-        && PhoneUserRules.SequenceEqual(other.PhoneUserRules);
+        && PhoneUserRules.SequenceEqual(other.PhoneUserRules)
+        && WifiUserRules.SequenceEqual(other.WifiUserRules);
 
-    public override int GetHashCode() => HashCode.Combine(Enabled, Items.Count, UserRules.Count);
+    public override int GetHashCode() => HashCode.Combine(Enabled, Items.Count, UserRules.Count, WifiUserRules.Count);
 }
