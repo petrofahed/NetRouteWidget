@@ -343,4 +343,36 @@ public class StatusPresenterTests
     [InlineData(RoutingMode.Phone, InternetPath.Phone, InternetPath.Other, "Internet now via another adapter (VPN?)")]
     public void Toast_covers_the_remaining_switch_arms(RoutingMode mode, InternetPath before, InternetPath after, string toast) =>
         Assert.Equal(toast, StatusPresenter.ToastFor(Status(mode: mode, path: before), Status(mode: mode, path: after)));
+
+    static NetworkStatus LanTurnedOff(RoutingMode mode = RoutingMode.Phone, InternetPath path = InternetPath.Phone) =>
+        Status(mode, path) with
+        {
+            Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]),
+        };
+
+    [Fact]
+    public void Off_connection_keeps_its_row_reading_off()
+    {
+        var view = StatusPresenter.Present(LanTurnedOff());
+
+        Assert.Equal([ConnectionId.Phone, ConnectionId.Lan], view.Rows.Select(r => r.Id));
+        Assert.Equal(new AdapterRow("LAN", "off", "", Dot.Gray, false, IsOff: true), view.Lan);
+    }
+
+    [Fact]
+    public void Off_connection_is_not_listed_as_a_backup_in_the_tooltip()
+    {
+        var view = StatusPresenter.Present(LanTurnedOff());
+
+        Assert.Equal("Internet: Phone (38 ms)", view.Tooltip);
+    }
+
+    [Fact]
+    public void Windows_routing_through_an_off_adapter_is_still_named()
+    {
+        var adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]);
+
+        Assert.Equal(InternetPath.Lan, NetworkStatus.ResolvePath(TestAdapters.Lan().Index, adapters));
+        Assert.Equal("Internet via LAN", StatusPresenter.Present(LanTurnedOff(RoutingMode.Auto, InternetPath.Lan)).Header);
+    }
 }

@@ -2,7 +2,8 @@ using System.Text.RegularExpressions;
 
 namespace NetRoute.Core;
 
-public enum DetectionIssue { None, NotFound, Ambiguous, NotUsed }
+/// TurnedOff: the user switched a chosen connection off on the card. It counts as Not used everywhere except the card row.
+public enum DetectionIssue { None, NotFound, Ambiguous, NotUsed, TurnedOff }
 
 /// User choices that win over auto-detection. Phone is matched by description
 /// (tethering MACs can be randomised), the LAN and Wi-Fi by MAC address.
@@ -30,9 +31,14 @@ public sealed record DetectionResult(IReadOnlyDictionary<ConnectionId, (AdapterI
             [ConnectionId.Wifi] = (wifi, wifiIssue),
         });
 
+    /// The adapters of turned-off slots, which their slots no longer hold. Only used to name the path when Windows
+    /// still routes through one of them (it keeps its automatic metric).
+    public IReadOnlyDictionary<ConnectionId, AdapterInfo> OffAdapters { get; init; } = new Dictionary<ConnectionId, AdapterInfo>();
+
     public AdapterInfo? Adapter(ConnectionId id) => Slots[id].Adapter;
     public DetectionIssue Issue(ConnectionId id) => Slots[id].Issue;
-    public bool IsUsed(ConnectionId id) => Issue(id) != DetectionIssue.NotUsed;
+    public bool IsUsed(ConnectionId id) => Issue(id) is not (DetectionIssue.NotUsed or DetectionIssue.TurnedOff);
+    public bool IsTurnedOff(ConnectionId id) => Issue(id) == DetectionIssue.TurnedOff;
 
     /// All detected adapters, in Connections.All order.
     public IEnumerable<(ConnectionId Id, AdapterInfo Adapter)> Present =>
@@ -48,12 +54,17 @@ public sealed record DetectionResult(IReadOnlyDictionary<ConnectionId, (AdapterI
     /// The default record equality compares Slots by reference (it's a dictionary); compare by
     /// value instead, slot by slot, so two results with the same picks are equal.
     public bool Equals(DetectionResult? other) =>
-        other is not null && Connections.All.All(id => Slots[id] == other.Slots[id]);
+        other is not null && Connections.All.All(id => Slots[id] == other.Slots[id]
+            && Equals(OffAdapters.GetValueOrDefault(id), other.OffAdapters.GetValueOrDefault(id)));
 
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        foreach (var id in Connections.All) hash.Add(Slots[id]);
+        foreach (var id in Connections.All)
+        {
+            hash.Add(Slots[id]);
+            hash.Add(OffAdapters.GetValueOrDefault(id));
+        }
         return hash.ToHashCode();
     }
 }
@@ -78,7 +89,9 @@ public static partial class AdapterDetector
     public static IEnumerable<AdapterInfo> Candidates(IEnumerable<AdapterInfo> adapters) =>
         adapters.Where(a => !IsVirtual(a) && (a.Kind != AdapterKind.Other || IsPhone(a)));
 
-    public static DetectionResult Detect(IReadOnlyList<AdapterInfo> adapters, AdapterOverrides overrides)
+    /// A connection in turnedOff is detected as usual (so the others still exclude its candidates), then its slot is
+    /// emptied and marked TurnedOff. Not used wins: a Not-used slot stays NotUsed.
+    public static DetectionResult Detect(IReadOnlyList<AdapterInfo> adapters, AdapterOverrides overrides, IReadOnlyCollection<ConnectionId>? turnedOff = null)
     {
         var up = adapters.Where(a => a.IsUp && !IsVirtual(a)).ToList();
 
@@ -86,7 +99,18 @@ public static partial class AdapterDetector
         var (wifiCandidates, wifi, wifiIssue) = DetectWifi(adapters, overrides, phoneCandidates);
         var (lan, lanIssue) = DetectLan(up, overrides, phoneCandidates, wifiCandidates);
 
-        return DetectionResult.Of(phone, phoneIssue, lan, lanIssue, wifi, wifiIssue);
+        var result = DetectionResult.Of(phone, phoneIssue, lan, lanIssue, wifi, wifiIssue);
+        if (turnedOff is null || turnedOff.Count == 0) return result;
+
+        var slots = new Dictionary<ConnectionId, (AdapterInfo?, DetectionIssue)>(result.Slots);
+        var off = new Dictionary<ConnectionId, AdapterInfo>();
+        foreach (var id in turnedOff.Distinct())
+        {
+            if (result.Issue(id) == DetectionIssue.NotUsed) continue;
+            if (result.Adapter(id) is { } adapter) off[id] = adapter;
+            slots[id] = (null, DetectionIssue.TurnedOff);
+        }
+        return new DetectionResult(slots) { OffAdapters = off };
     }
 
     static (List<AdapterInfo> Candidates, AdapterInfo? Adapter, DetectionIssue Issue) DetectPhone(List<AdapterInfo> up, AdapterOverrides overrides)

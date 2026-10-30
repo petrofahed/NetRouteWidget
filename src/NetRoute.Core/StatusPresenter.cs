@@ -4,7 +4,8 @@ public enum Dot { Green, Amber, Gray }
 
 public enum TrayColor { Green, Blue, Gray, Purple }
 
-public sealed record AdapterRow(string Label, string Address, string Latency, Dot Dot, bool IsActive);
+/// IsOff: the user turned this connection off on the card; the row stays so it can be turned on again.
+public sealed record AdapterRow(string Label, string Address, string Latency, Dot Dot, bool IsActive, bool IsOff = false);
 
 public sealed record ConnectionRow(ConnectionId Id, AdapterRow Row);
 
@@ -32,7 +33,7 @@ public static class StatusPresenter
     {
         var noInternet = s.ActivePath == InternetPath.None;
         var rows = Connections.CardOrder
-            .Where(id => s.Adapters.IsUsed(id))
+            .Where(id => s.Adapters.IsUsed(id) || s.Adapters.IsTurnedOff(id))
             .Select(id => new ConnectionRow(id, Row(id, s)))
             .ToList();
         return new CardView(
@@ -109,6 +110,7 @@ public static class StatusPresenter
     static AdapterRow Row(ConnectionId id, NetworkStatus s)
     {
         var label = id == ConnectionId.Wifi ? s.WifiNetwork ?? "Wi-Fi" : Connections.Label(id);
+        if (s.Adapters.IsTurnedOff(id)) return new(label, "off", "", Dot.Gray, false, IsOff: true);
         var latencyMs = s.LatencyMs.TryGetValue(id, out var ms) ? ms : null;
         return Row(label, s.Adapters.Adapter(id), s.Adapters.Issue(id), latencyMs, s.ActivePath == Connections.PathOf(id));
     }

@@ -28,6 +28,9 @@ public sealed record AppSettings
     /// Devices on the local network the user tests in the path window's "Local network" tab.
     public IReadOnlyList<LocalDevice> LocalDevices { get; init; } = Array.Empty<LocalDevice>();
 
+    /// Connections the user switched off on the card (v6.1). They keep their adapter choice but count as Not used.
+    public IReadOnlyList<ConnectionId> TurnedOff { get; init; } = Array.Empty<ConnectionId>();
+
     [JsonIgnore]
     public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac, WifiOverrideMac);
 }
@@ -70,6 +73,9 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
             if (settings.SmartRouting is null) settings = settings with { SmartRouting = new SmartRoutingSettings() };
             settings = settings with { LocalDevices = LocalDeviceValidator.Sanitize(settings.LocalDevices) }; // bad entries are dropped, never a failed load
+            var turnedOff = (settings.TurnedOff ?? []).Where(Enum.IsDefined).Distinct().ToList();
+            // An empty list stays the shared empty array, so settings without it keep comparing equal to defaults.
+            settings = settings with { TurnedOff = turnedOff.Count == 0 ? Array.Empty<ConnectionId>() : turnedOff };
             if (!settings.SmartRouting.IsValid()) throw new JsonException("Invalid Smart routing settings");
             if (settings.SettingsVersion < AppSettings.CurrentVersion) BackupOnce();
             return new(settings, false);

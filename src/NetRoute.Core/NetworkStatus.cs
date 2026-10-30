@@ -36,6 +36,9 @@ public sealed record NetworkStatus(
         if (bestInterfaceIndex is null) return InternetPath.None;
         foreach (var (id, adapter) in adapters.Present)
             if (adapter.Index == bestInterfaceIndex) return Connections.PathOf(id);
+        // A turned-off connection keeps its automatic metric, so Windows may still pick it: name it, not "other adapter".
+        foreach (var id in Connections.All)
+            if (adapters.OffAdapters.GetValueOrDefault(id)?.Index == bestInterfaceIndex) return Connections.PathOf(id);
         return InternetPath.Other;
     }
 

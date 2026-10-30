@@ -199,4 +199,50 @@ public class AdapterDetectorTests
     public void Detail_line_for_down_adapter() =>
         Assert.EndsWith("not connected",
             AdapterDetector.DetailLine(TestAdapters.Wifi() with { IsUp = false, IPv4 = null }, ConnectionId.Wifi));
+
+    [Fact]
+    public void Turned_off_slot_has_no_adapter_and_is_not_used()
+    {
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]);
+
+        Assert.Equal(DetectionIssue.TurnedOff, result.LanIssue);
+        Assert.Null(result.Lan);
+        Assert.False(result.IsUsed(ConnectionId.Lan));
+        Assert.True(result.IsTurnedOff(ConnectionId.Lan));
+        Assert.Equal(10, result.OffAdapters[ConnectionId.Lan].Index);
+        Assert.Equal(31, result.Phone?.Index);
+        Assert.Equal(DetectionIssue.None, result.PhoneIssue);
+    }
+
+    [Fact]
+    public void Not_used_wins_over_turned_off()
+    {
+        var overrides = new AdapterOverrides(null, AdapterOverrides.NotUsed);
+
+        var result = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], overrides, [ConnectionId.Lan]);
+
+        Assert.Equal(DetectionIssue.NotUsed, result.LanIssue);
+        Assert.False(result.IsTurnedOff(ConnectionId.Lan));
+        Assert.Empty(result.OffAdapters);
+    }
+
+    [Fact]
+    public void Turning_the_phone_off_never_lets_it_be_detected_as_the_lan()
+    {
+        var overrides = new AdapterOverrides(null, TestAdapters.Phone().Mac);
+
+        var result = AdapterDetector.Detect([TestAdapters.Phone()], overrides, [ConnectionId.Phone]);
+
+        Assert.Null(result.Lan);
+        Assert.True(result.IsTurnedOff(ConnectionId.Phone));
+    }
+
+    [Fact]
+    public void Results_differing_only_in_the_off_adapter_are_not_equal()
+    {
+        var on = AdapterDetector.Detect([TestAdapters.Phone()], AdapterOverrides.None, [ConnectionId.Lan]);
+        var off = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]);
+
+        Assert.NotEqual(on, off);
+    }
 }
