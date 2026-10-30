@@ -564,7 +564,9 @@ public sealed class SmartRoutingController
                 _lastNames[id] = adapter.Name;
                 if (id == ConnectionId.Lan) _lastLanDns = adapter.DnsServer ?? _lastLanDns;
             }
-            else if (id == ConnectionId.Lan && !_lastNames.ContainsKey(id)
+            // The persisted name has no saved choice identity. It is safe only for legacy automatic selection;
+            // an explicit missing choice must wait until its own live adapter establishes the cache.
+            else if (id == ConnectionId.Lan && identity is null && !_lastNames.ContainsKey(id)
                 && settings.SmartRouting.LastLanInterface is { } saved) _lastNames[id] = saved;
         }
         var names = new Dictionary<ConnectionId, string>();
@@ -573,7 +575,9 @@ public sealed class SmartRoutingController
             var live = net.Adapters.Adapter(id)?.Name;
             var cached = _lastNames.GetValueOrDefault(id);
             // A stale name must not bind a different current connection (especially the Phone).
-            if (live is null && net.Adapters.Present.Any(pair => pair.Id != id && string.Equals(pair.Adapter.Name, cached, StringComparison.OrdinalIgnoreCase))) cached = null;
+            if (live is null && net.Adapters.Present
+                .Concat(net.Adapters.OffAdapters.Select(pair => (Id: pair.Key, Adapter: pair.Value)))
+                .Any(pair => pair.Id != id && string.Equals(pair.Adapter.Name, cached, StringComparison.OrdinalIgnoreCase))) cached = null;
             names[id] = live ?? cached ?? (id == ConnectionId.Lan ? LanPlaceholder : $"NetRoute-{SmartRoutingPolicy.Tag(id)}-not-connected");
         }
         _interfaces = names;

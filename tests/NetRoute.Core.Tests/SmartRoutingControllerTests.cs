@@ -371,6 +371,57 @@ public class SmartRoutingControllerTests
         new() { SmartRouting = new SmartRoutingSettings { Enabled = true, LastLanInterface = lanName } };
 
     [Fact]
+    public async Task Remembered_binding_does_not_reseed_old_lan_after_choosing_a_missing_replacement()
+    {
+        var c = Create();
+        var settings = OnWithSavedLan("LAN A");
+        await c.ApplyAsync(Net(lanName: "LAN A"), settings);
+        var replacement = settings with { LanOverrideMac = "AA-BB-CC-00-00-12" };
+        for (var i = 0; i < 2; i++)
+        {
+            // A is still physically present but no longer chosen; B has not been observed yet.
+            var missing = Net() with { Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan() with { Name = "LAN A" }], replacement.Overrides) };
+            await c.ApplyAsync(missing, replacement);
+            Assert.Equal(SmartRoutingController.LanPlaceholder, Selector(_host.Starts.Last(), "lan").GetProperty("bind_interface").GetString());
+            Assert.DoesNotContain("\"bind_interface\": \"LAN A\"", _host.Starts.Last());
+        }
+        Assert.Equal(2, _host.Starts.Count); // old-A key changed, stable missing-B state did not restart repeatedly
+        var liveB = Net() with { Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan(12, replacement.LanOverrideMac!) with { Name = "LAN B" }], replacement.Overrides) };
+        await c.ApplyAsync(liveB, replacement);
+        Assert.Equal("LAN B", Selector(_host.Starts.Last(), "lan").GetProperty("bind_interface").GetString());
+        await c.ApplyAsync(Net(lan: false), replacement);
+        Assert.Equal("LAN B", Selector(_host.Starts.Last(), "lan").GetProperty("bind_interface").GetString());
+    }
+
+    [Fact]
+    public async Task Remembered_binding_with_unverified_explicit_choice_stays_missing_on_startup()
+    {
+        var c = Create();
+        var settings = OnWithSavedLan("unverified saved name") with { LanOverrideMac = "AA-BB-CC-00-00-12" };
+        await c.ApplyAsync(Net(lan: false), settings);
+        await c.ApplyAsync(Net(lan: false), settings);
+        Assert.Equal(SmartRoutingController.LanPlaceholder, Selector(_host.Starts.Last(), "lan").GetProperty("bind_interface").GetString());
+    }
+
+    [Fact]
+    public async Task Remembered_binding_cannot_reuse_another_slots_physically_present_off_adapter()
+    {
+        var c = Create();
+        var settings = OnWithSavedLan(TestAdapters.Phone().Name) with
+        {
+            Mode = RoutingMode.Wifi, WifiOverrideMac = "AA-BB-CC-00-00-18", TurnedOff = [ConnectionId.Phone],
+        };
+        var net = Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Wifi) with
+        {
+            Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Wifi()], settings.Overrides, settings.TurnedOff),
+        };
+        await c.ApplyAsync(net.WithLatency(ConnectionId.Wifi, 20), settings);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(SmartRoutingController.LanPlaceholder, Selector(_host.Starts.Last(), "lan").GetProperty("bind_interface").GetString());
+        Assert.DoesNotContain("\"bind_interface\": \"Ethernet 31\"", _host.Starts.Last());
+    }
+
+    [Fact]
     public async Task Starts_with_the_lan_absent_using_the_saved_lan_name()
     {
         var c = Create();
