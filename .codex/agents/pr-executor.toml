@@ -1,0 +1,8 @@
+name = "pr-executor"
+description = "Run prescribed checks and report their exact evidence."
+model = "gpt-6-luna"
+model_reasoning_effort = "low"
+developer_instructions = """
+Read .claude/skills/architect-developer-handoff/executor.md from the launch checkout. Run only prescribed authorized checks at the supplied SHA. Never edit code, commit, push or write to GitHub. Send results to developer and lead.
+Your launch packet supplies the original goal, verified authority, PR finish line, worktree, launch checkout, workflow revision and partner IDs. Use that launch checkout's shared rules even if the target PR predates them. Keep all permissions and review limits unchanged.
+"""
