@@ -4,7 +4,8 @@ Run at the start of every /pr-team. A worktree is removed only when ALL of these
 - it carries the `.pr-team-owned` marker that /pr-team writes when it creates the folder;
 - GitHub answers, and says the PR is MERGED or CLOSED;
 - it has no uncommitted or untracked work other than PLAN.md and the marker;
-- every ignored file in it is disposable build/test output (bin/, obj/, TestResults/, .vs/, __pycache__/);
+- every ignored file in it is disposable build/test output (bin/, obj/, TestResults/, .vs/, __pycache__/, and the
+  .cache/ the build downloads the pinned sing-box release into);
 - every local commit is on GitHub: on a freshly fetched origin branch, or inside the PR head GitHub recorded
   (refs/pull/<N>/head survives a squash merge and a deleted branch).
 If any check cannot be completed, the folder is kept and the reason printed — never discarded.
@@ -18,7 +19,7 @@ import sys
 
 MARKER = ".pr-team-owned"
 ALLOWED_UNTRACKED = {"?? PLAN.md", f"?? {MARKER}"}
-DISPOSABLE_DIRS = {"bin", "obj", "TestResults", ".vs", "__pycache__"}
+DISPOSABLE_DIRS = {"bin", "obj", "TestResults", ".vs", "__pycache__", ".cache"}
 
 
 def run(*args, cwd=None):
