@@ -9,14 +9,19 @@ using NetRoute.Core.PathMap;
 
 namespace NetRoute.App;
 
-/// Draws the path map from a view model on a fixed 980 x 380 design canvas (the window scales it with a Viewbox).
+/// Draws the path map from a view model on a 980-wide design canvas, 380 high for up to two lanes and taller for more
+/// (the window scales it with a Viewbox).
 /// The shapes are rebuilt on every Render (a few dozen, twice a second). The flowing dashes and pulses are driven by the
 /// render clock, not by Render, so they stay smooth across rebuilds and keep running while data is unchanged.
 sealed class PathMapCanvas : Canvas
 {
     public const double CanvasWidth = 980, CanvasHeight = 380;
     const double NodeW = 108, NodeH = 66, PcW = 132, PcH = 84, NetW = 132, NetH = 96;
-    const double LanY = 108, PhoneY = 292, MidY = 190, MinGap = 22;
+    const double FirstLaneY = 108, DefaultMidY = 190, MinGap = 22;
+    /// Up to two lanes keep the v5 layout (184 apart); a third packs them a little closer.
+    const double TwoLaneSpacing = 184, ThreeLaneSpacing = 150, BelowLastLane = 88;
+    /// What the This PC and Internet boxes grow by for each lane past the second (one more row each).
+    const double PcRowGrowth = 18, NetRowGrowth = 22;
     const double DashPeriodUnits = 4.667; // one dash + gap in stroke-thickness units, for the flow speed
 
     readonly List<(Shape Shape, double Speed)> _flows = [];
@@ -56,10 +61,18 @@ sealed class PathMapCanvas : Canvas
         _rings.Clear();
         _clickables.Clear();
 
-        var pc = new Rect(20, MidY - PcH / 2, PcW, PcH);
-        var net = new Rect(CanvasWidth - 12 - NetW, MidY - NetH / 2, NetW, NetH);
-        DrawLane(view.Lan, LanY, pc, net, selectedId);
-        DrawLane(view.Phone, PhoneY, pc, net, selectedId);
+        var lanes = view.Lanes;
+        var spacing = lanes.Count <= 2 ? TwoLaneSpacing : ThreeLaneSpacing;
+        List<double> ys = lanes.Count == 1 ? [DefaultMidY] : lanes.Select((_, i) => FirstLaneY + i * spacing).ToList();
+        var midY = ys.Count == 0 ? DefaultMidY : (ys[0] + ys[^1]) / 2;
+        Height = Math.Max(CanvasHeight, ys.Count == 0 ? 0 : ys[^1] + BelowLastLane);
+
+        var extraRows = Math.Max(0, lanes.Count - 2);
+        var pcH = PcH + PcRowGrowth * extraRows;
+        var netH = NetH + NetRowGrowth * extraRows;
+        var pc = new Rect(20, midY - pcH / 2, PcW, pcH);
+        var net = new Rect(CanvasWidth - 12 - NetW, midY - netH / 2, NetW, netH);
+        for (var i = 0; i < lanes.Count; i++) DrawLane(lanes[i], ys[i], midY, pc, net, selectedId);
         DrawPc(pc, view);
         DrawInternet(net, view, selectedId);
 
@@ -72,9 +85,9 @@ sealed class PathMapCanvas : Canvas
     {
         var sb = new StringBuilder();
         sb.Append(selectedId).Append('|').Append((B("NodeBackground") as SolidColorBrush)?.Color);
-        foreach (var lane in new[] { view.Lan, view.Phone })
+        foreach (var lane in view.Lanes)
         {
-            sb.Append('|').Append(lane.Caption).Append('/').Append(lane.AdapterName).Append('/').Append(lane.Connected);
+            sb.Append('|').Append(lane.Id).Append('/').Append(lane.Caption).Append('/').Append(lane.AdapterName).Append('/').Append(lane.Connected);
             foreach (var n in lane.Nodes)
                 sb.Append('|').Append(n.Id).Append('/').Append(n.Kind).Append('/').Append(n.Title).Append('/').Append(n.Address)
                   .Append('/').Append(n.Metric).Append('/').Append(n.State).Append('/').Append(n.StateLabel);
@@ -108,12 +121,12 @@ sealed class PathMapCanvas : Canvas
 
     // ----- lanes -----
 
-    void DrawLane(LaneView lane, double y, Rect pc, Rect net, string? selectedId)
+    void DrawLane(LaneView lane, double y, double midY, Rect pc, Rect net, string? selectedId)
     {
         var captionY = y - NodeH / 2 - 22;
         if (!lane.Connected)
         {
-            Text(lane.Caption.ToUpperInvariant(), 10.5, FontWeights.SemiBold, "TextSecondary", pc.Right + 50, captionY);
+            Text(lane.Caption, 10.5, FontWeights.SemiBold, "TextSecondary", pc.Right + 50, captionY);
             Text("Not connected", 12, FontWeights.Normal, "TextSecondary", pc.Right + 60, y - 8);
             return;
         }
@@ -125,15 +138,15 @@ sealed class PathMapCanvas : Canvas
         var rects = Enumerable.Range(0, n)
             .Select(i => new Rect(pc.Right + gap * (i + 1) + width * i, y - NodeH / 2, width, NodeH)).ToList();
         // The caption starts at the first box so it stays clear of the curve leaving This PC.
-        Text(lane.Caption.ToUpperInvariant(), 10.5, FontWeights.SemiBold, "TextSecondary", n > 0 ? rects[0].Left : pc.Right + 50, captionY);
+        Text(lane.Caption, 10.5, FontWeights.SemiBold, "TextSecondary", n > 0 ? rects[0].Left : pc.Right + 50, captionY);
 
-        var from = new Point(pc.Right, MidY);
+        var from = new Point(pc.Right, midY);
         for (var i = 0; i < n; i++)
         {
             Link(from, new Point(rects[i].Left, y), lane.Links[i]);
             from = new Point(rects[i].Right, y);
         }
-        Link(from, new Point(net.Left, MidY), lane.Links[n]);
+        Link(from, new Point(net.Left, midY), lane.Links[n]);
 
         var pulseId = lane.Nodes.FirstOrDefault(x => x.State is HopDisplay.Broken or HopDisplay.Suspect)?.Id;
         for (var i = 0; i < n; i++) DrawNode(lane.Nodes[i], rects[i], selectedId, pulse: lane.Nodes[i].Id == pulseId);
@@ -250,8 +263,11 @@ sealed class PathMapCanvas : Canvas
         box.Children.Add(new Rectangle { RadiusX = 12, RadiusY = 12, Fill = B("NodeBackground"), Stroke = B("NodeBorder"), StrokeThickness = 1 });
         var panel = new StackPanel { Margin = new Thickness(12, 10, 8, 6) };
         panel.Children.Add(new TextBlock { Text = "This PC", FontSize = 12.5, FontWeight = FontWeights.SemiBold, Foreground = B("TextPrimary") });
-        panel.Children.Add(PcRow(PcLabel("LAN", view.Lan), view.Lan.Connected ? view.Lan.Internet.State : HopDisplay.Hidden, 8));
-        panel.Children.Add(PcRow(PcLabel("Phone", view.Phone), view.Phone.Connected ? view.Phone.Internet.State : HopDisplay.Hidden, 5));
+        for (var i = 0; i < view.Lanes.Count; i++)
+        {
+            var lane = view.Lanes[i];
+            panel.Children.Add(PcRow(PcLabel(lane.Name, lane), lane.Connected ? lane.Internet.State : HopDisplay.Hidden, i == 0 ? 8 : 5));
+        }
         box.Children.Add(panel);
         SetLeft(box, r.Left);
         SetTop(box, r.Top);
@@ -275,7 +291,7 @@ sealed class PathMapCanvas : Canvas
         var panel = new StackPanel { Margin = new Thickness(12, 10, 6, 6) };
         panel.Children.Add(new TextBlock { Text = "Internet", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = B("TextPrimary") });
         panel.Children.Add(new TextBlock { Text = "1.1.1.1 · 8.8.8.8", FontFamily = new FontFamily("Cascadia Mono, Consolas"), FontSize = 10.5, Foreground = B("TextSecondary"), Margin = new Thickness(0, 2, 0, 4) });
-        foreach (var row in new[] { view.Lan.Internet, view.Phone.Internet }) panel.Children.Add(InternetRow(row, selectedId));
+        foreach (var lane in view.Lanes) panel.Children.Add(InternetRow(lane.Internet, selectedId));
         box.Children.Add(panel);
         SetLeft(box, r.Left);
         SetTop(box, r.Top);

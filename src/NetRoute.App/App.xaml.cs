@@ -574,8 +574,10 @@ public partial class App : Application
                     nicAdapter = lan?.Name; // a different card starts its error count again
                     nicBaseline = nic;
                 }
+                // The LAN lane is absent while the LAN is Not used or turned off: the tab then reads it as not connected.
                 var internet = LocalNetworkPresenter.InternetOf(
-                    PathMapPresenter.Present(controller.Status, monitor.Snapshot(), null, PathThresholds.Default).Lan.Internet.State);
+                    PathMapPresenter.Present(controller.Status, monitor.Snapshot(), null, PathThresholds.Default)
+                        .Lane(ConnectionId.Lan)?.Internet.State ?? HopDisplay.Hidden);
                 return LocalNetworkPresenter.Present(localMonitor.Snapshot(), nic, nicBaseline, internet, selectedKey, PathThresholds.Default, prefix);
             },
             GetDevices: () => controller.Settings.LocalDevices,
@@ -599,7 +601,7 @@ public partial class App : Application
         {
             // Keep the monitor on the adapters the card shows; a no-op when nothing changed.
             var adapters = controller.Status.Adapters;
-            monitor.SetAdapters(adapters.Lan, adapters.Phone);
+            monitor.SetAdapters(Connections.All.ToDictionary(id => id, adapters.Adapter));
             return PathMapPresenter.Present(controller.Status, monitor.Snapshot(), selected, PathThresholds.Default);
         }, localServices);
         window.Closed += (_, _) =>
@@ -609,7 +611,7 @@ public partial class App : Application
             _pathWindow = null;
         };
         var initial = controller.Status.Adapters;
-        monitor.SetAdapters(initial.Lan, initial.Phone);
+        monitor.SetAdapters(Connections.All.ToDictionary(id => id, initial.Adapter));
         var run = Task.Run(() => monitor.RunAsync(token)); // off the UI thread: its loops, probe continuations, locks and the log callback must not run there
         // Last resort: the monitor swallows cancellation and logs its own errors, but an unobserved fault here would vanish silently.
         _ = run.ContinueWith(t => _log?.Error("Path map monitor stopped unexpectedly", t.Exception?.GetBaseException()),
