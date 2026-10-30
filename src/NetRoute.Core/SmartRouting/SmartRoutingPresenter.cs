@@ -38,13 +38,17 @@ public static class SmartRoutingPresenter
             new($"⚡ Smart routing {char.ToLowerInvariant(s.Message[0])}{s.Message[1..]}", SmartTone.Muted), // "paused in Auto mode"
         SmartState.Unavailable => new($"⚡ Smart routing paused — {s.Message}", SmartTone.Muted),
         SmartState.Faulted => new(string.IsNullOrEmpty(s.Detail) ? $"⚠ {s.Message}" : $"⚠ {s.Message} — {s.Detail}", SmartTone.Warning),
-        _ when s.Waiting => new($"⏸ {s.Targets.First(target => target.Names.Count > 0).Names.Count} {(s.Targets.First(target => target.Names.Count > 0).Names.Count == 1 ? "app" : "apps")} waiting for {SmartRoutingController.TargetLabel(s.Targets.First(target => target.Names.Count > 0).Target)}", SmartTone.Warning),
+        _ when s.Waiting => new($"⏸ {s.Targets.OrderBy(target => target.Target).First(target => target.Names.Count > 0).Names.Count} {(s.Targets.OrderBy(target => target.Target).First(target => target.Names.Count > 0).Names.Count == 1 ? "app" : "apps")} waiting for {SmartRoutingController.TargetLabel(s.Targets.OrderBy(target => target.Target).First(target => target.Names.Count > 0).Target)}", SmartTone.Warning),
         _ when s.Targets.Any(target => target.UsingMain) => new($"⚠ Using {Connections.Label(s.DefaultExit)} for waiting exceptions", SmartTone.Warning),
         _ when s.Profile == ConnectionId.Lan =>
             new($"LAN + exceptions · {s.RuleCount} rules", SmartTone.Normal),
         _ when s.Profile == ConnectionId.Wifi => new($"Wi-Fi + exceptions · {s.RuleCount} rules", SmartTone.Normal),
         _ => new($"Phone + exceptions · {s.RuleCount} rules · {ByteFormat.Human(s.Today.Total)} kept off 4G today", SmartTone.Normal),
     };
+
+    public static string UseMainText(WaitingTarget target) =>
+        $"Use {Connections.Label(target.Main)} until {SmartRoutingController.TargetLabel(target.Target)} is back"
+        + (Connections.IsMetered(target.Main) ? " (uses mobile data)" : "");
 
     public static string WaitingText(WaitingTarget target) =>
         $"{string.Join(", ", target.Names)} waiting for {SmartRoutingController.TargetLabel(target.Target)}.";
@@ -56,12 +60,12 @@ public sealed record PageItem(string Id, string Name, bool On, long TodayBytes, 
 
 public sealed record PageGroup(string Id, string Name, bool? On, long TodayBytes, IReadOnlyList<PageItem> Items);
 
-public sealed record PageUserRule(UserRule Rule, long TodayBytes);
+public sealed record PageUserRule(UserRule Rule, long TodayBytes, RuleTarget Target = RuleTarget.Home);
 
 /// EditingProfile: which profile's list the page shows (Phone = "Phone + exceptions", Lan = "LAN + exceptions").
 /// ActiveProfile: the profile Smart routing is running (the routing mode).
 public sealed record PageModel(
-    bool Enabled, SmartRow Status, bool CanUsePhone, long TotalToday,
+    bool Enabled, SmartRow Status, bool CanUseMain, long TotalToday,
     IReadOnlyList<PageGroup> Groups, IReadOnlyList<PageUserRule> UserRules,
     ConnectionId EditingProfile = ConnectionId.Phone, ConnectionId ActiveProfile = ConnectionId.Phone)
 {
@@ -87,11 +91,11 @@ public static class SmartRoutingPage
             return new PageGroup(g.Key.GroupId, g.Key.GroupName, on, items.Sum(i => i.TodayBytes), items);
         }).ToList();
         var userRules = settings.RulesFor(editing);
-        var rules = userRules.Select(r => new PageUserRule(r, Bytes(UsageAttribution.RowKeyOf(r)))).ToList();
+        var rules = userRules.Select(r => new PageUserRule(r, Bytes(UsageAttribution.RowKeyOf(r)), r.Exit is { } exit ? SmartRoutingPolicy.TargetOf(exit) : editing == ConnectionId.Phone ? RuleTarget.Home : RuleTarget.Phone)).ToList();
 
         return new PageModel(
             settings.Enabled, SmartRoutingPresenter.Row(status),
-            CanUsePhone: status.State == SmartState.Running && status.Targets.Any(target => target.CanUseMain),
+            CanUseMain: status.State == SmartState.Running && status.Targets.Any(target => target.CanUseMain),
             status.Today.Total, groups, rules, editing, status.Profile) { Targets = status.Targets };
     }
 
@@ -101,8 +105,17 @@ public static class SmartRoutingPage
     {
         if (editing == ConnectionId.Phone)
             return item.On ? ByteFormat.Human(item.TodayBytes) : "→ via phone";
-        if (item.CarveOut) return item.On ? "→ LAN" : "→ via phone";
-        return item.On ? "→ phone" : "→ via LAN";
+        if (item.CarveOut) return item.On ? "→ Home" : "→ via phone";
+        return item.On ? "→ phone" : $"→ via {Connections.Label(editing)}";
+    }
+
+    /// Apply a captured row edit to its latest rule, preserving concurrent destination/enabled changes.
+    public static SmartRoutingSettings ChangeUserRule(SmartRoutingSettings settings, ConnectionId profile, UserRule identity,
+        bool? enabled = null, ConnectionId? destination = null)
+    {
+        var current = settings.RulesFor(profile).FirstOrDefault(rule => UserRule.IdOf(rule) == UserRule.IdOf(identity));
+        if (current is null || destination == profile) return settings;
+        return settings.WithUserRule(profile, current with { Enabled = enabled ?? current.Enabled, Exit = destination ?? current.Exit });
     }
 
     /// What a click on a group's tick box sets: ON unless the group is fully on (a mixed group goes ON, not off).

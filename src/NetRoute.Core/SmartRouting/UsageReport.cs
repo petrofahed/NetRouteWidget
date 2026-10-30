@@ -60,14 +60,12 @@ public static class UsageReport
 
     /// The tag shown next to a row that is an exception: where its traffic is routed.
     public static string? TagText(ExceptionState state) =>
-        state.InException ? Destination(state.Destination) : null;
+        state.InException ? "→ " + SmartRoutingController.TargetLabel(state.Target) : null;
 
     public static string MenuText(ExceptionState state) =>
         !state.CanChange ? "Can't be an exception here"
             : state.InException ? "Exclude from exception"
-            : $"Send to exception ({Destination(state.Destination)})";
-
-    static string Destination(RouteExit exit) => exit == RouteExit.Lan ? "→ LAN" : "→ phone";
+            : $"Send to exception (→ {SmartRoutingController.TargetLabel(state.Target)})";
 
     public static UsageReportModel Build(
         UsageSnapshot usage, DateOnly today, int rangeDays, IReadOnlyList<RuleItem> catalog,

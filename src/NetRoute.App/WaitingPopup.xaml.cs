@@ -12,7 +12,7 @@ public partial class WaitingPopup : Window
         InitializeComponent();
         Target = target;
         Message.Text = SmartRoutingPresenter.WaitingText(target);
-        UseMainButton.Content = $"Use {Connections.Label(target.Main)} until {SmartRoutingController.TargetLabel(target.Target)} is back";
+        UseMainButton.Content = SmartRoutingPresenter.UseMainText(target);
         WarningText.Text = Connections.IsMetered(target.Main) ? "Uses mobile data." : "";
         Loaded += (_, _) =>
         {

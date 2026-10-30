@@ -646,11 +646,12 @@ public partial class App : Application
         };
         // The window passes the profile of the list it was showing when the user clicked (captured before the add dialog
         // opens), so a rule always lands in the list on screen, not in whatever EditingProfile says by now.
-        window.UserRuleToggled += (rule, on, shown) => ChangeSmart(s => s.WithUserRule(shown, rule with { Enabled = on }));
+        window.UserRuleToggled += (rule, on, shown) => ChangeSmart(s => SmartRoutingPage.ChangeUserRule(s, shown, rule, enabled: on));
+        window.UserRuleDestinationChanged += (rule, shown, exit) => ChangeSmart(s => SmartRoutingPage.ChangeUserRule(s, shown, rule, destination: exit));
         window.UserRuleRemoved += (rule, shown) => ChangeSmart(s => s.WithoutUserRule(shown, rule));
         window.AddRuleRequested += (type, shown) =>
         {
-            var dialog = new AddRuleWindow(type) { Owner = window };
+            var dialog = new AddRuleWindow(type, shown) { Owner = window };
             if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => s.WithUserRule(shown, rule));
         };
         window.UseMainRequested += waiting => _ = _smart?.UseMainAsync(waiting);
@@ -669,8 +670,8 @@ public partial class App : Application
             _usageFilter = text;
             RenderSmartWindow(); // no ApplyAsync: a filter change must never touch sing-box
         };
-        window.UsageExceptionRequested += (key, renderedProfile, on) =>
-            ChangeSmart(s => UsageExceptions.Set(_catalog, s, renderedProfile, key, on)); // what the menu showed, not the live status
+        window.UsageExceptionRequested += action =>
+            ChangeSmart(s => UsageExceptions.Set(_catalog, s, action.Profile, action.Key, action.On, action.Destination)); // what the menu showed, not the live status
         window.EditRulesFileRequested += () => OpenRulesFile();
         window.ClearUsageRequested += async () =>
         {

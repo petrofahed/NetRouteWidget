@@ -2,6 +2,58 @@ namespace NetRoute.Core.Tests;
 
 public class SmartRoutingPresenterTests
 {
+    [Theory]
+    [InlineData(ConnectionId.Phone, RuleTarget.Home)]
+    [InlineData(ConnectionId.Lan, RuleTarget.Phone)]
+    [InlineData(ConnectionId.Wifi, RuleTarget.Phone)]
+    public void Page_rules_expose_effective_target_without_materializing_legacy_exit(ConnectionId profile, RuleTarget target)
+    {
+        var rule = new UserRule(UserRuleType.App, "editor.exe");
+        var page = SmartRoutingPage.Build([], new SmartRoutingSettings().WithUserRule(profile, rule), Status(), profile);
+        Assert.Equal(target, Assert.Single(page.UserRules).Target);
+        Assert.Null(Assert.Single(page.UserRules).Rule.Exit);
+        Assert.Equal(profile, page.EditingProfile);
+    }
+
+    [Fact]
+    public void Generic_wait_action_copy_preserves_snapshot_and_warns_only_for_mobile()
+    {
+        var request = new WaitingTarget(RuleTarget.Wifi, ConnectionId.Phone, ["Editor"], false, true, 42);
+        Assert.Contains("Wi-Fi", SmartRoutingPresenter.UseMainText(request));
+        Assert.Contains("mobile data", SmartRoutingPresenter.UseMainText(request));
+        Assert.DoesNotContain("mobile data", SmartRoutingPresenter.UseMainText(request with { Main = ConnectionId.Lan }));
+    }
+
+    [Fact]
+    public void Captured_rule_edits_preserve_latest_other_fields_and_other_profiles()
+    {
+        var captured = new UserRule(UserRuleType.App, "editor.exe");
+        var latest = new SmartRoutingSettings().WithUserRule(ConnectionId.Wifi, captured with { Enabled = false, Exit = ConnectionId.Lan })
+            .WithUserRule(ConnectionId.Phone, captured);
+        var changed = SmartRoutingPage.ChangeUserRule(latest, ConnectionId.Wifi, captured, destination: ConnectionId.Phone);
+        Assert.False(Assert.Single(changed.WifiUserRules).Enabled);
+        Assert.Equal(ConnectionId.Phone, Assert.Single(changed.WifiUserRules).Exit);
+        Assert.Null(Assert.Single(changed.UserRules).Exit);
+        var toggled = SmartRoutingPage.ChangeUserRule(changed, ConnectionId.Wifi, captured, enabled: true);
+        Assert.Equal(ConnectionId.Phone, Assert.Single(toggled.WifiUserRules).Exit);
+    }
+
+    [Fact]
+    public void Wifi_page_exposes_its_own_rules_and_captions_and_keeps_all_waiting_snapshots()
+    {
+        var rule = new UserRule(UserRuleType.App, "editor.exe", Exit: ConnectionId.Lan);
+        var waits = new[] { new WaitingTarget(RuleTarget.Wifi, ConnectionId.Phone, ["A"], false, true, 5),
+            new WaitingTarget(RuleTarget.Lan, ConnectionId.Phone, ["B"], false, true, 6) };
+        var page = SmartRoutingPage.Build(Catalog, new SmartRoutingSettings().WithUserRule(ConnectionId.Wifi, rule),
+            Status() with { Profile = ConnectionId.Wifi, Targets = waits }, ConnectionId.Wifi);
+        Assert.Equal(ConnectionId.Wifi, page.ActiveProfile);
+        Assert.Equal(RuleTarget.Lan, Assert.Single(page.UserRules).Target);
+        Assert.Same(waits, page.Targets);
+        Assert.Equal("→ via Wi-Fi", SmartRoutingPage.ItemCaption(new("a", "A", false, 0, RouteExit.Phone), ConnectionId.Wifi));
+        Assert.Equal("→ Home", SmartRoutingPage.ItemCaption(new("a", "A", true, 0, RouteExit.Lan, true), ConnectionId.Wifi));
+        Assert.Contains("waiting for LAN", page.Status.Text);
+    }
+
     static readonly DailyStats NoStats = new(new DateOnly(2026, 10, 2), new Dictionary<string, long>());
 
     static SmartRoutingStatus Status(SmartState state = SmartState.Running, string? message = null, bool lanRulesOnPhone = false,
@@ -118,7 +170,7 @@ public class SmartRoutingPresenterTests
         Assert.Equal(new[] { true, false }, video.Items.Select(i => i.On));
         Assert.True(page.Groups[1].On);
         Assert.Equal(7, Assert.Single(page.UserRules).TodayBytes);
-        Assert.False(page.CanUsePhone);
+        Assert.False(page.CanUseMain);
     }
 
     [Fact]
@@ -142,8 +194,8 @@ public class SmartRoutingPresenterTests
     {
         var offline = Status() with { Targets = [new WaitingTarget(RuleTarget.Home, ConnectionId.Phone, [], false, true, 1)] };
 
-        Assert.True(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline).CanUsePhone);
-        Assert.False(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline with { Targets = [new WaitingTarget(RuleTarget.Home, ConnectionId.Phone, [], true, false, 1)] }).CanUsePhone);
+        Assert.True(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline).CanUseMain);
+        Assert.False(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline with { Targets = [new WaitingTarget(RuleTarget.Home, ConnectionId.Phone, [], true, false, 1)] }).CanUseMain);
     }
 
     [Fact]
@@ -232,7 +284,7 @@ public class SmartRoutingPresenterTests
     [InlineData(ConnectionId.Phone, RouteExit.Lan, true, true, "→ via phone")]   // Phone view, carve-out off
     [InlineData(ConnectionId.Lan, RouteExit.Phone, false, true, "→ via LAN")]    // LAN view, phone item switched off
     [InlineData(ConnectionId.Lan, RouteExit.Phone, false, false, "→ phone")]     // LAN view, phone item on
-    [InlineData(ConnectionId.Lan, RouteExit.Lan, true, false, "→ LAN")]          // LAN view, carve-out on
+    [InlineData(ConnectionId.Lan, RouteExit.Lan, true, false, "→ Home")]          // LAN view, carve-out on
     [InlineData(ConnectionId.Lan, RouteExit.Lan, true, true, "→ via phone")]     // LAN view, carve-out off: its app's phone rule catches it
     public void Item_captions_say_where_the_item_goes(ConnectionId editing, RouteExit exit, bool carveOut, bool off, string expected)
     {

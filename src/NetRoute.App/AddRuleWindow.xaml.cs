@@ -10,11 +10,13 @@ public partial class AddRuleWindow : Window
 {
     readonly UserRuleType _type;
 
-    public AddRuleWindow(UserRuleType type)
+    public AddRuleWindow(UserRuleType type, ConnectionId profile)
     {
         InitializeComponent();
         Theme.Track(this);
         _type = type;
+        Destination.ItemsSource = Connections.All.Where(id => id != profile).Select(id => new { Id = id, Label = Connections.Label(id) }).ToList();
+        Destination.SelectedValue = UserRule.ImpliedExit(profile);
         Loaded += (_, _) => Input.Focus();
         // An editable ComboBox's inner TextBox raises TextChanged, which bubbles up to the ComboBox.
         Input.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
@@ -22,13 +24,13 @@ public partial class AddRuleWindow : Window
         if (type == UserRuleType.App)
         {
             Title = "Add app";
-            Prompt.Text = "App to keep off 4G — pick a running app or type its .exe name:";
+            Prompt.Text = "App — pick a running app or type its .exe name:";
             Input.ItemsSource = RunningExeNames();
         }
         else
         {
             Title = "Add website";
-            Prompt.Text = "Website to keep off 4G (its subdomains are included), e.g. netflix.com:";
+            Prompt.Text = "Website (its subdomains are included), e.g. netflix.com:";
             BrowseButton.Visibility = Visibility.Collapsed;
         }
     }
@@ -75,7 +77,7 @@ public partial class AddRuleWindow : Window
     {
         if (UserRule.TryCreate(_type, Input.Text ?? "", out var rule, out var error))
         {
-            Result = rule;
+            Result = rule! with { Exit = (ConnectionId)Destination.SelectedValue };
             DialogResult = true;
             return;
         }

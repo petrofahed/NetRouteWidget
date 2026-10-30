@@ -2,6 +2,77 @@ namespace NetRoute.Core.Tests;
 
 public class UsageExceptionsTests
 {
+    [Theory]
+    [InlineData(ConnectionId.Phone, ConnectionId.Lan)]
+    [InlineData(ConnectionId.Phone, ConnectionId.Wifi)]
+    [InlineData(ConnectionId.Lan, ConnectionId.Phone)]
+    [InlineData(ConnectionId.Lan, ConnectionId.Wifi)]
+    [InlineData(ConnectionId.Wifi, ConnectionId.Lan)]
+    [InlineData(ConnectionId.Wifi, ConnectionId.Phone)]
+    public void Explicit_destinations_update_only_the_captured_profile_and_keep_identity(ConnectionId profile, ConnectionId exit)
+    {
+        var old = new UserRule(UserRuleType.App, "editor.exe");
+        var settings = new SmartRoutingSettings().WithUserRule(profile, old);
+        var changed = UsageExceptions.Set([], settings, profile, "app:editor.exe", true, exit);
+        var rule = Assert.Single(changed.RulesFor(profile));
+        Assert.Equal(exit, rule.Exit);
+        Assert.Equal(UserRule.IdOf(old), UserRule.IdOf(rule));
+        Assert.All(Connections.All.Where(id => id != profile), id => Assert.Empty(changed.RulesFor(id)));
+        Assert.Equal(SmartRoutingPolicy.TargetOf(exit), UsageExceptions.Describe([], changed, profile, "app:editor.exe").Target);
+        Assert.Equal(SmartRoutingPolicy.TargetOf(exit), RuleSet.Build([], changed, profile).Entries.Single(entry => entry.Id == UserRule.IdOf(profile, rule)).Target);
+    }
+
+    [Fact]
+    public void Legacy_toggle_preserves_null_but_explicit_LAN_is_distinct_from_Home()
+    {
+        var rule = new UserRule(UserRuleType.App, "editor.exe");
+        var settings = new SmartRoutingSettings().WithUserRule(ConnectionId.Phone, rule);
+        var off = UsageExceptions.Set([], settings, ConnectionId.Phone, "app:editor.exe", false);
+        Assert.Null(Assert.Single(off.UserRules).Exit);
+        Assert.Equal(RuleTarget.Home, UsageExceptions.Describe([], settings, ConnectionId.Phone, "app:editor.exe").Target);
+        var explicitLan = UsageExceptions.Set([], settings, ConnectionId.Phone, "app:editor.exe", true, ConnectionId.Lan);
+        Assert.Equal(RuleTarget.Lan, UsageExceptions.Describe([], explicitLan, ConnectionId.Phone, "app:editor.exe").Target);
+    }
+
+    [Fact]
+    public void Menu_actions_capture_key_profile_and_all_non_main_destinations()
+    {
+        var actions = UsageExceptions.Actions("app:editor.exe", ConnectionId.Wifi, new ExceptionState(false, true, ConnectionId.Phone));
+        Assert.Equal(Connections.All.Where(id => id != ConnectionId.Wifi), actions.Select(a => a.Destination!.Value).ToArray());
+        Assert.All(actions, a => { Assert.Equal("app:editor.exe", a.Key); Assert.Equal(ConnectionId.Wifi, a.Profile); });
+    }
+
+    [Fact]
+    // A catalog Usage key is an aggregate built-in item, not an editable custom app rule.
+    public void Builtin_menu_keeps_Home_and_never_rewrites_catalog_destination()
+    {
+        var settings = new SmartRoutingSettings().WithItem("youtube", false);
+        var state = UsageExceptions.Describe(Catalog, settings, ConnectionId.Phone, "youtube");
+        var action = Assert.Single(UsageExceptions.Actions("youtube", ConnectionId.Phone, state));
+        Assert.Null(action.Destination);
+        Assert.Equal(RuleTarget.Home, state.Target);
+        var changed = UsageExceptions.Set(Catalog, settings, action.Profile, action.Key, action.On, action.Destination);
+        Assert.True(changed.IsItemOn(Catalog[0]));
+        Assert.Empty(changed.UserRules);
+    }
+
+    [Fact]
+    public void Open_menu_intent_edits_captured_profile_against_latest_settings()
+    {
+        var action = UsageExceptions.Actions("app:editor.exe", ConnectionId.Wifi, new(false, true, ConnectionId.Phone))
+            .Single(a => a.Destination == ConnectionId.Lan);
+        var rule = new UserRule(UserRuleType.App, "editor.exe", false, ConnectionId.Phone);
+        var latest = new SmartRoutingSettings().WithUserRule(ConnectionId.Phone, rule)
+            .WithUserRule(ConnectionId.Wifi, rule);
+        var changed = UsageExceptions.Set([], latest, action.Profile, action.Key, action.On, action.Destination);
+        Assert.Equal(ConnectionId.Phone, Assert.Single(changed.UserRules).Exit);
+        Assert.False(Assert.Single(changed.UserRules).Enabled);
+        Assert.Equal(ConnectionId.Lan, Assert.Single(changed.WifiUserRules).Exit);
+        Assert.True(Assert.Single(changed.WifiUserRules).Enabled);
+        var disabled = UsageExceptions.Set([], changed, ConnectionId.Wifi, action.Key, false);
+        Assert.Equal(ConnectionId.Lan, Assert.Single(disabled.WifiUserRules).Exit);
+    }
+
     static readonly IReadOnlyList<RuleItem> Catalog =
     [
         new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true),                                      // LAN exception
@@ -19,8 +90,8 @@ public class UsageExceptionsTests
         var on = new SmartRoutingSettings();
         var off = on.WithItem("youtube", false);
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, on, ConnectionId.Phone, "youtube"));
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, off, ConnectionId.Phone, "youtube"));
+        Assert.Equal(new ExceptionState(true, true, ConnectionId.Lan, Home: true) { FixedTarget = true }, UsageExceptions.Describe(Catalog, on, ConnectionId.Phone, "youtube"));
+        Assert.Equal(new ExceptionState(false, true, ConnectionId.Lan, Home: true) { FixedTarget = true }, UsageExceptions.Describe(Catalog, off, ConnectionId.Phone, "youtube"));
         Assert.False(Toggle(Catalog, on, ConnectionId.Phone, "youtube").IsItemOn(Catalog[0]));
         Assert.True(Toggle(Catalog, off, ConnectionId.Phone, "youtube").IsItemOn(Catalog[0]));
     }
@@ -30,8 +101,8 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(new ExceptionState(false, false, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "claude"));
-        Assert.Equal(new ExceptionState(false, false, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "youtube"));
+        Assert.Equal(new ExceptionState(false, false, ConnectionId.Phone) { FixedTarget = true }, UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "claude"));
+        Assert.Equal(new ExceptionState(false, false, ConnectionId.Lan, Home: true) { FixedTarget = true }, UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "youtube"));
         Assert.Equal(s, Toggle(Catalog, s, ConnectionId.Phone, "claude"));
     }
 
@@ -40,8 +111,8 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "claude"));
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "vscode-updates"));
+        Assert.Equal(new ExceptionState(true, true, ConnectionId.Phone) { FixedTarget = true }, UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "claude"));
+        Assert.Equal(new ExceptionState(true, true, ConnectionId.Lan, Home: true) { FixedTarget = true }, UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "vscode-updates"));
         Assert.False(Toggle(Catalog, s, ConnectionId.Lan, "claude").IsItemOn(Catalog[1]));
     }
 
@@ -50,7 +121,7 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "app:chrome.exe"));
+        Assert.Equal(new ExceptionState(false, true, ConnectionId.Lan, Home: true), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "app:chrome.exe"));
         var added = Toggle(Catalog, s, ConnectionId.Phone, "app:chrome.exe");
         Assert.Equal(new UserRule(UserRuleType.App, "chrome.exe", true), Assert.Single(added.UserRules));
         Assert.Empty(added.PhoneUserRules);
@@ -71,7 +142,7 @@ public class UsageExceptionsTests
 
         Assert.Empty(added.UserRules);
         Assert.Equal(new UserRule(UserRuleType.App, "qbittorrent.exe", true), Assert.Single(added.PhoneUserRules));
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, added, ConnectionId.Lan, "app:qbittorrent.exe"));
+        Assert.Equal(new ExceptionState(true, true, ConnectionId.Phone), UsageExceptions.Describe(Catalog, added, ConnectionId.Lan, "app:qbittorrent.exe"));
         // The same app is not an exception of the other profile.
         Assert.False(UsageExceptions.Describe(Catalog, added, ConnectionId.Phone, "app:qbittorrent.exe").InException);
     }
@@ -81,7 +152,7 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings().WithUserRule(new UserRule(UserRuleType.Website, "dropbox.com"));
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "user:website:dropbox.com"));
+        Assert.Equal(new ExceptionState(true, true, ConnectionId.Lan, Home: true), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "user:website:dropbox.com"));
         Assert.False(Assert.Single(Toggle(Catalog, s, ConnectionId.Phone, "user:website:dropbox.com").UserRules).Enabled);
         // In the LAN profile that rule belongs to the other list: not changeable here.
         Assert.False(UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "user:website:dropbox.com").CanChange);
@@ -170,10 +241,10 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "code.exe")] };
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(ClaimCatalog, s, ConnectionId.Phone, "vscode"));
+        Assert.Equal(new ExceptionState(true, true, ConnectionId.Lan, Home: true), UsageExceptions.Describe(ClaimCatalog, s, ConnectionId.Phone, "vscode"));
         var off = UsageExceptions.Set(ClaimCatalog, s, ConnectionId.Phone, "vscode", false);
         Assert.False(Assert.Single(off.UserRules).Enabled);
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(ClaimCatalog, off, ConnectionId.Phone, "vscode"));
+        Assert.Equal(new ExceptionState(false, true, ConnectionId.Lan, Home: true), UsageExceptions.Describe(ClaimCatalog, off, ConnectionId.Phone, "vscode"));
         Assert.True(Assert.Single(UsageExceptions.Set(ClaimCatalog, off, ConnectionId.Phone, "vscode", true).UserRules).Enabled);
         Assert.False(UsageExceptions.Describe(ClaimCatalog, new SmartRoutingSettings(), ConnectionId.Phone, "vscode").CanChange); // no such rule: locked
     }
@@ -183,7 +254,7 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings { PhoneUserRules = [new UserRule(UserRuleType.App, "STEAM.exe", Enabled: false)] };
 
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Phone), UsageExceptions.Describe(ClaimCatalog, s, ConnectionId.Lan, "steam"));
+        Assert.Equal(new ExceptionState(false, true, ConnectionId.Phone), UsageExceptions.Describe(ClaimCatalog, s, ConnectionId.Lan, "steam"));
         var on = UsageExceptions.Set(ClaimCatalog, s, ConnectionId.Lan, "steam", true);
         Assert.True(Assert.Single(on.PhoneUserRules).Enabled);
         Assert.Empty(on.UserRules);
