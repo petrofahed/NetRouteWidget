@@ -142,7 +142,7 @@ Run: `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"`
 - [ ] **Step 1: Implement**
   - Each row dot gets `Cursor="Hand"` and a `MouseLeftButtonDown` handler that sets `e.Handled = true`, so the row's drag does not start. The handler raises `TurnedOffRequested(id, !row.IsOff)`.
   - Give the dot a hit area of at least 16 × 16: a transparent `Border` around the ellipse is fine.
-  - Tooltip text is from Global Constraints. The dot is clickable only when `canModify`; otherwise its tooltip says what the admin hint says.
+  - Tooltip text is from Global Constraints. The dot works without administrator rights too: the controller then only saves the setting, and its probes stop.
   - `Render` disables the mode button of an off row (`IsEnabled = canModify && !row.IsOff`). The tray does the same for its mode items.
   - In `App.xaml.cs`, wire `_card.TurnedOffRequested += (id, off) => _ = controller.SetTurnedOffAsync(id, off);`.
 

@@ -114,6 +114,7 @@ public partial class App : Application
 
             _card = new CardWindow();
             _card.ModeRequested += mode => _ = controller.SetModeAsync(mode);
+            _card.TurnedOffRequested += (id, off) => _ = controller.SetTurnedOffAsync(id, off);
             _card.HideRequested += HideCard;
             _card.Moved += (left, top) => controller.UpdateSettings(s => s with { CardLeft = left, CardTop = top });
             _card.StartWithWindowsToggled += ToggleStartWithWindows;

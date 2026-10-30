@@ -15,9 +15,12 @@ public partial class CardWindow : Window
     /// One connection's named row elements: the row's own height (collapsed to 0 when the connection isn't used,
     /// since a fixed RowDefinition height doesn't shrink just because its cells are Collapsed) plus its four
     /// always-rendered cells. Speed/Total are handled separately (RenderSpeeds/RenderTotals; see below).
-    sealed record RowControls(RowDefinition RowDef, Ellipse Dot, TextBlock Label, TextBlock Address, TextBlock Latency, TextBlock Speed, TextBlock Total);
+    /// DotHit wraps Dot: the larger click area of the row's on/off switch.
+    sealed record RowControls(RowDefinition RowDef, Border DotHit, Ellipse Dot, TextBlock Label, TextBlock Address, TextBlock Latency, TextBlock Speed, TextBlock Total);
 
     readonly Dictionary<ConnectionId, RowControls> _rows;
+    /// Which shown rows are turned off, from the last Render: a dot click asks for the opposite.
+    readonly HashSet<ConnectionId> _off = [];
     RoutingMode _mode;
     bool _allowClose;
     bool _wifiShown;
@@ -27,9 +30,9 @@ public partial class CardWindow : Window
         InitializeComponent();
         _rows = new Dictionary<ConnectionId, RowControls>
         {
-            [ConnectionId.Phone] = new(PhoneRowDef, PhoneDot, PhoneLabel, PhoneAddress, PhoneLatency, PhoneSpeed, PhoneTotal),
-            [ConnectionId.Lan] = new(LanRowDef, LanDot, LanLabel, LanAddress, LanLatency, LanSpeed, LanTotal),
-            [ConnectionId.Wifi] = new(WifiRowDef, WifiDot, WifiLabel, WifiAddress, WifiLatency, WifiSpeed, WifiTotal),
+            [ConnectionId.Phone] = new(PhoneRowDef, PhoneDotHit, PhoneDot, PhoneLabel, PhoneAddress, PhoneLatency, PhoneSpeed, PhoneTotal),
+            [ConnectionId.Lan] = new(LanRowDef, LanDotHit, LanDot, LanLabel, LanAddress, LanLatency, LanSpeed, LanTotal),
+            [ConnectionId.Wifi] = new(WifiRowDef, WifiDotHit, WifiDot, WifiLabel, WifiAddress, WifiLatency, WifiSpeed, WifiTotal),
         };
         var version = typeof(CardWindow).Assembly.GetName().Version;
         if (version is not null) VersionText.Text = $"v{version.Major}.{version.Minor}.{version.Build}";
@@ -38,6 +41,8 @@ public partial class CardWindow : Window
     }
 
     public event Action<RoutingMode>? ModeRequested;
+    /// A row's dot was clicked: turn that connection off (true) or back on (false).
+    public event Action<ConnectionId, bool>? TurnedOffRequested;
     public event Action? HideRequested;
     public event Action<double, double>? Moved;
     public event Action? StartWithWindowsToggled;
@@ -76,6 +81,7 @@ public partial class CardWindow : Window
         Header.SetResourceReference(TextBlock.ForegroundProperty, view.HeaderWarning ? "Warning" : "TextPrimary");
         Note.Text = view.Note ?? "";
         Note.Visibility = view.Note is null ? Visibility.Collapsed : Visibility.Visible;
+        _off.Clear();
         foreach (var id in Connections.CardOrder)
         {
             var controls = _rows[id];
@@ -83,12 +89,15 @@ public partial class CardWindow : Window
             if (row is not null)
             {
                 RenderRow(row.Row, controls.Dot, controls.Label, controls.Address, controls.Latency);
-                controls.Dot.Visibility = controls.Label.Visibility = controls.Address.Visibility = controls.Latency.Visibility = Visibility.Visible;
+                controls.DotHit.Visibility = controls.Label.Visibility = controls.Address.Visibility = controls.Latency.Visibility = Visibility.Visible;
+                controls.DotHit.ToolTip = $"Turn {Connections.Label(id)} {(row.Row.IsOff ? "on" : "off")}";
+                controls.Label.Opacity = controls.Address.Opacity = row.Row.IsOff ? 0.55 : 1.0;
+                if (row.Row.IsOff) _off.Add(id);
                 controls.RowDef.Height = new GridLength(22);
             }
             else
             {
-                controls.Dot.Visibility = controls.Label.Visibility = controls.Address.Visibility = controls.Latency.Visibility = Visibility.Collapsed;
+                controls.DotHit.Visibility = controls.Label.Visibility = controls.Address.Visibility = controls.Latency.Visibility = Visibility.Collapsed;
                 controls.RowDef.Height = new GridLength(0);
                 // RenderSpeeds/RenderTotals run on their own cadence and won't revisit this row until it's
                 // used again; clear any stale figure now so a hidden row can't leave a visible leftover.
@@ -100,7 +109,11 @@ public partial class CardWindow : Window
         ModeGrid.Columns = _wifiShown ? 4 : 3;
         WifiButton.Visibility = _wifiShown ? Visibility.Visible : Visibility.Collapsed;
         SyncModeButtons();
-        PhoneButton.IsEnabled = LanButton.IsEnabled = WifiButton.IsEnabled = SmartButton.IsEnabled = canModify;
+        SmartButton.IsEnabled = canModify;
+        // An off connection's mode button stays visible but cannot be picked until it is turned on again.
+        PhoneButton.IsEnabled = canModify && !_off.Contains(ConnectionId.Phone);
+        LanButton.IsEnabled = canModify && !_off.Contains(ConnectionId.Lan);
+        WifiButton.IsEnabled = canModify && !_off.Contains(ConnectionId.Wifi);
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
@@ -196,6 +209,14 @@ public partial class CardWindow : Window
         var mode = Enum.Parse<RoutingMode>((string)((FrameworkElement)sender).Tag);
         SyncModeButtons(); // undo the click's own toggle; Render shows the new mode once applied
         ModeRequested?.Invoke(mode);
+    }
+
+    /// The dot is the row's on/off switch. Handled here so the press does not also start dragging the card.
+    void OnDotDown(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        var id = Enum.Parse<ConnectionId>((string)((FrameworkElement)sender).Tag);
+        TurnedOffRequested?.Invoke(id, !_off.Contains(id));
     }
 
     void OnSmart(object sender, RoutedEventArgs e)
