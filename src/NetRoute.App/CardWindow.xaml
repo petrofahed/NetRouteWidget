@@ -133,21 +133,28 @@
                          below the LAN row while Wi-Fi isn't configured. Render sets this to 22 once Wi-Fi is used. -->
                     <RowDefinition x:Name="WifiRowDef" Height="0" />
                 </Grid.RowDefinitions>
-                <Ellipse x:Name="PhoneDot" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                <!-- Each row's dot is also its on/off switch; the transparent Border is a larger hit area than the 9 px dot. -->
+                <Border x:Name="PhoneDotHit" Background="Transparent" Cursor="Hand" Tag="Phone" MouseLeftButtonDown="OnDotDown">
+                    <Ellipse x:Name="PhoneDot" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                </Border>
                 <TextBlock x:Name="PhoneLabel" Grid.Column="1" Style="{StaticResource Primary}" />
                 <TextBlock x:Name="PhoneAddress" Grid.Column="2" Style="{StaticResource Secondary}" />
                 <TextBlock x:Name="PhoneSpeed" Grid.Column="3" Style="{StaticResource Speed}" Visibility="Collapsed" />
                 <TextBlock x:Name="PhoneLatency" Grid.Column="4" Style="{StaticResource Secondary}" />
                 <TextBlock x:Name="PhoneTotal" Grid.Column="5" Style="{StaticResource Total}" Visibility="Collapsed"
                            ToolTip="Data through the phone today (measured by Smart routing)" />
-                <Ellipse x:Name="LanDot" Grid.Row="1" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                <Border x:Name="LanDotHit" Grid.Row="1" Background="Transparent" Cursor="Hand" Tag="Lan" MouseLeftButtonDown="OnDotDown">
+                    <Ellipse x:Name="LanDot" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                </Border>
                 <TextBlock x:Name="LanLabel" Grid.Row="1" Grid.Column="1" Style="{StaticResource Primary}" />
                 <TextBlock x:Name="LanAddress" Grid.Row="1" Grid.Column="2" Style="{StaticResource Secondary}" />
                 <TextBlock x:Name="LanSpeed" Grid.Row="1" Grid.Column="3" Style="{StaticResource Speed}" Visibility="Collapsed" />
                 <TextBlock x:Name="LanLatency" Grid.Row="1" Grid.Column="4" Style="{StaticResource Secondary}" />
                 <TextBlock x:Name="LanTotal" Grid.Row="1" Grid.Column="5" Style="{StaticResource Total}" Visibility="Collapsed"
                            ToolTip="Data through the LAN today (measured by Smart routing)" />
-                <Ellipse x:Name="WifiDot" Grid.Row="2" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" Visibility="Collapsed" />
+                <Border x:Name="WifiDotHit" Grid.Row="2" Background="Transparent" Cursor="Hand" Tag="Wifi" MouseLeftButtonDown="OnDotDown" Visibility="Collapsed">
+                    <Ellipse x:Name="WifiDot" Width="9" Height="9" VerticalAlignment="Center" HorizontalAlignment="Left" />
+                </Border>
                 <TextBlock x:Name="WifiLabel" Grid.Row="2" Grid.Column="1" Style="{StaticResource Primary}" Visibility="Collapsed" />
                 <TextBlock x:Name="WifiAddress" Grid.Row="2" Grid.Column="2" Style="{StaticResource Secondary}" Visibility="Collapsed" />
                 <TextBlock x:Name="WifiSpeed" Grid.Row="2" Grid.Column="3" Style="{StaticResource Speed}" Visibility="Collapsed" />

@@ -161,4 +161,36 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal(0, result.Settings.SettingsVersion);
         Assert.Empty(result.Settings.SmartRouting.WifiUserRules);
     }
+
+    [Fact]
+    public void TurnedOff_round_trips_and_defaults_to_empty()
+    {
+        var store = new SettingsStore(FilePath);
+        store.Save(new AppSettings { TurnedOff = [ConnectionId.Lan, ConnectionId.Wifi] });
+
+        Assert.Equal([ConnectionId.Lan, ConnectionId.Wifi], store.Load().Settings.TurnedOff);
+        Assert.Contains("\"Lan\"", File.ReadAllText(FilePath));
+
+        File.WriteAllText(FilePath, "{ \"SettingsVersion\": 6, \"Mode\": \"Lan\" }");
+        Assert.Empty(store.Load().Settings.TurnedOff);
+
+        File.WriteAllText(FilePath, "{ \"SettingsVersion\": 6, \"Mode\": \"Lan\", \"TurnedOff\": null }");
+        Assert.Empty(store.Load().Settings.TurnedOff);
+
+        File.WriteAllText(FilePath, "{ \"SettingsVersion\": 6, \"Mode\": \"Lan\", \"TurnedOff\": [\"Lan\", \"Lan\"] }");
+        Assert.Equal([ConnectionId.Lan], store.Load().Settings.TurnedOff);
+    }
+
+    [Fact]
+    public void An_unknown_TurnedOff_entry_is_dropped_not_a_failed_load()
+    {
+        var store = new SettingsStore(FilePath);
+        File.WriteAllText(FilePath, "{ \"SettingsVersion\": 6, \"Mode\": \"Lan\", \"PhoneOverride\": \"kept\", \"TurnedOff\": [\"Satellite\", \"wifi\", 7, {}, \"Lan\"] }");
+
+        var result = store.Load();
+
+        Assert.False(result.Recovered);
+        Assert.Equal("kept", result.Settings.PhoneOverride);
+        Assert.Equal([ConnectionId.Wifi, ConnectionId.Lan], result.Settings.TurnedOff);
+    }
 }

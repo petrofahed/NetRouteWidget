@@ -1,7 +1,7 @@
 # NetRoute Widget v6: Wi-Fi as a third connection — Design
 
 **Date:** 2026-10-22
-**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). v6.1-v6.4 (Smart routing, usage, path map, network picker) to follow. The cable-pull heal check on the real machine is still to be run by the user.
+**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). On 2026-10-30 the user moved the path map lanes forward and added a per-connection on/off switch: they ship as **v6.1**, and the later phases are renumbered (Smart routing v6.2, usage v6.3, network picker v6.4). v6.1 implemented (plan `2026-10-30-netroute-v6-1-path-map-lanes-and-on-off.md`). The cable-pull heal check on the real machine is still to be run by the user.
 **Builds on:**
 - `2026-10-02-netroute-widget-v1-design.md`: card, modes, metrics, auto-heal.
 - `2026-10-02-netroute-v2-smart-routing-design.md`: sing-box, waiting list, popup.
@@ -272,7 +272,7 @@ Either way, the pin must meet all of these:
 - The button reads "Use <main> until <target> is back". It adds "(uses mobile data)" only when the main is metered.
 - Three healthy checks bring it back, and the "<target> back" toast fires, as today.
 
-**Phase 1 behaviour (call).** Until Smart routing learns Wi-Fi (Phase 2), Smart routing **pauses whenever Wi-Fi is the connection actually carrying internet**, as it does in Auto. That covers three cases:
+**Phase 1 behaviour (call).** Until Smart routing learns Wi-Fi (v6.2), Smart routing **pauses whenever Wi-Fi is the connection actually carrying internet**, as it does in Auto. That covers three cases:
 - Wi-Fi mode.
 - Healing onto Wi-Fi.
 - The main connection unplugged, so Windows falls to Wi-Fi by metric.
@@ -297,7 +297,7 @@ Without this, sing-box would keep sending unmatched traffic to the phone (mobile
 
 **Live speed and totals.** The card shows them on every row, Wi-Fi included.
 
-**Before v6.2 (call).** v6.0 and v6.1 ship with the Wi-Fi row's live speed and today's total shown as "—". Address and latency work from v6.0. Until v6.2, Wi-Fi bytes the counter sees are booked in the LAN share, which is today's behaviour for unknown non-phone traffic. The phone figure stays exact throughout.
+**Before v6.3 (call).** v6.0 to v6.2 ship with the Wi-Fi row's live speed and today's total shown as "—". Address and latency work from v6.0. Until v6.3, Wi-Fi bytes the counter sees are booked in the LAN share, which is today's behaviour for unknown non-phone traffic. The phone figure stays exact throughout.
 
 ## Path map
 
@@ -312,6 +312,30 @@ Without this, sing-box would keep sending unmatched traffic to the phone (mobile
 **Diagnosis.** Diagnosis text is built per lane. "Both connections reach the internet" becomes a count, or "All connections reach the internet".
 
 **Local network tab.** Unchanged, LAN only.
+
+## Turning a connection off (v6.1)
+
+**Why (what the user said, 2026-10-30).** "I want to do some tests on the Wi-Fi, and sometimes I need also a feature to enable/disable, let's say, the LAN." The user picked a quick switch on the card over disconnecting the adapter in Windows, knowing that Windows can still use the cable.
+
+**What it is.** Choose adapters has an **Enabled** on/off toggle beside each adapter. Adapter choices and toggles are staged locally and applied together on **OK**; **Cancel** or closing the dialog discards them. A Not-used slot has a disabled, off toggle and no saved off flag. Choosing an adapter after Not used starts it enabled; changing between chosen adapters preserves the toggle. Detect automatically changes the local choices without resetting off toggles unless a slot becomes Not used. Duplicate adapter choices remain invalid even when a chosen slot is off.
+
+Each shown card row's coloured dot remains a shortcut to turn that connection **off**. Its row and mode button then disappear from the compact widget. Turn it back **on** using the configured toggle in Choose adapters, which stays available. A chosen but disconnected connection stays visible; only an explicit off flag hides it.
+
+**While a connection is off (its choice stays configured, while NetRoute stops managing it):**
+- NetRoute treats it like Not used: no metric changes, no latency probes, no path-map lane, never a heal or backup target, no route pin.
+- Its adapter is reset to the automatic metric when it is turned off, as when a slot becomes Not used.
+- If the saved mode points at it, the mode falls back exactly as for Not used (first still-used connection in `FallbackOrder`, else Auto), and the log says so.
+- The compact card **hides its row and mode button**, including speed and total cells on later updates; the remaining mode buttons and Smart fill the available columns. All-off leaves no connection rows or mode buttons. Its tray item stays visible but disabled. Raw presentation metadata retains the off flag for the tray; the compact card consumes only visible rows. Turning on restores its row in Phone, LAN, Wi-Fi order and its mode button.
+- A mode change to an off connection is refused: "LAN is turned off".
+- The adapter choice in Choose adapters is untouched, so turning it on again needs no re-picking. A slot set to Not used has no row, so it cannot be turned off.
+- The setting is saved (`TurnedOff`, a list of connection ids) and survives a restart. Without administrator rights it is saved and takes effect like an adapter choice does.
+
+**What off does not do.** It does not disable the adapter in Windows. With the cable still in, Windows can still send local traffic over it, and if every NetRoute-managed connection fails Windows may fall to it by its automatic metric.
+
+**Smart routing with the LAN off (call: same as Not used).** Smart routing sees an off LAN exactly as a missing one. sing-box keeps running; LAN-only rules still name the last known LAN interface, so with the cable in their traffic can still leave over it, and the LAN counts as offline, so the "Use phone until LAN is back" popup may appear. Pausing the LAN outbound while it is off belongs with v6.2 (Smart routing over three connections).
+
+**Safety net (call).** Every refresh checks that the saved mode's connection is in use; if it is not (turned off without administrator rights, or a hand-edited file), the mode falls back as above. A mode change is checked against the off list again once it holds the controller's lock, so a click racing a turn-off cannot land on an off connection. A path change caused by turning a connection off or by Choose adapters is the user's own and is not toasted. A mode change to a Not-used connection is refused too ("LAN is set to Not used"), and its card button and tray item are disabled. The fallback prefers a used connection that is present, so it never lands on a chosen but disconnected Wi-Fi when the phone is up. Each elevated refresh puts a turned-off adapter back on the automatic metric if it is not there yet (a reset that failed, or a hand-edited file).
+
 
 ## Settings and migration
 
@@ -342,14 +366,14 @@ Each phase ships on its own, and the plan may stop at any boundary.
    - The tray item.
    - Settings migration and backup.
    - Smart routing pauses in Wi-Fi mode.
-2. **v6.1: Smart routing over three connections.**
+2. **v6.1: path map lanes and the on/off switch** (moved forward on 2026-10-30; see "Path map" and "Turning a connection off").
+3. **v6.2: Smart routing over three connections.**
    - Outbounds and selectors.
    - The catalog table.
    - Per-profile rule lists with `Exit`.
    - Generic waiting.
    - The Config tab.
-3. **v6.2: usage per connection.** Counter, store, reconciler, Usage tab, live speed, speed test.
-4. **v6.3: path map lanes.**
+4. **v6.3: usage per connection.** Counter, store, reconciler, Usage tab, live speed, speed test.
 5. **v6.4: network picker** (screen 6). WlanApi P/Invoke (scan, list, connect to a saved profile, disconnect, current SSID), the Location-permission handling, and the SSID label.
 
 ## Testing

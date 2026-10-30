@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using NetRoute.Core;
 
 namespace NetRoute.App;
@@ -13,12 +14,17 @@ public partial class AdapterPickerWindow : Window
     readonly IReadOnlyList<AdapterInfo> _candidates;
     readonly INetworkNameSource _names;
 
-    public AdapterPickerWindow(IReadOnlyList<AdapterInfo> candidates, AdapterOverrides current, INetworkNameSource names)
+    public AdapterPickerWindow(IReadOnlyList<AdapterInfo> candidates, AdapterOverrides current,
+        IReadOnlyList<ConnectionId> turnedOff, INetworkNameSource names)
     {
         InitializeComponent();
         Theme.Track(this);
         _candidates = candidates;
         _names = names;
+
+        PhoneEnabled.IsChecked = !turnedOff.Contains(ConnectionId.Phone);
+        LanEnabled.IsChecked = !turnedOff.Contains(ConnectionId.Lan);
+        WifiEnabled.IsChecked = !turnedOff.Contains(ConnectionId.Wifi);
 
         var suggestion = AdapterDetector.Suggest(candidates);
 
@@ -32,6 +38,7 @@ public partial class AdapterPickerWindow : Window
     }
 
     public AdapterOverrides Result { get; private set; } = AdapterOverrides.None;
+    public IReadOnlyList<ConnectionId> TurnedOffResult { get; private set; } = Array.Empty<ConnectionId>();
 
     static string Label(AdapterInfo a) => $"{a.Name} — {a.Description}{(a.IsUp ? "" : " (disconnected)")}";
 
@@ -64,6 +71,7 @@ public partial class AdapterPickerWindow : Window
     void OnPhoneChanged(object sender, SelectionChangedEventArgs e)
     {
         if (PhoneBox.SelectedItem is not Choice choice) return;
+        UpdateEnabled(PhoneEnabled, choice, e);
         ErrorText.Visibility = Visibility.Collapsed;
         UpdateDetail(PhoneDetail, ConnectionId.Phone, choice);
     }
@@ -71,6 +79,7 @@ public partial class AdapterPickerWindow : Window
     void OnLanChanged(object sender, SelectionChangedEventArgs e)
     {
         if (LanBox.SelectedItem is not Choice choice) return;
+        UpdateEnabled(LanEnabled, choice, e);
         ErrorText.Visibility = Visibility.Collapsed;
         UpdateDetail(LanDetail, ConnectionId.Lan, choice);
     }
@@ -78,8 +87,19 @@ public partial class AdapterPickerWindow : Window
     void OnWifiChanged(object sender, SelectionChangedEventArgs e)
     {
         if (WifiAdapterBox.SelectedItem is not Choice choice) return;
+        UpdateEnabled(WifiEnabled, choice, e);
         ErrorText.Visibility = Visibility.Collapsed;
         UpdateWifiDetail(choice);
+    }
+
+    static void UpdateEnabled(ToggleButton enabled, Choice choice, SelectionChangedEventArgs e)
+    {
+        enabled.IsEnabled = choice.Value != AdapterOverrides.NotUsed;
+        if (!enabled.IsEnabled) enabled.IsChecked = false;
+        // A previously unused slot starts enabled when chosen. Real-to-real changes (including Detect)
+        // preserve its staged flag; the initial selection preserves the saved off state too.
+        else if (e.RemovedItems.OfType<Choice>().Any(previous => previous.Value == AdapterOverrides.NotUsed))
+            enabled.IsChecked = true;
     }
 
     /// A choice with no live AdapterInfo is either the explicit "Not used" entry, or a saved
@@ -148,6 +168,13 @@ public partial class AdapterPickerWindow : Window
 
         ErrorText.Visibility = Visibility.Collapsed;
         Result = new AdapterOverrides(phone.Value, lan.Value, wifi.Value);
+        var enabled = new Dictionary<ConnectionId, bool>
+        {
+            [ConnectionId.Phone] = PhoneEnabled.IsChecked == true,
+            [ConnectionId.Lan] = LanEnabled.IsChecked == true,
+            [ConnectionId.Wifi] = WifiEnabled.IsChecked == true,
+        };
+        TurnedOffResult = AppSettings.OffList(Connections.All.Where(id => !Result.IsNotUsed(id) && !enabled[id]));
         DialogResult = true;
     }
 

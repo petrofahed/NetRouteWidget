@@ -49,6 +49,28 @@ public class PathMonitorTests
     }
 
     [Fact]
+    public async Task Wifi_lane_is_traced_and_checked_from_its_own_address()
+    {
+        var rig = new Rig();
+        var wifi = TestAdapters.Wifi(ipv4: "192.168.1.4");
+        rig.Monitor.SetAdapters(new Dictionary<ConnectionId, AdapterInfo?> { [ConnectionId.Wifi] = wifi });
+
+        await rig.Monitor.RetraceAsync(CancellationToken.None);
+        await rig.Monitor.HopRoundAsync(CancellationToken.None);
+        await rig.Monitor.EndpointRoundAsync(CancellationToken.None);
+        var snapshot = rig.Monitor.Snapshot();
+
+        Assert.NotEmpty(rig.Hops.Sources);
+        Assert.All(rig.Hops.Sources, s => Assert.Equal(Ip("192.168.1.4"), s));
+        Assert.Equal([Ip("192.168.1.4")], rig.Endpoint.Sources);
+        Assert.Same(wifi, snapshot.Lanes[ConnectionId.Wifi].Adapter);
+        Assert.Equal("Wi-Fi", snapshot.Lanes[ConnectionId.Wifi].Name);
+        Assert.Equal(TraceStatus.Complete, snapshot.Lanes[ConnectionId.Wifi].Trace!.Status);
+        Assert.Null(snapshot.Lan.Adapter); // a missing key clears that lane
+        Assert.Equal([ConnectionId.Lan, ConnectionId.Wifi, ConnectionId.Phone], snapshot.Lanes.Keys.Order());
+    }
+
+    [Fact]
     public async Task A_lane_without_an_adapter_is_not_probed()
     {
         var rig = new Rig();

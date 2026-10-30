@@ -19,6 +19,7 @@ public class RouteControllerTests
     readonly FakeLatencyProbe _probe = new();
     readonly List<AppSettings> _saved = new();
     readonly List<string> _toasts = new();
+    readonly List<string> _log = new();
 
     public RouteControllerTests()
     {
@@ -33,7 +34,7 @@ public class RouteControllerTests
     RouteController Create(AppSettings? settings = null, bool canModify = true, INetworkNameSource? names = null)
     {
         var controller = new RouteController(_adapters, _metrics, _routes, _probe,
-            settings ?? new AppSettings(), canModify, _saved.Add, _ => { }, _clock, names: names);
+            settings ?? new AppSettings(), canModify, _saved.Add, _log.Add, _clock, names: names);
         controller.AutoSwitched += _toasts.Add;
         return controller;
     }
@@ -1108,5 +1109,257 @@ public class RouteControllerTests
 
         Assert.Equal(3, names.CallCount);
         Assert.Equal("pzhome", controller.Status.WifiNetwork);
+    }
+
+    [Fact]
+    public async Task Adapter_choices_fall_back_against_the_final_enabled_slots_only()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, TurnedOff = [ConnectionId.Wifi] });
+        await controller.RefreshAsync(measureLatency: true);
+        _saved.Clear();
+        var published = new List<NetworkStatus>();
+        controller.StatusChanged += published.Add;
+
+        await controller.SetAdapterChoicesAsync(
+            new AdapterOverrides(null, AdapterOverrides.NotUsed, "AA-BB-CC-00-00-18"), [ConnectionId.Phone]);
+
+        Assert.Equal(RoutingMode.Wifi, controller.Settings.Mode);
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Phone));
+        Assert.Equal(18, controller.Status.Adapters.Wifi?.Index);
+        Assert.NotEmpty(_saved);
+        Assert.All(_saved, settings =>
+        {
+            Assert.Equal(AdapterOverrides.NotUsed, settings.LanOverrideMac);
+            Assert.Equal("AA-BB-CC-00-00-18", settings.WifiOverrideMac);
+            Assert.Equal([ConnectionId.Phone], settings.TurnedOff);
+            Assert.NotEqual(RoutingMode.Phone, settings.Mode);
+        });
+        Assert.NotEmpty(published);
+        Assert.All(published, status => Assert.Equal(RoutingMode.Wifi, status.Mode));
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.True(_metrics.Get(31, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(18, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task Adapter_choices_replace_and_disable_a_slot_without_leaving_the_old_metric()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _adapters.Adapters.Add(TestAdapters.Lan(index: 12, mac: "AA-BB-CC-00-00-12"));
+        _metrics.Add(12);
+
+        await controller.SetAdapterChoicesAsync(
+            new AdapterOverrides(null, "AA-BB-CC-00-00-12"), [ConnectionId.Lan]);
+
+        Assert.Equal("AA-BB-CC-00-00-12", controller.Settings.LanOverrideMac);
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
+        Assert.Equal(12, controller.Status.Adapters.OffAdapters[ConnectionId.Lan].Index);
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.True(_metrics.Get(12, IpFamily.IPv4)!.UseAutomatic);
+    }
+
+    [Fact]
+    public async Task Adapter_choices_normalize_all_off_flags_and_forget_not_used_slots()
+    {
+        AddWifi();
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetAdapterChoicesAsync(
+            new AdapterOverrides(AdapterOverrides.NotUsed, null, "AA-BB-CC-00-00-18"),
+            [ConnectionId.Phone, ConnectionId.Lan, ConnectionId.Wifi, ConnectionId.Lan, (ConnectionId)999]);
+
+        Assert.Equal([ConnectionId.Lan, ConnectionId.Wifi], controller.Settings.TurnedOff);
+        Assert.Equal(RoutingMode.Auto, controller.Settings.Mode);
+        Assert.Equal(DetectionIssue.NotUsed, controller.Status.Adapters.Issue(ConnectionId.Phone));
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Wifi));
+        Assert.Equal([ConnectionId.Lan, ConnectionId.Wifi], _saved.Last().TurnedOff);
+    }
+
+    [Fact]
+    public async Task Adapter_choices_without_admin_save_the_final_state_without_metric_writes()
+    {
+        AddWifi();
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, TurnedOff = [ConnectionId.Wifi] }, canModify: false);
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetAdapterChoicesAsync(
+            new AdapterOverrides(null, AdapterOverrides.NotUsed, "AA-BB-CC-00-00-18"), [ConnectionId.Phone]);
+
+        Assert.Equal(RoutingMode.Wifi, controller.Status.Mode);
+        Assert.Equal(AdapterOverrides.NotUsed, _saved.Last().LanOverrideMac);
+        Assert.Equal([ConnectionId.Phone], _saved.Last().TurnedOff);
+        Assert.Empty(_metrics.SetCalls);
+    }
+
+    [Fact]
+    public async Task Turning_the_lan_off_resets_its_metric_and_saves()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Equal([ConnectionId.Lan], controller.Settings.TurnedOff);
+        Assert.Equal([ConnectionId.Lan], _saved.Last().TurnedOff);
+        Assert.Contains("LAN turned off", _log);
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
+        Assert.Null(controller.Status.LanLatencyMs);
+
+        // Later refreshes keep it off: its metric is not set again and it is not probed.
+        _probe.Calls.Clear();
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Contains("192.168.42.11", _probe.Calls);
+        Assert.DoesNotContain("192.168.86.42", _probe.Calls);
+    }
+
+    [Fact]
+    public async Task Turning_off_the_mode_connection_falls_back_without_a_toast()
+    {
+        _routes.BestV4 = 10;
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(measureLatency: true);
+        _toasts.Clear();
+
+        _routes.BestV4 = 31; // Windows follows the new metrics
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
+    public async Task Turning_it_back_on_restores_the_slot()
+    {
+        var controller = Create(new AppSettings { TurnedOff = [ConnectionId.Lan] });
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Null(controller.Status.Adapters.Lan);
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: false);
+
+        Assert.Empty(controller.Settings.TurnedOff);
+        Assert.Equal(10, controller.Status.Adapters.Lan?.Index);
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Contains("LAN turned on", _log);
+    }
+
+    [Fact]
+    public async Task Mode_change_to_an_off_connection_is_refused()
+    {
+        var controller = Create(new AppSettings { TurnedOff = [ConnectionId.Lan] });
+        await controller.RefreshAsync(measureLatency: true);
+
+        var result = await controller.SetModeAsync(RoutingMode.Lan);
+
+        Assert.Equal(new ApplyResult(false, "LAN is turned off"), result);
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+    }
+
+    [Fact]
+    public async Task Without_admin_turning_off_the_mode_connection_still_falls_back()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan }, canModify: false);
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(RoutingMode.Phone, controller.Status.Mode);
+    }
+
+    [Fact]
+    public async Task A_saved_mode_on_an_off_connection_falls_back_at_refresh()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, TurnedOff = [ConnectionId.Lan] });
+
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Contains("Lan is no longer used; switching to Phone", _log);
+    }
+
+    [Fact]
+    public async Task Setting_a_slot_to_not_used_forgets_that_it_was_off()
+    {
+        var controller = Create(new AppSettings { TurnedOff = [ConnectionId.Lan] });
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetOverridesAsync(new AdapterOverrides(null, AdapterOverrides.NotUsed));
+        Assert.Empty(controller.Settings.TurnedOff);
+
+        await controller.SetOverridesAsync(AdapterOverrides.None);
+        Assert.Equal(10, controller.Status.Adapters.Lan?.Index); // picked again: on, not still off
+    }
+
+    [Fact]
+    public async Task Mode_change_to_a_not_used_connection_is_refused()
+    {
+        var controller = Create(new AppSettings { LanOverrideMac = AdapterOverrides.NotUsed });
+        await controller.RefreshAsync(measureLatency: true);
+
+        var result = await controller.SetModeAsync(RoutingMode.Lan);
+
+        Assert.Equal(new ApplyResult(false, "LAN is set to Not used"), result);
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task An_off_adapter_left_on_a_manual_metric_is_reset_at_the_next_refresh()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _metrics.FailOnSet.Add((10, IpFamily.IPv4)); // the reset while turning off fails
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+        Assert.False(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+
+        _metrics.FailOnSet.Clear();
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+
+        // Once automatic, later refreshes leave it alone.
+        var writes = _metrics.SetCalls.Count;
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Equal(writes, _metrics.SetCalls.Count);
+    }
+
+    [Fact]
+    public async Task Fallback_prefers_a_connection_that_is_present()
+    {
+        _routes.BestV4 = 10;
+        // Wi-Fi is chosen but not connected; the phone is present.
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _toasts.Clear();
+
+        _routes.BestV4 = 31;
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
+    public async Task Without_admin_the_switch_is_saved_only()
+    {
+        var controller = Create(canModify: false);
+        await controller.RefreshAsync(measureLatency: true);
+        var writes = _metrics.SetCalls.Count;
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal([ConnectionId.Lan], controller.Settings.TurnedOff);
+        Assert.Equal(writes, _metrics.SetCalls.Count);
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
     }
 }

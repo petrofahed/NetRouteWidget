@@ -40,7 +40,7 @@ public sealed class SmartRoutingController
 
     const string FaultMessage = "Smart routing stopped — sing-box keeps crashing (see log)";
     const string NeedsBothMessage = "Needs both phone and LAN connected";
-    /// sing-box doesn't understand Wi-Fi as a routing exit yet (v6.1): while Wi-Fi carries the internet, Smart routing
+    /// sing-box doesn't understand Wi-Fi as a routing exit yet (v6.2): while Wi-Fi carries the internet, Smart routing
     /// pauses entirely rather than send unmatched traffic to the phone (mobile data) or to a dead connection.
     public const string WifiPausedMessage = "Paused while on Wi-Fi";
 
@@ -528,7 +528,7 @@ public sealed class SmartRoutingController
         if (_faulted) return (SmartState.Faulted, FaultMessage);
         if (!net.CanModify) return (SmartState.Unavailable, "Needs administrator rights");
         if (net.Mode == RoutingMode.Auto) return (SmartState.Unavailable, "Paused in Auto mode"); // the widget steps aside
-        // sing-box doesn't route through Wi-Fi yet (v6.1): pause rather than send unmatched traffic to the phone or a
+        // sing-box doesn't route through Wi-Fi yet (v6.2): pause rather than send unmatched traffic to the phone or a
         // dead connection. Checks BOTH Mode and Carrier: Carrier alone goes stale the instant Wi-Fi is physically
         // absent, has no gateway yet (DHCP pending right after every Wi-Fi reconnect), or has been healed off onto
         // the LAN, even though Mode is still Wifi - any of those would otherwise fall through to the phone-default

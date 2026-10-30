@@ -28,8 +28,57 @@ public sealed record AppSettings
     /// Devices on the local network the user tests in the path window's "Local network" tab.
     public IReadOnlyList<LocalDevice> LocalDevices { get; init; } = Array.Empty<LocalDevice>();
 
+    /// Connections switched off in Choose adapters or on the card (v6.1). They keep their adapter choice but count as Not used.
+    [JsonConverter(typeof(LenientConnectionListConverter))]
+    public IReadOnlyList<ConnectionId> TurnedOff { get; init; } = Array.Empty<ConnectionId>();
+
+    /// A TurnedOff list without duplicates; an empty one is the shared empty array, so settings without it keep
+    /// comparing equal to defaults (record equality compares lists by reference).
+    public static IReadOnlyList<ConnectionId> OffList(IEnumerable<ConnectionId> ids)
+    {
+        var list = ids.Where(Enum.IsDefined).Distinct().ToList();
+        return list.Count == 0 ? Array.Empty<ConnectionId>() : list;
+    }
+
     [JsonIgnore]
     public AdapterOverrides Overrides => new(PhoneOverride, LanOverrideMac, WifiOverrideMac);
+}
+
+/// Reads a list of connection names, dropping any entry it does not recognise (a hand edit, or a later version's
+/// connection) instead of failing the whole settings file, which would reset it to defaults.
+public sealed class LenientConnectionListConverter : JsonConverter<IReadOnlyList<ConnectionId>>
+{
+    public override IReadOnlyList<ConnectionId> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return Array.Empty<ConnectionId>();
+        if (reader.TokenType != JsonTokenType.StartArray)
+        {
+            reader.Skip();
+            return Array.Empty<ConnectionId>();
+        }
+
+        var ids = new List<ConnectionId>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (reader.TokenType == JsonTokenType.String
+                && Enum.TryParse<ConnectionId>(reader.GetString(), ignoreCase: true, out var named)
+                && Enum.IsDefined(named)
+                && !int.TryParse(reader.GetString(), out _))
+                ids.Add(named);
+            else if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var number) && Enum.IsDefined((ConnectionId)number))
+                ids.Add((ConnectionId)number);
+            else
+                reader.Skip();
+        }
+        return ids;
+    }
+
+    public override void Write(Utf8JsonWriter writer, IReadOnlyList<ConnectionId> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var id in value) writer.WriteStringValue(id.ToString());
+        writer.WriteEndArray();
+    }
 }
 
 /// Unreadable: the file exists but could not be read (locked, access denied). It was left untouched, so the caller
@@ -70,6 +119,7 @@ public sealed class SettingsStore(string path, int readAttempts = 3, TimeSpan? r
             if (!Enum.IsDefined(settings.Mode)) throw new JsonException($"Unknown mode {(int)settings.Mode}");
             if (settings.SmartRouting is null) settings = settings with { SmartRouting = new SmartRoutingSettings() };
             settings = settings with { LocalDevices = LocalDeviceValidator.Sanitize(settings.LocalDevices) }; // bad entries are dropped, never a failed load
+            settings = settings with { TurnedOff = AppSettings.OffList(settings.TurnedOff ?? []) };
             if (!settings.SmartRouting.IsValid()) throw new JsonException("Invalid Smart routing settings");
             if (settings.SettingsVersion < AppSettings.CurrentVersion) BackupOnce();
             return new(settings, false);

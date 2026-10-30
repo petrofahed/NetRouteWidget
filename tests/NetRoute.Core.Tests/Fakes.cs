@@ -49,9 +49,14 @@ sealed class FakeRouteQuery : IRouteQuery
 sealed class FakeLatencyProbe : ILatencyProbe
 {
     public Dictionary<string, int?> BySource { get; } = new();
+    /// Every address a latency check was sent from.
+    public List<string> Calls { get; } = new();
 
-    public Task<int?> MeasureAsync(IPAddress source, CancellationToken ct) =>
-        Task.FromResult(BySource.TryGetValue(source.ToString(), out var ms) ? ms : null);
+    public Task<int?> MeasureAsync(IPAddress source, CancellationToken ct)
+    {
+        lock (Calls) Calls.Add(source.ToString());
+        return Task.FromResult(BySource.TryGetValue(source.ToString(), out var ms) ? ms : null);
+    }
 }
 
 sealed class FakeSubnetRoutes : ISubnetRoutes

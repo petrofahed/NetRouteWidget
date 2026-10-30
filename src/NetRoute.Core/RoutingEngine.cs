@@ -17,6 +17,10 @@ public sealed class RoutingEngine(IInterfaceMetrics metrics)
     /// Hands an adapter back to Windows' automatic metric.
     public ApplyResult Reset(AdapterInfo adapter) => ApplyTargets([(adapter, null)]);
 
+    /// Whether every family of the adapter is already on the automatic metric (an unknown family counts as automatic).
+    public bool IsAutomatic(AdapterInfo adapter) =>
+        Families.All(family => metrics.Get(adapter.Index, family) is not { UseAutomatic: false });
+
     public bool IsInSync(RoutingMode mode, DetectionResult adapters, ConnectionId? carrier = null)
     {
         foreach (var (adapter, metric) in Targets(adapters, MetricPolicy.For(mode, carrier)))

@@ -4,7 +4,8 @@ public enum Dot { Green, Amber, Gray }
 
 public enum TrayColor { Green, Blue, Gray, Purple }
 
-public sealed record AdapterRow(string Label, string Address, string Latency, Dot Dot, bool IsActive);
+/// IsOff: the connection is configured but off. The tray keeps this metadata; the compact card hides the row.
+public sealed record AdapterRow(string Label, string Address, string Latency, Dot Dot, bool IsActive, bool IsOff = false);
 
 public sealed record ConnectionRow(ConnectionId Id, AdapterRow Row);
 
@@ -13,6 +14,17 @@ public sealed record CardView(
     IReadOnlyList<ConnectionRow> Rows,
     string Tooltip, TrayColor TrayColor, bool TrayBadge)
 {
+    /// Compact-card rows only. Raw Rows retain off connections for the tray and configured-state metadata.
+    public IReadOnlyList<ConnectionRow> VisibleRows => Rows.Where(row => !row.Row.IsOff).ToList();
+
+    public bool IsModeButtonVisible(ConnectionId id) => id switch
+    {
+        // Preserve the existing disabled Phone/LAN buttons for Not-used slots; only explicit off hides them.
+        ConnectionId.Phone or ConnectionId.Lan => !Rows.Any(row => row.Id == id && row.Row.IsOff),
+        ConnectionId.Wifi => Rows.Any(row => row.Id == id && !row.Row.IsOff),
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, null),
+    };
+
     /// Compatibility helpers for callers written before Wi-Fi existed: a used connection's row,
     /// or a "not connected" placeholder for one that (unexpectedly) isn't in Rows.
     public AdapterRow Row(ConnectionId id) =>
@@ -32,7 +44,7 @@ public static class StatusPresenter
     {
         var noInternet = s.ActivePath == InternetPath.None;
         var rows = Connections.CardOrder
-            .Where(id => s.Adapters.IsUsed(id))
+            .Where(id => s.Adapters.IsUsed(id) || s.Adapters.IsTurnedOff(id))
             .Select(id => new ConnectionRow(id, Row(id, s)))
             .ToList();
         return new CardView(
@@ -109,6 +121,7 @@ public static class StatusPresenter
     static AdapterRow Row(ConnectionId id, NetworkStatus s)
     {
         var label = id == ConnectionId.Wifi ? s.WifiNetwork ?? "Wi-Fi" : Connections.Label(id);
+        if (s.Adapters.IsTurnedOff(id)) return new(label, "off", "", Dot.Gray, false, IsOff: true);
         var latencyMs = s.LatencyMs.TryGetValue(id, out var ms) ? ms : null;
         return Row(label, s.Adapters.Adapter(id), s.Adapters.Issue(id), latencyMs, s.ActivePath == Connections.PathOf(id));
     }

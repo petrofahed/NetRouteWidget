@@ -125,8 +125,11 @@ public sealed class RouteController
         try
         {
             var before = Status;
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
+            // Safety net: a mode saved on a connection that is now unused (turned off without admin rights, or a
+            // hand-edited file) must not leave every metric at backup level with nothing preferred.
+            if (FallBackIfUnused(detection)) ResetHealing();
             var mode = Settings.Mode;
-            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
             UpdateWifiNetworkName(detection);
 
             var rawLatencies = measureLatency
@@ -137,7 +140,10 @@ public sealed class RouteController
 
             // Healing above used the raw results; the card only reports "no reply" once a miss repeats.
             var shown = measureLatency
-                ? Connections.All.ToDictionary(id => id, id => Smooth(id, rawLatencies.GetValueOrDefault(id), before.LatencyMs.GetValueOrDefault(id)))
+                // An adapter that left its slot (unplugged, Not used, turned off) has no latency to keep.
+                ? Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null
+                    ? null
+                    : Smooth(id, rawLatencies.GetValueOrDefault(id), before.LatencyMs.GetValueOrDefault(id)))
                 : rawLatencies;
 
             var carrier = NetworkStatus.CarrierFor(mode, _healTarget, detection);
@@ -155,7 +161,10 @@ public sealed class RouteController
             }
 
             if (before.CanModify)
+            {
                 _pin?.Sync(RoutePin.Wanted(mode, _healTarget, detection));
+                ResetOffAdapters(detection);
+            }
 
             var after = before with
             {
@@ -196,14 +205,23 @@ public sealed class RouteController
 
     public async Task<ApplyResult> SetModeAsync(RoutingMode mode, CancellationToken ct = default)
     {
+        if (Connections.Of(mode) is { } wanted && Settings.TurnedOff.Contains(wanted))
+            return new ApplyResult(false, $"{Connections.Label(wanted)} is turned off");
         if (!Status.CanModify)
             return new ApplyResult(false, "Administrator rights are needed to change routing");
 
         await _gate.WaitAsync(ct);
         try
         {
+            // Checked under the gate, against a fresh detection: a turn-off or an adapter change queued ahead of this
+            // one may have landed meanwhile. A mode with nothing behind it would leave no adapter preferred.
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
+            if (Connections.Of(mode) is { } wantedNow && !detection.IsUsed(wantedNow))
+                return new ApplyResult(false, detection.IsTurnedOff(wantedNow)
+                    ? $"{Connections.Label(wantedNow)} is turned off"
+                    : $"{Connections.Label(wantedNow)} is set to Not used");
+
             ResetHealing();
-            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
             var result = _engine.Apply(mode, detection);
             if (result.Success)
             {
@@ -252,12 +270,43 @@ public sealed class RouteController
 
     /// Saves the user's adapter choice. An adapter that stops being present in its slot is reset to the
     /// automatic metric so a stale preferred metric cannot keep winning.
-    public async Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default)
+    public Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default) =>
+        ChangeAdapterChoicesAsync(overrides, turnedOff: null, ct);
+
+    /// Saves all adapter choices and enabled flags together, so fallback sees only the dialog's final state.
+    public Task SetAdapterChoicesAsync(AdapterOverrides overrides, IReadOnlyList<ConnectionId> turnedOff, CancellationToken ct = default) =>
+        ChangeAdapterChoicesAsync(overrides, AppSettings.OffList(turnedOff), ct);
+
+    // null keeps the existing flags for callers that change only adapter overrides.
+    Task ChangeAdapterChoicesAsync(AdapterOverrides overrides, IReadOnlyList<ConnectionId>? turnedOff, CancellationToken ct) =>
+        ChangeAdaptersAsync(
+            s => s with
+            {
+                PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac, WifiOverrideMac = overrides.WifiMac,
+                // A slot set to Not used has no row to turn back on: forget that it was off, so picking it later starts on.
+                TurnedOff = AppSettings.OffList((turnedOff ?? s.TurnedOff).Where(id => !overrides.IsNotUsed(id))),
+            },
+            $"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}, wifi={overrides.WifiMac ?? "auto"}",
+            ct);
+
+    /// Turns a connection off (it then counts as Not used, but keeps its adapter choice and its card row) or back on.
+    public Task SetTurnedOffAsync(ConnectionId id, bool off, CancellationToken ct = default) =>
+        ChangeAdaptersAsync(
+            s => s with
+            {
+                TurnedOff = AppSettings.OffList(off ? s.TurnedOff.Append(id) : s.TurnedOff.Where(x => x != id)),
+            },
+            $"{Connections.Label(id)} turned {(off ? "off" : "on")}",
+            ct);
+
+    /// Applies a change to which adapters fill the slots (overrides or the off list), then re-detects. An adapter that
+    /// leaves its slot is reset to the automatic metric, and a mode left with nothing behind it falls back.
+    async Task ChangeAdaptersAsync(Func<AppSettings, AppSettings> change, string logLine, CancellationToken ct)
     {
-        void SaveOverrides()
+        void Save()
         {
-            UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac, WifiOverrideMac = overrides.WifiMac });
-            _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}, wifi={overrides.WifiMac ?? "auto"}");
+            UpdateSettings(change);
+            _log(logLine);
         }
 
         if (Status.CanModify)
@@ -265,32 +314,16 @@ public sealed class RouteController
             await _gate.WaitAsync(ct);
             try
             {
-                // Inside the gate: a refresh already queued must still see the old overrides,
+                // Inside the gate: a refresh already queued must still see the old settings,
                 // so Status.Adapters below is the set we are replacing, not the new one.
                 var previous = Status.Adapters;
                 ResetHealing();
-                SaveOverrides();
-                var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
+                Save();
+                var next = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
 
-                // The connection the saved Mode points at may have just become "Not used" (e.g. Wi-Fi set to Not
-                // used while Mode=Wifi): fall back to the first still-used connection in rank order, or Auto if
-                // none are used, so the user is never stranded on a mode with nothing behind it. Done before the
-                // reset loop below, so a failure in that loop cannot skip this. Auto itself has no "current
-                // connection" (Connections.Of(Auto) is null), so this is a no-op while already in Auto.
-                if (Connections.Of(Settings.Mode) is { } currentMain && !next.IsUsed(currentMain))
-                {
-                    var oldMode = Settings.Mode;
-                    var fallback = Connections.FallbackOrder
-                        .Where(id => next.IsUsed(id))
-                        .Select(id => (ConnectionId?)id)
-                        .FirstOrDefault();
-                    var newMode = fallback is { } f ? Connections.ModeOf(f) : RoutingMode.Auto;
-                    if (newMode != oldMode)
-                    {
-                        UpdateSettings(s => s with { Mode = newMode });
-                        _log($"{oldMode} is no longer used; switching to {newMode}");
-                    }
-                }
+                // E.g. Wi-Fi set to Not used, or the LAN turned off, while in that mode. Done before the reset loop
+                // below, so a failure in that loop cannot skip this. (Without admin rights the refresh below does it.)
+                FallBackIfUnused(next);
 
                 foreach (var (_, old) in previous.Present)
                 {
@@ -298,6 +331,9 @@ public sealed class RouteController
                     var reset = _engine.Reset(old);
                     _log(reset.Success ? $"Reset {old.Name} to automatic metric" : $"Reset {old.Name} failed: {reset.Error}");
                 }
+
+                // The path change this causes is the user's doing: the refresh below must not toast it.
+                _userChangePending = true;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -310,10 +346,44 @@ public sealed class RouteController
         }
         else
         {
-            SaveOverrides();
+            Save();
         }
 
         await RefreshAsync(measureLatency: true, ct);
+    }
+
+    /// The connection the saved Mode points at may be unused (Not used, or turned off): fall back to the first used
+    /// connection in rank order, or Auto if none is, so the user is never stranded on a mode with nothing behind it.
+    /// Auto has no connection (Connections.Of(Auto) is null), so this is a no-op there. Returns whether the mode changed.
+    bool FallBackIfUnused(DetectionResult detection)
+    {
+        if (Connections.Of(Settings.Mode) is not { } main || detection.IsUsed(main)) return false;
+        var oldMode = Settings.Mode;
+        // A used connection that is present first (in rank order), so the fallback does not land on, say, a chosen
+        // but disconnected Wi-Fi and leave the user in a fallback state they did not cause; else any used one.
+        var fallback = Connections.FallbackOrder
+            .Where(detection.IsUsed)
+            .OrderBy(id => detection.Adapter(id) is null ? 1 : 0)
+            .Select(id => (ConnectionId?)id)
+            .FirstOrDefault();
+        var newMode = fallback is { } f ? Connections.ModeOf(f) : RoutingMode.Auto;
+        if (newMode == oldMode) return false;
+        UpdateSettings(s => s with { Mode = newMode });
+        _log($"{oldMode} is no longer used; switching to {newMode}");
+        return true;
+    }
+
+    /// A turned-off adapter must sit on the automatic metric. Its reset can fail when it is turned off (or a hand-edited
+    /// file can name one that still holds a manual metric), and refreshes no longer manage it, so retry here. Writes
+    /// only when the adapter is not automatic yet.
+    void ResetOffAdapters(DetectionResult detection)
+    {
+        foreach (var adapter in detection.OffAdapters.Values)
+        {
+            if (_engine.IsAutomatic(adapter)) continue;
+            var reset = _engine.Reset(adapter);
+            _log(reset.Success ? $"Reset turned-off {adapter.Name} to automatic metric" : $"Reset turned-off {adapter.Name} failed: {reset.Error}");
+        }
     }
 
     /// How long ReleasePin waits for _gate before giving up and releasing unsynchronized. Short, so a
