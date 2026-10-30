@@ -1,5 +1,7 @@
 # NetRoute Widget
 
+**v6.2 local source package:** implementation and internal phase checks are complete; final exact-commit checks/review are recorded in the [implementation plan](docs/superpowers/plans/2026-10-30-netroute-v6-2-three-connection-smart-routing.md). This is not a release or deployment. Real WPF interaction, TUN/network routing and the owner runtime matrix remain unverified. Prior PR #5 G1/G2 runtime results remain unreported; its merge did not establish a pass.
+
 A small Windows tray widget for PCs that are connected to **multiple networks at once**, such as a wired LAN, a phone's USB tethering, and (from v6.0) Wi-Fi as a third path.
 
 - Sends **internet traffic through the phone**, through the LAN, through Wi-Fi, or lets Windows decide, with one click.
@@ -17,14 +19,14 @@ A small Windows tray widget for PCs that are connected to **multiple networks at
 | | |
 |---|---|
 | **Routing modes** (v1) | One-click **Phone / LAN** plus a **⚡ Smart** switch on the card, local devices stay on the LAN outside Windows default mode, auto-heal when a connection has no internet, break-glass restore. |
-| **Smart routing** (v2) | Keeps data-hungry traffic (Windows Update, cloud sync, game downloads, YouTube/social, your own apps and sites) off 4G by sending it over the LAN; waits for the LAN instead of falling onto mobile data; on-demand speed test. |
+| **Smart routing** (v6.2 source) | Routes exceptions over Phone, LAN or Wi-Fi; Home/nonmetered rules wait before using mobile data, with target-specific explicit overrides. |
 | **Usage tab** (v3) | Who used how much data: Phone and LAN (upload, download and total) per application or site for Today / 3 / 7 / 15 / 30 days, live **Now phone** and **Now LAN** speeds, filter box, accurate counting reconciled with Windows' own phone-adapter counter. |
-| **Profiles** (v4) | **Phone + exceptions** and **LAN + exceptions**: choose which connection carries everything else; AI tools (Claude, ChatGPT, Codex, VS Code, Copilot, Gemini, Cursor, Perplexity) and `*.omantel.om` can use the phone while the rest uses the LAN; update downloads always use the LAN. |
+| **Profiles** (v6.2 source) | **Phone + exceptions**, **LAN + exceptions** and **Wi-Fi + exceptions**; built-in AI/ISP items target Phone, and update carve-outs target Home ahead of app rules. |
 | **Network path** (v5) | Click the card's status line, or the network icon next to ⏱ and ⚙, for a live map of the route from this PC to the internet over the LAN and over the phone: your router, the devices behind it, the internet. It shows where a connection stops answering, and says so only when the evidence supports it. |
-| **Wi-Fi as a third connection** (v6.0) | Choose a Wi-Fi adapter in **Choose adapters** and route through it with its own card button and tray item, alongside Phone and LAN. Auto-heal now falls back in order (LAN → Wi-Fi → Phone), and local devices stay on the LAN cable outside Windows default mode, even when Wi-Fi joins the same home network. Smart routing pauses while Wi-Fi is actually carrying the internet (full support is a later update). |
+| **Wi-Fi as a third connection** (v6.0) | Choose a Wi-Fi adapter in **Choose adapters** and route through it with its own card button and tray item, alongside Phone and LAN. Auto-heal now falls back in order (LAN → Wi-Fi → Phone), and local devices stay on the LAN cable outside Windows default mode, even when Wi-Fi joins the same home network. Smart routing supports all three paths in the v6.2 source package. |
 | **Wi-Fi on the map, on/off switch** (v6.1) | The network path map draws one lane per connection you use, Wi-Fi included (LAN, Wi-Fi, Phone). Use the **Enabled** toggle beside each adapter in **Choose adapters**, then **OK**, to turn connections off or on. An off connection's row and mode button disappear from the widget; its toggle stays in Choose adapters. The card's coloured dots are shortcuts to turn a shown connection off. |
-| **On the card** | The live speed through each connection next to its latency, and today's total data through each connection at the right edge. |
-| **Your own lists** | Right-click a row in the Usage tab to *Send to exception* / *Exclude from exception* (a tag marks exceptions), edit either profile's list on the Config tab, or manage the lists from JSON in `%AppData%\NetRouteWidget\rules.user.json`. |
+| **On the card** | Live speed and today's totals keep their existing Phone/LAN measurement display until v6.3; Wi-Fi routes correctly but has no separate usage bucket yet. |
+| **Three Smart profiles** (v6.2 source) | Phone, LAN and Wi-Fi each have a Config list; user app/site rules choose another connection. Home rules use nonmetered paths and wait before using mobile data. |
 
 ## How it works
 
@@ -47,39 +49,26 @@ Wi-Fi now routes exactly like Phone and LAN do, with the same one-click card but
 - **The Wi-Fi button:** once a Wi-Fi adapter is chosen, the card and tray menu gain a **Wi-Fi** button next to Phone and LAN. Click it to send internet traffic through Wi-Fi, the same way Phone and LAN already work.
 - **Auto-heal's fallback order is now LAN → Wi-Fi → Phone:** mobile data is always the last resort. If your chosen connection loses internet, NetRoute heals to the next connection in that order that is actually answering, and steps back up as higher-priority connections recover, exactly as it already did for the two-connection case.
 - **Local devices stay on the cable:** adding Wi-Fi does not risk your cameras, NAS or printer, in Phone, LAN or Wi-Fi mode and through healing between them. When Wi-Fi joins the same home network as the LAN (for example both on `pzhome`), NetRoute pins the LAN's local-subnet route so it keeps winning that traffic — see the metric table above. Windows default hands routing back to Windows entirely and is excluded from this guarantee.
-- **Smart routing and Wi-Fi:** Smart routing currently **pauses** while Wi-Fi is the connection actually carrying the internet — in Wi-Fi mode, healed onto Wi-Fi, or if the main connection is unplugged and Windows falls to Wi-Fi by metric. Full Smart-routing support for Wi-Fi (its own profile, usage counting, speed) is a later update; see [the v6.0 spec](docs/superpowers/specs/2026-10-22-netroute-v6-wifi-connection-design.md).
+- **Smart routing and Wi-Fi (v6.2 source):** Wi-Fi mode and healing onto Wi-Fi keep Smart running. It can run with only LAN or Wi-Fi and no Phone; Auto/Windows default still pauses it. Usage and live speed retain their existing two buckets until v6.3.
 
-## Smart routing (v2)
+## Smart routing over three connections (v6.2 source)
 
-Keep data-hungry traffic off 4G while the PC uses the phone:
+The card's **Phone**, **LAN** and **Wi-Fi** buttons choose the main profile; **⚡ Smart** turns rule routing on or off. Config has a separate **Editing** button for each profile, with an active indicator. Editing another profile does not switch the main connection.
 
-- **Built-in items, all on by default** (each has its own toggle):
-  - System updates: Windows Update, Microsoft Store
-  - Cloud sync: OneDrive, Google Drive, Dropbox, iCloud
-  - Video & social: YouTube, Facebook, Instagram
-  - Game launchers: Steam, Epic, Battle.net, Xbox
-  - AI & dev tool updates (always LAN): VS Code, Claude and Codex updates (see Profiles below)
-- **Your own rules:** add any app (`.exe`) or website (subdomains are included).
-- **How it works:** in the default **Phone + exceptions** profile, matching traffic goes through the LAN. If the LAN is down it **waits**, and a popup offers "Use phone until LAN is back". The other profile does the opposite, see Profiles below.
-- **What it saves:** the card and the ⚙ page show how much was kept off 4G today.
-- **Speed test:** ⏱ on the card measures both connections (about 5 MB of mobile data).
-- **Live speed on the card:** while Smart routing runs, the card shows the current total speed through the phone and through the LAN (all applications together, over the last ~3 seconds, shown only above 1 KB/s) next to each latency. It measures what passes through Smart routing, so nothing is shown while Smart routing is off.
-- **Today's total on the card:** to the right of each latency the card shows how much data went through that connection today (the same numbers as the Usage tab's Today total), while there is any history.
+- **Phone + exceptions:** unmatched traffic uses the Phone. Built-in home items (updates, sync, video and games) use LAN, then Wi-Fi, and wait when neither answers.
+- **LAN + exceptions / Wi-Fi + exceptions:** unmatched traffic uses that connection or its current healed physical path. Built-in AI tools and ISP items use Phone. Home and nonmetered rules stay protected through healing onto Phone.
+- **Home is distinct from literal LAN:** Home prefers the profile's nonmetered main, then LAN/Wi-Fi in fallback order. A literal LAN or Wi-Fi rule tries its named connection first, then another answering nonmetered connection. Neither automatically spills onto Phone. A Phone-targeted rule may fall back to the current main.
+- **Built-in updates:** VS Code, Claude and Codex update carve-outs remain Home and match before their apps' Phone rules. Built-in catalog exits remain `lan` (Home) and `phone`; a catalog `wifi` exit is invalid.
+- **Your app/site rules:** each Config profile has its own list. Add an app (`.exe`) or website (subdomains included), then choose any other connection, including a configured but disconnected one. New defaults are LAN for the Phone profile and Phone for LAN/Wi-Fi profiles. Changing a destination preserves the rule's ID. Untouched old Phone-list rules retain null `Exit`, which means Home; explicitly choosing LAN means literal LAN.
+- **Usage actions:** a user app/site row offers **Send to LAN / Wi-Fi / Phone**, excluding the rendered main, plus **Exclude from exception**. The menu captures its row, profile and destination when opened. Built-in Usage aggregate items retain their catalog Home/Phone target and offer enable/exclude. Rule edits apply to the captured profile against its latest settings.
+- **Waiting:** the footer, Config and popup name the actual target. **Use <main> until <target> is back** applies only to that target/outage and warns when the main is Phone. A qualified but unanswered main may have a pending explicit grant; the target still waits and is not reported as using main until applied. Old popup actions cannot authorize a later outage/profile/binding context. Recovery requires three consecutive healthy checks; a miss resets the count, and a failed application is retried without announcing success.
+- **Off / Not used:** the Smart config excludes that physical binding, including cached LAN names. A genuinely disconnected chosen adapter can retain its own observed binding; a different missing explicit choice cannot borrow a saved name from another adapter.
 
-Smart routing runs the official [sing-box](https://github.com/SagerNet/sing-box) 1.14.2 as a helper process (see THIRD-PARTY-NOTICES.md). It needs administrator rights, runs in Phone and LAN modes and pauses in Auto mode, and (v6.0) also pauses whenever Wi-Fi is the connection actually carrying the internet — Wi-Fi mode, healed onto Wi-Fi, or the main connection unplugged so Windows falls to Wi-Fi by metric. The card footer says "Smart routing paused while on Wi-Fi"; full Smart-routing support for Wi-Fi is a later update. Items that go through the LAN wait while the LAN is down; they use the phone only if you click "Use phone until LAN is back". Turning it off, quitting the widget, or running `Restore-Network.cmd` stops it.
+Smart routing needs administrator rights and the bundled sing-box helper. It pauses in Auto/Windows default or when no usable main path exists. Switching rules or selector membership can restart the helper and reset open connections. Turning Smart off, normally quitting the widget, or the restore tool stops it.
 
-## Profiles (v4)
+**Current measurement limits:** Usage history remains the existing Phone/LAN schema; Wi-Fi traffic is booked in the LAN/nonmetered bucket. Unknown physical chains are not guessed as Phone; aggregate totals and exact Phone-adapter reconciliation handle unattributed bytes without double counting. Card speeds/totals and the speed test retain their existing two-connection behavior. Three buckets, Wi-Fi speed test and network picker are later phases (v6.3/v6.4).
 
-Smart routing has two **profiles**, and the card's **Phone** and **LAN** buttons switch between them (the tooltips say "Phone + exceptions" and "LAN + exceptions"). The card's **⚡ Smart** button is the on/off switch: on, the selected side takes everything except the exceptions list; off, everything goes through the selected side only.
-
-- **Phone + exceptions** (Phone button): everything uses the phone, except the items on the first list (updates, cloud sync, video, game launchers, your own LAN rules), which go through the LAN. This is the Smart routing described above.
-- **LAN + exceptions** (LAN button): everything uses the LAN, except the items on the second list, which go through the **phone**. If the LAN is unplugged, other traffic falls back to the phone, as in plain LAN mode. Your LAN list (the first list) stays active here too: it is not an exception of this profile, but it makes those downloads wait for the LAN instead of falling onto 4G. Explicit phone rules win over it for the same connection.
-- **Starting phone list**, each item with its own switch and all on by default: Claude / Claude Code, OpenAI / ChatGPT, Codex, Visual Studio Code, GitHub Copilot, Gemini, Cursor, Perplexity, and Omantel (`omantel.om`, so every `*.omantel.om` site).
-- **Update items always use the LAN:** VS Code updates, Claude updates and Codex updates are separate items, and they stay on the LAN in both profiles so big downloads never use mobile data. They are matched before the phone list, so a VS Code update is not caught by the Visual Studio Code item. In LAN + exceptions the other LAN-list items (YouTube, OneDrive, Steam and so on) and your LAN user rules stay active as well, exactly as in LAN mode before profiles: like any LAN item they wait while the LAN is down (the "waiting" popup can appear for them), while plain traffic and the phone exceptions never wait.
-- **Config tab:** an **Editing:** selector (Phone + exceptions | LAN + exceptions) chooses which list you are looking at; the active profile is marked, and you can edit the other list without switching. Adding an app or website adds it to the list you are editing.
-- **Usage tab:** right-click a row and choose **Send to exception** or **Exclude from exception**. It edits the active profile's list, the same one the Config tab shows, and an exception row carries a tag showing where it goes (`→ LAN` or `→ phone`). The menu is available while Smart routing is running. Destination choices apply to user app/site rules; built-in Usage items retain their catalog Home/Phone target and can be enabled or excluded.
-- **Switching restarts Smart routing for about a second**, because the rules change; connections that are open at that moment are reset.
-- **Best guesses:** the built-in process names and update domains are best guesses, not a guarantee. Check the Usage tab to see what really goes where; if one is wrong, fix it with **Edit rules file…** on the Config tab (`rules.user.json`, below) or in `rules\builtin.json`.
+Built-in names/domains are best guesses. Use **Edit rules file…** in Config for `rules.user.json`; that file customizes the catalog, while per-profile app/site lists live in `settings.json`.
 
 ## Turning a connection off (v6.1)
 
@@ -87,7 +76,7 @@ Open **Choose adapters** and use the **Enabled** on/off toggle beside each adapt
 
 Turning a connection **off** hides its row and mode button from the compact widget; its tray item remains disabled. NetRoute stops probing it, puts its metric back to automatic, never falls back to it and draws no path-map lane for it. If the card was in that connection's mode, it moves to the next connection (LAN → Wi-Fi → Phone). Turn it back on with its toggle in **Choose adapters**; your adapter choice is kept and its row and mode button return. The card dot is a shortcut to turn a shown connection off. A chosen connection that is merely disconnected remains visible. The setting survives a restart.
 
-"Off" means NetRoute leaves the connection alone; it does **not** disable the adapter in Windows. With the cable still plugged in, Windows can still send local traffic over it, and if every other connection fails Windows may use it by its automatic metric (the card then says "Internet via LAN"). Smart routing treats an off LAN like a missing one, as it does for *Not used*. See [the v6 spec](docs/superpowers/specs/2026-10-22-netroute-v6-wifi-connection-design.md).
+"Off" means NetRoute leaves the connection alone; it does **not** disable the adapter in Windows. With the cable still plugged in, Windows can still send local traffic over it, and if every other connection fails Windows may use it by its automatic metric (the card then says "Internet via LAN"). In v6.2 Smart routing excludes an off or Not-used LAN binding entirely; it cannot route through the old cached interface. See [the v6 spec](docs/superpowers/specs/2026-10-22-netroute-v6-wifi-connection-design.md).
 
 ## Network path (v5)
 
@@ -167,7 +156,8 @@ Requires the .NET 10 SDK; the version is pinned in `global.json`.
 
 ```powershell
 dotnet test --filter "Category!=Integration"   # unit tests
-dotnet test --filter "Category=Integration"    # read-only checks against this machine
+# Owner-only elevated/network run after reviewing the route baseline and isolation prerequisites:
+dotnet test --filter "Category=Integration"    # mutates real routes, starts test proxies, accesses the internet
 dotnet run --project src/NetRoute.App
 ```
 
@@ -181,6 +171,8 @@ dotnet run --project src/NetRoute.App
 - **v5.2:** A Local network tab in the path window: ping your router and chosen devices, scan the subnet, and tell a local cable or switch problem from a fault beyond the router. See [the v5.2 spec](docs/superpowers/specs/2026-10-14-netroute-v5-2-local-network-design.md). ✅
 - **v5.3:** A slow connection is no longer shown as dead: the latency check races both targets within one 4 s deadline, and a reply of 500 ms or more shows its figure in amber instead of "no reply". See [the v5.3 spec](docs/superpowers/specs/2026-10-20-netroute-v5-3-slow-vs-no-reply-design.md). ✅
 - **v6.0:** Wi-Fi as a third, equal connection alongside Phone and LAN, with its own row, card button and tray item; auto-heal now falls back in order (LAN → Wi-Fi → Phone); local traffic stays on the LAN cable in Phone, LAN and Wi-Fi mode, even when Wi-Fi shares the LAN's home network, via a route pin. See [the v6.0 spec](docs/superpowers/specs/2026-10-22-netroute-v6-wifi-connection-design.md). ✅
-- **v6.1:** Wi-Fi on the network path map (one lane per connection you use: LAN, Wi-Fi, Phone), and Enabled on/off toggles in Choose adapters with each card row's dot as a shortcut. Smart routing over three connections is now planned as v6.2, usage per connection as v6.3. ✅
+- **v6.1:** Wi-Fi map lanes and Enabled toggles beside adapter selectors, with card dots as shortcuts. Source merged; G1/G2 owner runtime checks remain unreported.
+- **v6.2 local source:** three Smart profiles, explicit user destinations, safe Home/nonmetered selectors and target-specific waiting/recovery. Internal source checks passed; final exact-SHA evidence is in the implementation plan. Not released/deployed; owner WPF/TUN/network checks remain pending.
+- **Later:** v6.3 usage per connection; v6.4 Wi-Fi network picker.
 
 Design: [docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md](docs/superpowers/specs/2026-10-02-netroute-widget-v1-design.md)

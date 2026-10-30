@@ -1,7 +1,7 @@
 # NetRoute Widget v6: Wi-Fi as a third connection — Design
 
 **Date:** 2026-10-22
-**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). On 2026-10-30 the user moved the path map lanes forward and added a per-connection on/off switch: they ship as **v6.1**, and the later phases are renumbered (Smart routing v6.2, usage v6.3, network picker v6.4). v6.1 implemented (plan `2026-10-30-netroute-v6-1-path-map-lanes-and-on-off.md`). The cable-pull heal check on the real machine is still to be run by the user.
+**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). On 2026-10-30 the user moved the path map lanes forward and added a per-connection on/off switch: they ship as **v6.1**, and the later phases are renumbered (Smart routing v6.2, usage v6.3, network picker v6.4). v6.1 implemented (plan `2026-10-30-netroute-v6-1-path-map-lanes-and-on-off.md`). The cable-pull heal check on the real machine is still to be run by the user. v6.2 three-connection Smart routing is implemented locally under `2026-10-30-netroute-v6-2-three-connection-smart-routing.md`; Tasks1-5 are internally reviewed and unit/app checked. Final package checks/review follow Task6. No release/deployment or real WPF/TUN/network pass is claimed. PR5 G1/G2 runtime results remain unreported; merge was an owner decision, not runtime evidence.
 **Builds on:**
 - `2026-10-02-netroute-widget-v1-design.md`: card, modes, metrics, auto-heal.
 - `2026-10-02-netroute-v2-smart-routing-design.md`: sing-box, waiting list, popup.
@@ -72,7 +72,7 @@ The designer's calls, open to change, are marked **(call)** where they appear be
 Replace the two-way types with one connection identity:
 
 - `enum ConnectionId { Lan, Wifi, Phone }`.
-- `RouteExit` is removed, or kept as an alias of `ConnectionId`.
+- v6.2 uses exhaustive `ConnectionId` mappings for physical routing/profiles and `RuleTarget` for logical Home versus literal targets. `RouteExit` remains intentionally limited to the two-exit catalog and existing Phone/LAN measurement/history boundaries until v6.3.
 - `RoutingMode` becomes `{ Lan, Wifi, Phone, Auto }`. Auto stays "Windows default".
 - `Connections.FallbackOrder = [Lan, Wifi, Phone]` drives healing and the graded backup metrics.
 - `Connections.CardOrder = [Phone, Lan, Wifi]` drives the card rows, mode buttons, tray items and Usage-tab column groups. It keeps today's order and appends Wi-Fi, as in mockup screen 5.
@@ -272,7 +272,7 @@ Either way, the pin must meet all of these:
 - The button reads "Use <main> until <target> is back". It adds "(uses mobile data)" only when the main is metered.
 - Three healthy checks bring it back, and the "<target> back" toast fires, as today.
 
-**Phase 1 behaviour (call).** Until Smart routing learns Wi-Fi (v6.2), Smart routing **pauses whenever Wi-Fi is the connection actually carrying internet**, as it does in Auto. That covers three cases:
+**Historical Phase 1 behaviour (v6.0/v6.1, superseded by v6.2).** Until Smart routing learns Wi-Fi (v6.2), Smart routing **pauses whenever Wi-Fi is the connection actually carrying internet**, as it does in Auto. That covers three cases:
 - Wi-Fi mode.
 - Healing onto Wi-Fi.
 - The main connection unplugged, so Windows falls to Wi-Fi by metric.
@@ -280,6 +280,8 @@ Either way, the pin must meet all of these:
 Without this, sing-box would keep sending unmatched traffic to the phone (mobile data) or to a dead LAN. The card footer says "Smart routing paused while on Wi-Fi". Smart resumes when the path leaves Wi-Fi.
 
 ## Usage, live speed, speed test
+
+**Deferred to v6.3.** v6.2 preserves the existing Phone/LAN history and UI buckets; Wi-Fi books the nonmetered LAN bucket. The schema/columns below are future scope, not implemented v6.2 behavior.
 
 **Per-connection cells.** Up and down per connection, plus "kept". `usage.json` stays **version 1** and gains a `"wifi": {up, down}` cell per row. v5.3 ignores unknown properties, so the file stays readable both ways.
 
@@ -332,7 +334,7 @@ Each shown card row's coloured dot remains a shortcut to turn that connection **
 
 **What off does not do.** It does not disable the adapter in Windows. With the cable still in, Windows can still send local traffic over it, and if every NetRoute-managed connection fails Windows may fall to it by its automatic metric.
 
-**Smart routing with the LAN off (call: same as Not used).** Smart routing sees an off LAN exactly as a missing one. sing-box keeps running; LAN-only rules still name the last known LAN interface, so with the cable in their traffic can still leave over it, and the LAN counts as offline, so the "Use phone until LAN is back" popup may appear. Pausing the LAN outbound while it is off belongs with v6.2 (Smart routing over three connections).
+**Smart routing with the LAN off (v6.2).** Off and Not used are excluded from emitted bindings and selector candidates, even if the physical adapter remains connected or a cached name exists. The normal lifecycle stops/replaces an old config before claiming the new routing applied; failed Stop cannot start a second helper. Home uses another eligible nonmetered path or waits; explicit target-scoped Use-main permission is required before Phone can join its selector. Historical v6.1 behavior that retained an off LAN binding is superseded.
 
 **Safety net (call).** Every refresh checks that the saved mode's connection is in use; if it is not (turned off without administrator rights, or a hand-edited file), the mode falls back as above. A mode change is checked against the off list again once it holds the controller's lock, so a click racing a turn-off cannot land on an off connection. A path change caused by turning a connection off or by Choose adapters is the user's own and is not toasted. A mode change to a Not-used connection is refused too ("LAN is set to Not used"), and its card button and tray item are disabled. The fallback prefers a used connection that is present, so it never lands on a chosen but disconnected Wi-Fi when the phone is up. Each elevated refresh puts a turned-off adapter back on the automatic metric if it is not there yet (a reset that failed, or a hand-edited file).
 
@@ -367,7 +369,7 @@ Each phase ships on its own, and the plan may stop at any boundary.
    - Settings migration and backup.
    - Smart routing pauses in Wi-Fi mode.
 2. **v6.1: path map lanes and the on/off switch** (moved forward on 2026-10-30; see "Path map" and "Turning a connection off").
-3. **v6.2: Smart routing over three connections.**
+3. **v6.2: Smart routing over three connections — implemented locally; internal checks/review recorded in the plan, owner runtime checks pending.**
    - Outbounds and selectors.
    - The catalog table.
    - Per-profile rule lists with `Exit`.
