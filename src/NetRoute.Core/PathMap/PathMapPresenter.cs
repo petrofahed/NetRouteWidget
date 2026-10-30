@@ -34,9 +34,10 @@ public sealed record NodeView(string Id, NodeKind Kind, string Title, string Add
 public sealed record InternetRowView(string Id, string Label, string Metric, HopDisplay State);
 
 /// Links has one entry per node plus one: the link into each node, then the link into the Internet card.
+/// Caption is drawn as given (already upper-cased, with the Wi-Fi network name kept as it is).
 public sealed record LaneView(
-    string Name, string Caption, bool Connected, IReadOnlyList<NodeView> Nodes, IReadOnlyList<LinkState> Links, InternetRowView Internet,
-    string AdapterName);
+    ConnectionId Id, string Name, string Caption, bool Connected, IReadOnlyList<NodeView> Nodes, IReadOnlyList<LinkState> Links,
+    InternetRowView Internet, string AdapterName);
 
 public sealed record DetailView(
     string Id, string Title, string Address, string Chip, HopDisplay State,
@@ -44,9 +45,17 @@ public sealed record DetailView(
 
 /// Headline answers "which connection does Windows send traffic through" (routing); Diagnosis answers "can each connection reach
 /// the internet on its own" (reachability). They are different questions and are labelled as such.
+/// Lanes: one per chosen connection (not Not used, not turned off), in Connections.FallbackOrder.
 public sealed record PathMapView(
-    string Headline, bool HeadlineWarning, IReadOnlyList<string> Diagnosis, LaneView Lan, LaneView Phone,
-    DetailView? Detail, string FooterText, string ReachabilityTitle = "");
+    string Headline, bool HeadlineWarning, IReadOnlyList<string> Diagnosis, IReadOnlyList<LaneView> Lanes,
+    DetailView? Detail, string FooterText, string ReachabilityTitle = "")
+{
+    public LaneView? Lane(ConnectionId id) => Lanes.FirstOrDefault(l => l.Id == id);
+
+    /// For callers written before Wi-Fi had a lane. Never throws: a lane that is not shown reads as not connected.
+    public LaneView Lan => Lane(ConnectionId.Lan) ?? PathMapPresenter.NotShown(ConnectionId.Lan);
+    public LaneView Phone => Lane(ConnectionId.Phone) ?? PathMapPresenter.NotShown(ConnectionId.Phone);
+}
 
 /// Pure mapping from a monitor snapshot to everything the path-map window shows.
 public static class PathMapPresenter
@@ -61,16 +70,50 @@ public static class PathMapPresenter
     public static PathMapView Present(NetworkStatus status, PathSnapshot snapshot, string? selectedId, PathThresholds t)
     {
         var card = StatusPresenter.Present(status);
-        var lan = Analyse("lan", "LAN", "Router", snapshot.Lan, snapshot.At, t);
-        var phone = Analyse("phone", "Phone", "Phone", snapshot.Phone, snapshot.At, t);
+        var lanes = Connections.FallbackOrder
+            .Where(status.Adapters.IsUsed)
+            .Select(id => Analyse(id, snapshot.Lanes.GetValueOrDefault(id) ?? PathSnapshot.Empty(id), status.WifiNetwork, snapshot.At, t))
+            .ToList();
         return new PathMapView(
             "Routing: " + card.Header, card.HeaderWarning,
-            Describe(lan, phone, snapshot.At, t),
-            lan.View, phone.View,
-            selectedId is null ? null : DetailFor(selectedId, lan, phone, snapshot.At, t),
+            Describe(lanes, snapshot.At, t),
+            lanes.Select(a => a.View).ToList(),
+            selectedId is null ? null : DetailFor(selectedId, lanes, snapshot.At, t),
             Footer(snapshot),
             ReachabilityTitle);
     }
+
+    /// The lane id used as the prefix of every node id in that lane, e.g. "wifi:1".
+    public static string LaneId(ConnectionId id) => id switch
+    {
+        ConnectionId.Lan => "lan",
+        ConnectionId.Wifi => "wifi",
+        ConnectionId.Phone => "phone",
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, null),
+    };
+
+    /// The first device on the way out: the home router on LAN and Wi-Fi, the phone itself when tethering.
+    static string FirstHopTitle(ConnectionId id) => id switch
+    {
+        ConnectionId.Lan => "Router",
+        ConnectionId.Wifi => "Router",
+        ConnectionId.Phone => "Phone",
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, null),
+    };
+
+    /// "LAN PATH", "PHONE PATH", "WI-FI PATH (pz-tecno)": the network name is only shown while connected, as it is.
+    static string CaptionName(ConnectionId id, string? wifiNetwork, bool connected) => id switch
+    {
+        ConnectionId.Lan => "LAN PATH",
+        ConnectionId.Phone => "PHONE PATH",
+        ConnectionId.Wifi => connected && wifiNetwork is { } network ? $"WI-FI PATH ({network})" : "WI-FI PATH",
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, null),
+    };
+
+    /// The lane a caller asks for when it is not shown (Not used or turned off): drawn nowhere, read as not connected.
+    internal static LaneView NotShown(ConnectionId id) => new(
+        id, Connections.Label(id), $"{CaptionName(id, null, false)} · NOT CONNECTED", false, [], [LinkState.Neutral],
+        new InternetRowView($"{LaneId(id)}:net", Connections.Label(id), "—", HopDisplay.Hidden), "");
 
     public const string ReachabilityTitle = "Reachability — can each connection reach the internet on its own, whichever one Windows uses";
 
@@ -79,8 +122,11 @@ public static class PathMapPresenter
         : s.At - last > TimeSpan.FromSeconds(5) ? "No recent checks"
         : "Devices checked every second (route probe and direct ping), internet every 2 s";
 
-    static Analysed Analyse(string id, string name, string firstHopTitle, LaneSnapshot snap, DateTimeOffset now, PathThresholds t)
+    static Analysed Analyse(ConnectionId connection, LaneSnapshot snap, string? wifiNetwork, DateTimeOffset now, PathThresholds t)
     {
+        var id = LaneId(connection);
+        var name = Connections.Label(connection);
+        var firstHopTitle = FirstHopTitle(connection);
         var source = snap.Adapter?.IPv4;
         var connected = source is not null;
         var diag = PathDiagnoser.Diagnose(new LaneInput(name, connected, snap.Trace, snap.HopSamples, snap.EndpointSamples, now, snap.DirectSamples), t);
@@ -98,8 +144,9 @@ public static class PathMapPresenter
         // Narrowed: the fault is somewhere after the last device that answered, so the link leaving it is amber.
         if (leaving >= 0) links[leaving] = LinkState.Suspect;
 
+        var caption = CaptionName(connection, wifiNetwork, connected);
         var view = new LaneView(
-            name, connected ? $"{name} path · from {source}" : $"{name} path · not connected", connected,
+            connection, name, connected ? $"{caption} · FROM {source}" : $"{caption} · NOT CONNECTED", connected,
             nodes, links, new InternetRowView($"{id}:net", name, InternetMetric(diag, internet), internet),
             snap.Adapter?.Name ?? "");
         return new Analysed(id, name, snap, diag, view, groups);
@@ -277,18 +324,16 @@ public static class PathMapPresenter
 
     // ----- diagnosis text -----
 
-    static IReadOnlyList<string> Describe(Analysed lan, Analysed phone, DateTimeOffset now, PathThresholds t)
+    static IReadOnlyList<string> Describe(IReadOnlyList<Analysed> lanes, DateTimeOffset now, PathThresholds t)
     {
+        if (lanes.Count == 0) return ["No connection is in use."];
         var lines = new List<string>();
-        if (lan.Diagnosis.Status == LaneStatus.Healthy && phone.Diagnosis.Status == LaneStatus.Healthy)
-            lines.Add("Both connections reach the internet." + string.Concat(new[] { lan, phone }
+        if (lanes.Count >= 2 && lanes.All(a => a.Diagnosis.Status == LaneStatus.Healthy))
+            lines.Add((lanes.Count == 2 ? "Both" : "All") + " connections reach the internet." + string.Concat(lanes
                 .Where(a => a.Diagnosis.TraceStatus == TraceStatus.Unavailable).Select(a => $" {a.Name}: the {NotMeasured}")));
         else
-        {
-            lines.Add(Line(lan, t));
-            lines.Add(Line(phone, t));
-        }
-        lines.AddRange(new[] { lan, phone }.Select(a => StaleLine(a, now)).OfType<string>());
+            lines.AddRange(lanes.Select(a => Line(a, t)));
+        lines.AddRange(lanes.Select(a => StaleLine(a, now)).OfType<string>());
         return lines;
     }
 
@@ -347,9 +392,9 @@ public static class PathMapPresenter
 
     // ----- detail panel -----
 
-    static DetailView? DetailFor(string id, Analysed lan, Analysed phone, DateTimeOffset now, PathThresholds t)
+    static DetailView? DetailFor(string id, IReadOnlyList<Analysed> lanes, DateTimeOffset now, PathThresholds t)
     {
-        var lane = id.StartsWith("lan:", StringComparison.Ordinal) ? lan : id.StartsWith("phone:", StringComparison.Ordinal) ? phone : null;
+        var lane = lanes.FirstOrDefault(a => id.StartsWith(a.Id + ":", StringComparison.Ordinal));
         if (lane is null) return null;
         var rest = id[(lane.Id.Length + 1)..];
 
@@ -420,7 +465,7 @@ public static class PathMapPresenter
             HopDisplay.Silent => "It does not answer, and it is after the located break.",
             HopDisplay.Answering when hop.Observed is Observation.Silent or Observation.Lossy && hop.DirectObserved == Observation.Answering =>
                 "It answers a direct ping but not the probes that map the route; many devices do that. Answering a ping shows it is reachable, not that it passes traffic on.",
-            _ => hop.Hop.Ttl == 1 && lane.Id == "lan"
+            _ => hop.Hop.Ttl == 1 && lane.Id is "lan" or "wifi"
                 ? "Your router: the first device on the way out."
                 : "Answering its probes normally.",
         };

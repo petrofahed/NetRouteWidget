@@ -36,6 +36,112 @@ public class PathMapPresenterTests
 
     static List<Sample> FailingEndpoint() => Every(2, LostDuring(14));
 
+    // ----- one lane per chosen connection (v6.1) -----
+
+    static NetworkStatus StatusWithWifi(DetectionIssue wifiIssue = DetectionIssue.None) => Status() with
+    {
+        Adapters = DetectionResult.Of(
+            TestAdapters.Phone(), DetectionIssue.None, TestAdapters.Lan(), DetectionIssue.None,
+            wifiIssue == DetectionIssue.None ? TestAdapters.Wifi(ipv4: "192.168.1.4") : null, wifiIssue),
+        WifiNetwork = "pz-tecno",
+    };
+
+    static LaneSnapshot HealthyWifi() => new("Wi-Fi", TestAdapters.Wifi(ipv4: "192.168.1.4"),
+        new PathTrace(Ip("192.168.1.4"), Ip("1.1.1.1"), [new PathHop(1, Ip("192.168.1.1")), new PathHop(2, Ip("10.20.0.1"))], TraceStatus.Complete),
+        [Every(1, AllReply), Every(1, AllReply)], Every(2, AllReply));
+
+    static PathSnapshot Three(LaneSnapshot? wifi = null) => new(Now, new Dictionary<ConnectionId, LaneSnapshot>
+    {
+        [ConnectionId.Lan] = HealthyLan(),
+        [ConnectionId.Wifi] = wifi ?? HealthyWifi(),
+        [ConnectionId.Phone] = HealthyPhone(),
+    }, Now.AddSeconds(-1));
+
+    [Fact]
+    public void Wifi_lane_appears_between_lan_and_phone_when_wifi_is_chosen()
+    {
+        var view = PathMapPresenter.Present(StatusWithWifi(), Three(), null, T);
+
+        Assert.Equal([ConnectionId.Lan, ConnectionId.Wifi, ConnectionId.Phone], view.Lanes.Select(l => l.Id));
+        var wifi = view.Lane(ConnectionId.Wifi)!;
+        Assert.Equal("WI-FI PATH (pz-tecno) · FROM 192.168.1.4", wifi.Caption);
+        Assert.Equal("Wi-Fi", wifi.Name);
+        Assert.Equal("Router", wifi.Nodes[0].Title);
+        Assert.Equal("wifi:1", wifi.Nodes[0].Id);
+        Assert.Equal(new InternetRowView("wifi:net", "Wi-Fi", "20 ms", HopDisplay.Answering), wifi.Internet);
+        Assert.Equal("Wi-Fi", wifi.AdapterName);
+    }
+
+    [Fact]
+    public void Three_healthy_lanes_say_all()
+    {
+        var view = PathMapPresenter.Present(StatusWithWifi(), Three(), null, T);
+
+        Assert.Equal("All connections reach the internet.", view.Diagnosis[0]);
+    }
+
+    [Fact]
+    public void Wifi_router_detail_has_the_router_note()
+    {
+        var view = PathMapPresenter.Present(StatusWithWifi(), Three(), "wifi:1", T);
+
+        Assert.Equal("Your router: the first device on the way out.", view.Detail!.Note);
+        Assert.Equal("Internet via Wi-Fi", PathMapPresenter.Present(StatusWithWifi(), Three(), "wifi:net", T).Detail!.Title);
+    }
+
+    [Fact]
+    public void Chosen_but_disconnected_wifi_reads_not_connected()
+    {
+        var view = PathMapPresenter.Present(StatusWithWifi(DetectionIssue.NotFound), Three(PathSnapshot.Empty(ConnectionId.Wifi)), null, T);
+
+        Assert.Equal(3, view.Lanes.Count);
+        Assert.Equal("WI-FI PATH · NOT CONNECTED", view.Lane(ConnectionId.Wifi)!.Caption);
+        Assert.Contains("Wi-Fi: not connected.", view.Diagnosis);
+    }
+
+    [Fact]
+    public void Wifi_name_is_left_out_when_unknown()
+    {
+        var view = PathMapPresenter.Present(StatusWithWifi() with { WifiNetwork = null }, Three(), null, T);
+
+        Assert.Equal("WI-FI PATH · FROM 192.168.1.4", view.Lane(ConnectionId.Wifi)!.Caption);
+    }
+
+    [Fact]
+    public void Not_used_and_off_connections_get_no_lane()
+    {
+        var notUsed = Status() with { Adapters = DetectionResult.Of(TestAdapters.Phone(), DetectionIssue.None, null, DetectionIssue.NotUsed) };
+        var off = Status() with { Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]) };
+        var snapshot = new PathSnapshot(Now, HealthyLan(), HealthyPhone(), Now.AddSeconds(-1));
+
+        foreach (var status in new[] { notUsed, off })
+        {
+            var view = PathMapPresenter.Present(status, snapshot, null, T);
+
+            Assert.Equal([ConnectionId.Phone], view.Lanes.Select(l => l.Id));
+            Assert.Equal("Phone reaches the internet.", view.Diagnosis[0]);
+            Assert.Null(view.Lane(ConnectionId.Lan));
+            // The compatibility accessor never throws: a lane that is not shown reads as not connected.
+            Assert.False(view.Lan.Connected);
+            Assert.Equal(HopDisplay.Hidden, view.Lan.Internet.State);
+            Assert.Null(PathMapPresenter.Present(status, snapshot, "lan:1", T).Detail);
+        }
+    }
+
+    [Fact]
+    public void No_connection_in_use_says_so()
+    {
+        var none = Status() with
+        {
+            Adapters = DetectionResult.Of(null, DetectionIssue.NotUsed, null, DetectionIssue.NotUsed),
+        };
+
+        var view = PathMapPresenter.Present(none, new PathSnapshot(Now, HealthyLan(), HealthyPhone(), Now.AddSeconds(-1)), null, T);
+
+        Assert.Empty(view.Lanes);
+        Assert.Equal(["No connection is in use."], view.Diagnosis);
+    }
+
     [Fact]
     public void Healthy_lanes_say_so_and_draw_green_links_under_the_cards_own_headline()
     {
@@ -47,7 +153,7 @@ public class PathMapPresenterTests
         Assert.All(view.Lan.Links, l => Assert.Equal(LinkState.Healthy, l));
         Assert.Equal(5, view.Lan.Links.Count);
         Assert.Equal(["Router", "Hop 2", "Hop 3", "Hop 4"], view.Lan.Nodes.Select(n => n.Title));
-        Assert.Equal("LAN path · from 192.168.86.42", view.Lan.Caption);
+        Assert.Equal("LAN PATH · FROM 192.168.86.42", view.Lan.Caption);
         Assert.Equal(HopDisplay.Answering, view.Lan.Internet.State);
         Assert.Equal("20 ms", view.Lan.Internet.Metric);
     }
@@ -318,7 +424,7 @@ public class PathMapPresenterTests
 
         Assert.Equal("LAN: not connected.", view.Diagnosis[0]);
         Assert.False(view.Lan.Connected);
-        Assert.Equal("LAN path · not connected", view.Lan.Caption);
+        Assert.Equal("LAN PATH · NOT CONNECTED", view.Lan.Caption);
         Assert.Equal("", view.Lan.AdapterName);
         Assert.Empty(view.Lan.Nodes);
     }

@@ -191,7 +191,7 @@ Run: `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"`
   - `LaneView` gains a leading `ConnectionId Id`.
   - `PathMapView` holds `IReadOnlyList<LaneView> Lanes` in place of `Lan`/`Phone`, plus:
     - `LaneView? Lane(ConnectionId id)`
-    - compatibility accessors `Lan` and `Phone`, which throw `InvalidOperationException` when that lane is not shown.
+    - compatibility accessors `Lan` and `Phone`, which never throw: a lane that is not shown reads as a not-connected placeholder.
 
 - [ ] **Step 1: Write and adjust the tests**
   - Change the two caption asserts to `"LAN PATH · FROM 192.168.86.42"` and `"LAN PATH · NOT CONNECTED"`.
