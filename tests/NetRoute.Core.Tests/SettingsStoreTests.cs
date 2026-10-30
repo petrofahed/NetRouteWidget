@@ -193,4 +193,67 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal("kept", result.Settings.PhoneOverride);
         Assert.Equal([ConnectionId.Wifi, ConnectionId.Lan], result.Settings.TurnedOff);
     }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone, "UserRules")]
+    [InlineData(ConnectionId.Lan, "PhoneUserRules")]
+    [InlineData(ConnectionId.Wifi, "WifiUserRules")]
+    public void Explicit_user_rule_exits_round_trip_by_name_in_each_profile(ConnectionId profile, string listName)
+    {
+        var smart = new SmartRoutingSettings()
+            .WithUserRule(profile, new(UserRuleType.App, "lan.exe", Exit: ConnectionId.Lan))
+            .WithUserRule(profile, new(UserRuleType.App, "wifi.exe", Exit: ConnectionId.Wifi))
+            .WithUserRule(profile, new(UserRuleType.App, "phone.exe", Exit: ConnectionId.Phone));
+        var settings = new AppSettings { SettingsVersion = 6, SmartRouting = smart };
+        var store = new SettingsStore(FilePath);
+        store.Save(settings);
+
+        var loaded = store.Load();
+        Assert.False(loaded.Recovered);
+        Assert.Equal(settings, loaded.Settings);
+        Assert.Equal(new ConnectionId?[] { ConnectionId.Lan, ConnectionId.Wifi, ConnectionId.Phone },
+            loaded.Settings.SmartRouting.RulesFor(profile).Select(rule => rule.Exit));
+        using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(FilePath));
+        Assert.Equal(["Lan", "Wifi", "Phone"], json.RootElement.GetProperty("SmartRouting").GetProperty(listName)
+            .EnumerateArray().Select(rule => rule.GetProperty("Exit").GetString()));
+        Assert.False(File.Exists(store.BackupPath));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(6)]
+    public void Legacy_user_rules_without_exit_keep_null_and_existing_backup_policy(int version)
+    {
+        var original = $$$"""{"SettingsVersion":{{{version}}},"Mode":"Lan","SmartRouting":{"UserRules":[{"Type":"App","Value":"home.exe"}],"PhoneUserRules":[{"Type":"App","Value":"mobile.exe"}],"WifiUserRules":[{"Type":"Website","Value":"example.com"}]}}""";
+        File.WriteAllText(FilePath, original);
+        var store = new SettingsStore(FilePath);
+        var loaded = store.Load();
+
+        Assert.False(loaded.Recovered);
+        Assert.Null(Assert.Single(loaded.Settings.SmartRouting.UserRules).Exit);
+        Assert.Null(Assert.Single(loaded.Settings.SmartRouting.PhoneUserRules).Exit);
+        Assert.Null(Assert.Single(loaded.Settings.SmartRouting.WifiUserRules).Exit);
+        Assert.Equal(version < 6, File.Exists(store.BackupPath));
+        if (version < 6) Assert.Equal(original, File.ReadAllText(store.BackupPath));
+        store.Save(loaded.Settings);
+        var reloaded = store.Load();
+        Assert.Equal(loaded.Settings, reloaded.Settings);
+        if (version < 6) Assert.Equal(original, File.ReadAllText(store.BackupPath));
+    }
+
+    [Theory]
+    [InlineData("UserRules")]
+    [InlineData("PhoneUserRules")]
+    [InlineData("WifiUserRules")]
+    public void Unknown_numeric_user_rule_exit_uses_existing_corrupt_settings_recovery(string listName)
+    {
+        File.WriteAllText(FilePath, $$$"""{"SettingsVersion":6,"Mode":"Lan","SmartRouting":{"{{{listName}}}":[{"Type":"App","Value":"example.exe","Exit":999}]}}""");
+        var store = new SettingsStore(FilePath);
+
+        var loaded = store.Load();
+
+        Assert.True(loaded.Recovered);
+        Assert.Equal(new AppSettings(), loaded.Settings);
+        Assert.False(store.Load().Recovered);
+    }
 }

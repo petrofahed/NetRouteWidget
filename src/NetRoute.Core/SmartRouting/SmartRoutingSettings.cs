@@ -4,14 +4,31 @@ namespace NetRoute.Core;
 
 public enum UserRuleType { App, Website }
 
-/// A user-added "keep this off 4G" rule: an app by .exe file name, or a website by domain (subdomains included).
-public sealed partial record UserRule(UserRuleType Type, string Value, bool Enabled = true)
+/// A user-added app or website rule. A null Exit preserves the profile list's implied target (Home for Phone).
+public sealed partial record UserRule(UserRuleType Type, string Value, bool Enabled = true, ConnectionId? Exit = null)
 {
     public static string IdOf(UserRule rule) =>
         $"user:{rule.Type.ToString().ToLowerInvariant()}:{rule.Value.ToLowerInvariant()}";
 
     /// Id of a rule in the phone list ("LAN + exceptions"): the prefix keeps it apart from the same app or site in the LAN list.
     public static string PhoneIdOf(UserRule rule) => "phone-" + IdOf(rule);
+
+    public static string WifiIdOf(UserRule rule) => "wifi-" + IdOf(rule);
+
+    public static string IdOf(ConnectionId profile, UserRule rule) => profile switch
+    {
+        ConnectionId.Phone => IdOf(rule),
+        ConnectionId.Lan => PhoneIdOf(rule),
+        ConnectionId.Wifi => WifiIdOf(rule),
+        _ => throw new ArgumentOutOfRangeException(nameof(profile), profile, null),
+    };
+
+    public static ConnectionId ImpliedExit(ConnectionId profile) => profile switch
+    {
+        ConnectionId.Phone => ConnectionId.Lan,
+        ConnectionId.Lan or ConnectionId.Wifi => ConnectionId.Phone,
+        _ => throw new ArgumentOutOfRangeException(nameof(profile), profile, null),
+    };
 
     public static bool TryCreate(UserRuleType type, string raw, out UserRule? rule, out string? error)
     {
@@ -79,17 +96,39 @@ public sealed record SmartRoutingSettings
     public SmartRoutingSettings WithItem(string id, bool on) =>
         this with { Items = new Dictionary<string, bool>(Items) { [id] = on } };
 
+    public IReadOnlyList<UserRule> RulesFor(ConnectionId profile) => profile switch
+    {
+        ConnectionId.Phone => UserRules,
+        ConnectionId.Lan => PhoneUserRules,
+        ConnectionId.Wifi => WifiUserRules,
+        _ => throw new ArgumentOutOfRangeException(nameof(profile), profile, null),
+    };
+
+    public SmartRoutingSettings WithUserRule(ConnectionId profile, UserRule rule) =>
+        WithRules(profile, [.. RulesFor(profile).Where(r => !SameRule(r, rule)), rule]);
+
+    public SmartRoutingSettings WithoutUserRule(ConnectionId profile, UserRule rule) =>
+        WithRules(profile, [.. RulesFor(profile).Where(r => !SameRule(r, rule))]);
+
+    SmartRoutingSettings WithRules(ConnectionId profile, IReadOnlyList<UserRule> rules) => profile switch
+    {
+        ConnectionId.Phone => this with { UserRules = rules },
+        ConnectionId.Lan => this with { PhoneUserRules = rules },
+        ConnectionId.Wifi => this with { WifiUserRules = rules },
+        _ => throw new ArgumentOutOfRangeException(nameof(profile), profile, null),
+    };
+
     public SmartRoutingSettings WithUserRule(UserRule rule) =>
-        this with { UserRules = [.. UserRules.Where(r => !SameRule(r, rule)), rule] };
+        WithUserRule(ConnectionId.Phone, rule);
 
     public SmartRoutingSettings WithoutUserRule(UserRule rule) =>
-        this with { UserRules = [.. UserRules.Where(r => !SameRule(r, rule))] };
+        WithoutUserRule(ConnectionId.Phone, rule);
 
     public SmartRoutingSettings WithPhoneUserRule(UserRule rule) =>
-        this with { PhoneUserRules = [.. PhoneUserRules.Where(r => !SameRule(r, rule)), rule] };
+        WithUserRule(ConnectionId.Lan, rule);
 
     public SmartRoutingSettings WithoutPhoneUserRule(UserRule rule) =>
-        this with { PhoneUserRules = [.. PhoneUserRules.Where(r => !SameRule(r, rule))] };
+        WithoutUserRule(ConnectionId.Lan, rule);
 
     /// True (with the updated settings) only when a LAN is present and its name differs from the saved one, so callers
     /// write the settings file on a change rather than on every status update.
@@ -106,7 +145,8 @@ public sealed record SmartRoutingSettings
         Items is not null && UserRules is not null && PhoneUserRules is not null && WifiUserRules is not null
         && UserRules.All(ValidRule) && PhoneUserRules.All(ValidRule) && WifiUserRules.All(ValidRule);
 
-    static bool ValidRule(UserRule r) => r is not null && !string.IsNullOrWhiteSpace(r.Value) && Enum.IsDefined(r.Type);
+    static bool ValidRule(UserRule r) => r is not null && !string.IsNullOrWhiteSpace(r.Value) && Enum.IsDefined(r.Type)
+        && (r.Exit is null || Enum.IsDefined(r.Exit.Value));
 
     static bool SameRule(UserRule a, UserRule b) =>
         a.Type == b.Type && string.Equals(a.Value, b.Value, StringComparison.OrdinalIgnoreCase);
