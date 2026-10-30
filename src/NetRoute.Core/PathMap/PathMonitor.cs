@@ -3,7 +3,7 @@ using System.Net.Sockets;
 
 namespace NetRoute.Core.PathMap;
 
-/// Probes both connections while it runs: a trace now and then, one echo per device per second, one internet check per lane
+/// Probes every connection with an adapter while it runs: a trace now and then, one echo per device per second, one internet check per lane
 /// every two seconds. Holds only the last 30 s of samples and hands out immutable snapshots; it never touches the UI.
 /// The rounds are public so tests can drive them without timers.
 public sealed class PathMonitor
@@ -23,7 +23,8 @@ public sealed class PathMonitor
     readonly PathThresholds _t;
     readonly Action<string> _log;
     readonly Lock _gate = new();
-    readonly Lane _lan, _phone;
+    /// One lane per connection, in Connections.FallbackOrder (LAN, Wi-Fi, Phone).
+    readonly Dictionary<ConnectionId, Lane> _lanes;
     DateTimeOffset? _lastSampleAt;
     readonly HashSet<string> _logged = [];
 
@@ -35,8 +36,7 @@ public sealed class PathMonitor
         _time = time;
         _t = thresholds;
         _log = log;
-        _lan = new Lane("LAN", thresholds);
-        _phone = new Lane("Phone", thresholds);
+        _lanes = Connections.FallbackOrder.ToDictionary(id => id, id => new Lane(Connections.Label(id), thresholds));
     }
 
     sealed class Lane(string name, PathThresholds t)
@@ -62,15 +62,19 @@ public sealed class PathMonitor
         public DateTimeOffset LastTrace = DateTimeOffset.MinValue;
     }
 
-    /// The adapters to watch. A different adapter or address clears that lane and schedules a new trace.
-    public void SetAdapters(AdapterInfo? lan, AdapterInfo? phone)
+    /// The adapters to watch, per connection; a connection missing from the map has none. A different adapter or
+    /// address clears that lane and schedules a new trace.
+    public void SetAdapters(IReadOnlyDictionary<ConnectionId, AdapterInfo?> adapters)
     {
         lock (_gate)
         {
-            Apply(_lan, lan);
-            Apply(_phone, phone);
+            foreach (var (id, lane) in _lanes) Apply(lane, adapters.GetValueOrDefault(id));
         }
     }
+
+    /// For callers (and tests) written before Wi-Fi had a lane: Wi-Fi gets no adapter.
+    public void SetAdapters(AdapterInfo? lan, AdapterInfo? phone) =>
+        SetAdapters(new Dictionary<ConnectionId, AdapterInfo?> { [ConnectionId.Lan] = lan, [ConnectionId.Phone] = phone });
 
     void Apply(Lane lane, AdapterInfo? adapter)
     {
@@ -98,7 +102,7 @@ public sealed class PathMonitor
         lock (_gate)
         {
             var now = _time.GetUtcNow();
-            foreach (var lane in new[] { _lan, _phone })
+            foreach (var lane in _lanes.Values)
                 if (lane.Source is { } source && (force || RetraceDue(lane, now)))
                 {
                     lane.LastTrace = now; // stamped at the start, so a tracer that throws is retried after the minimum gap, not every second
@@ -173,7 +177,7 @@ public sealed class PathMonitor
         var work = new List<Task>();
         lock (_gate)
         {
-            foreach (var lane in new[] { _lan, _phone })
+            foreach (var lane in _lanes.Values)
             {
                 if (lane.Trace is not { } trace || lane.Source is not { } source) continue;
                 var generation = lane.Generation;
@@ -236,7 +240,7 @@ public sealed class PathMonitor
         var work = new List<Task>();
         lock (_gate)
         {
-            foreach (var lane in new[] { _lan, _phone })
+            foreach (var lane in _lanes.Values)
             {
                 if (lane.Source is not { } source) continue;
                 var generation = lane.Generation;
@@ -286,7 +290,7 @@ public sealed class PathMonitor
         lock (_gate)
         {
             var now = _time.GetUtcNow();
-            return new PathSnapshot(now, Of(_lan, now), Of(_phone, now), _lastSampleAt);
+            return new PathSnapshot(now, _lanes.ToDictionary(p => p.Key, p => Of(p.Value, now)), _lastSampleAt);
         }
     }
 

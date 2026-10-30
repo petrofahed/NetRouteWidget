@@ -7,7 +7,23 @@ public sealed record LaneSnapshot(
     IReadOnlyList<IReadOnlyList<Sample>> HopSamples, IReadOnlyList<Sample> EndpointSamples,
     IReadOnlyList<IReadOnlyList<Sample>>? DirectSamples = null, StaleRoute? LastKnown = null);
 
-public sealed record PathSnapshot(DateTimeOffset At, LaneSnapshot Lan, LaneSnapshot Phone, DateTimeOffset? LastSampleAt);
+/// One lane per connection, keyed by ConnectionId (every connection has an entry; one without an adapter is empty).
+public sealed record PathSnapshot(DateTimeOffset At, IReadOnlyDictionary<ConnectionId, LaneSnapshot> Lanes, DateTimeOffset? LastSampleAt)
+{
+    /// For callers (and tests) written before Wi-Fi had a lane: Wi-Fi gets an empty lane.
+    public PathSnapshot(DateTimeOffset at, LaneSnapshot lan, LaneSnapshot phone, DateTimeOffset? lastSampleAt)
+        : this(at, new Dictionary<ConnectionId, LaneSnapshot>
+        {
+            [ConnectionId.Lan] = lan,
+            [ConnectionId.Wifi] = Empty(ConnectionId.Wifi),
+            [ConnectionId.Phone] = phone,
+        }, lastSampleAt) { }
+
+    public LaneSnapshot Lan => Lanes[ConnectionId.Lan];
+    public LaneSnapshot Phone => Lanes[ConnectionId.Phone];
+
+    public static LaneSnapshot Empty(ConnectionId id) => new(Connections.Label(id), null, null, [], []);
+}
 
 public enum NodeKind { Device, HiddenRun, Collapsed, TraceIncomplete }
 

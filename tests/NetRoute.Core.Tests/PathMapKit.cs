@@ -59,6 +59,8 @@ sealed class FakePathProbe : IPathProbe
     public List<int> Calls { get; } = new();
     /// Every echo asked for, with the address it was aimed at.
     public List<(int Ttl, IPAddress Target)> Sent { get; } = new();
+    /// The local address every echo was sent from.
+    public List<IPAddress> Sources { get; } = new();
     public EchoResult Default { get; set; } = new(ProbeOutcome.NoReply);
 
     /// When set, every echo waits for it: holds a probe in flight.
@@ -69,7 +71,7 @@ sealed class FakePathProbe : IPathProbe
 
     public async Task<EchoResult> EchoAsync(IPAddress source, IPAddress target, int ttl, TimeSpan timeout, CancellationToken ct)
     {
-        lock (Calls) { Calls.Add(ttl); Sent.Add((ttl, target)); }
+        lock (Calls) { Calls.Add(ttl); Sent.Add((ttl, target)); Sources.Add(source); }
         if (Gate is { } gate && (GateWhen?.Invoke(ttl) ?? true)) await gate.Task;
         if (Throw is { } ex) throw ex;
         return ByTtl.TryGetValue(ttl, out var r) ? r : Default;
@@ -82,6 +84,8 @@ sealed class FakePathProbe : IPathProbe
 sealed class FakeEndpointProbe : IEndpointProbe
 {
     public EndpointResult Result { get; set; } = new(ProbeOutcome.Reply, 20);
+    /// The local address every check was sent from.
+    public List<IPAddress> Sources { get; } = new();
     public Exception? Throw { get; set; }
 
     /// When set, every check waits for it: holds a check in flight.
@@ -89,6 +93,7 @@ sealed class FakeEndpointProbe : IEndpointProbe
 
     public async Task<EndpointResult> CheckAsync(IPAddress source, CancellationToken ct)
     {
+        lock (Sources) Sources.Add(source);
         if (Gate is { } gate) await gate.Task;
         return Throw is { } ex ? throw ex : Result;
     }
