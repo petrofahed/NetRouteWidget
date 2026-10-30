@@ -63,11 +63,11 @@ sealed class TrayIcon : IDisposable
         _wifi.Checked = mode == RoutingMode.Wifi;
         _auto.Checked = mode == RoutingMode.Auto;
         _auto.Enabled = canModify;
-        // A turned-off connection keeps its item, disabled, matching the card's mode button.
-        bool Off(ConnectionId id) => view.Rows.Any(r => r.Id == id && r.Row.IsOff);
-        _phone.Enabled = canModify && !Off(ConnectionId.Phone);
-        _lan.Enabled = canModify && !Off(ConnectionId.Lan);
-        _wifi.Enabled = canModify && !Off(ConnectionId.Wifi);
+        // Matches the card's mode buttons: an item works only while its connection has a row and is on.
+        bool Pickable(ConnectionId id) => canModify && view.Rows.Any(r => r.Id == id && !r.Row.IsOff);
+        _phone.Enabled = Pickable(ConnectionId.Phone);
+        _lan.Enabled = Pickable(ConnectionId.Lan);
+        _wifi.Enabled = Pickable(ConnectionId.Wifi);
         _startup.Checked = startWithWindows;
         _startup.Enabled = canModify;
         _autoHeal.Checked = autoHeal;

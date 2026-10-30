@@ -161,7 +161,10 @@ public sealed class RouteController
             }
 
             if (before.CanModify)
+            {
                 _pin?.Sync(RoutePin.Wanted(mode, _healTarget, detection));
+                ResetOffAdapters(detection);
+            }
 
             var after = before with
             {
@@ -210,12 +213,15 @@ public sealed class RouteController
         await _gate.WaitAsync(ct);
         try
         {
-            // Checked again under the gate: a turn-off queued ahead of this change may have landed meanwhile.
-            if (Connections.Of(mode) is { } nowOff && Settings.TurnedOff.Contains(nowOff))
-                return new ApplyResult(false, $"{Connections.Label(nowOff)} is turned off");
+            // Checked under the gate, against a fresh detection: a turn-off or an adapter change queued ahead of this
+            // one may have landed meanwhile. A mode with nothing behind it would leave no adapter preferred.
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
+            if (Connections.Of(mode) is { } wantedNow && !detection.IsUsed(wantedNow))
+                return new ApplyResult(false, detection.IsTurnedOff(wantedNow)
+                    ? $"{Connections.Label(wantedNow)} is turned off"
+                    : $"{Connections.Label(wantedNow)} is set to Not used");
 
             ResetHealing();
-            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
             var result = _engine.Apply(mode, detection);
             if (result.Success)
             {
@@ -345,8 +351,11 @@ public sealed class RouteController
     {
         if (Connections.Of(Settings.Mode) is not { } main || detection.IsUsed(main)) return false;
         var oldMode = Settings.Mode;
+        // A used connection that is present first (in rank order), so the fallback does not land on, say, a chosen
+        // but disconnected Wi-Fi and leave the user in a fallback state they did not cause; else any used one.
         var fallback = Connections.FallbackOrder
             .Where(detection.IsUsed)
+            .OrderBy(id => detection.Adapter(id) is null ? 1 : 0)
             .Select(id => (ConnectionId?)id)
             .FirstOrDefault();
         var newMode = fallback is { } f ? Connections.ModeOf(f) : RoutingMode.Auto;
@@ -354,6 +363,19 @@ public sealed class RouteController
         UpdateSettings(s => s with { Mode = newMode });
         _log($"{oldMode} is no longer used; switching to {newMode}");
         return true;
+    }
+
+    /// A turned-off adapter must sit on the automatic metric. Its reset can fail when it is turned off (or a hand-edited
+    /// file can name one that still holds a manual metric), and refreshes no longer manage it, so retry here. Writes
+    /// only when the adapter is not automatic yet.
+    void ResetOffAdapters(DetectionResult detection)
+    {
+        foreach (var adapter in detection.OffAdapters.Values)
+        {
+            if (_engine.IsAutomatic(adapter)) continue;
+            var reset = _engine.Reset(adapter);
+            _log(reset.Success ? $"Reset turned-off {adapter.Name} to automatic metric" : $"Reset turned-off {adapter.Name} failed: {reset.Error}");
+        }
     }
 
     /// How long ReleasePin waits for _gate before giving up and releasing unsynchronized. Short, so a

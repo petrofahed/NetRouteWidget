@@ -1217,6 +1217,55 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task Mode_change_to_a_not_used_connection_is_refused()
+    {
+        var controller = Create(new AppSettings { LanOverrideMac = AdapterOverrides.NotUsed });
+        await controller.RefreshAsync(measureLatency: true);
+
+        var result = await controller.SetModeAsync(RoutingMode.Lan);
+
+        Assert.Equal(new ApplyResult(false, "LAN is set to Not used"), result);
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+    }
+
+    [Fact]
+    public async Task An_off_adapter_left_on_a_manual_metric_is_reset_at_the_next_refresh()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        _metrics.FailOnSet.Add((10, IpFamily.IPv4)); // the reset while turning off fails
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+        Assert.False(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+
+        _metrics.FailOnSet.Clear();
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+
+        // Once automatic, later refreshes leave it alone.
+        var writes = _metrics.SetCalls.Count;
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Equal(writes, _metrics.SetCalls.Count);
+    }
+
+    [Fact]
+    public async Task Fallback_prefers_a_connection_that_is_present()
+    {
+        _routes.BestV4 = 10;
+        // Wi-Fi is chosen but not connected; the phone is present.
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, WifiOverrideMac = "AA-BB-CC-00-00-18" });
+        await controller.RefreshAsync(measureLatency: true);
+        _toasts.Clear();
+
+        _routes.BestV4 = 31;
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
     public async Task Without_admin_the_switch_is_saved_only()
     {
         var controller = Create(canModify: false);

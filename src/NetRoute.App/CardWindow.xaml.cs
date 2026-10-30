@@ -110,10 +110,12 @@ public partial class CardWindow : Window
         WifiButton.Visibility = _wifiShown ? Visibility.Visible : Visibility.Collapsed;
         SyncModeButtons();
         SmartButton.IsEnabled = canModify;
-        // An off connection's mode button stays visible but cannot be picked until it is turned on again.
-        PhoneButton.IsEnabled = canModify && !_off.Contains(ConnectionId.Phone);
-        LanButton.IsEnabled = canModify && !_off.Contains(ConnectionId.Lan);
-        WifiButton.IsEnabled = canModify && !_off.Contains(ConnectionId.Wifi);
+        // A connection's mode button works only while it has a row and is on: an off one stays visible but disabled
+        // until it is turned on again, and a Not-used one (no row) cannot be picked either.
+        bool Pickable(ConnectionId id) => canModify && view.Rows.Any(r => r.Id == id) && !_off.Contains(id);
+        PhoneButton.IsEnabled = Pickable(ConnectionId.Phone);
+        LanButton.IsEnabled = Pickable(ConnectionId.Lan);
+        WifiButton.IsEnabled = Pickable(ConnectionId.Wifi);
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
