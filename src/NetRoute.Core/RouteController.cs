@@ -126,7 +126,7 @@ public sealed class RouteController
         {
             var before = Status;
             var mode = Settings.Mode;
-            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
             UpdateWifiNetworkName(detection);
 
             var rawLatencies = measureLatency
@@ -137,7 +137,10 @@ public sealed class RouteController
 
             // Healing above used the raw results; the card only reports "no reply" once a miss repeats.
             var shown = measureLatency
-                ? Connections.All.ToDictionary(id => id, id => Smooth(id, rawLatencies.GetValueOrDefault(id), before.LatencyMs.GetValueOrDefault(id)))
+                // An adapter that left its slot (unplugged, Not used, turned off) has no latency to keep.
+                ? Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null
+                    ? null
+                    : Smooth(id, rawLatencies.GetValueOrDefault(id), before.LatencyMs.GetValueOrDefault(id)))
                 : rawLatencies;
 
             var carrier = NetworkStatus.CarrierFor(mode, _healTarget, detection);
@@ -196,6 +199,8 @@ public sealed class RouteController
 
     public async Task<ApplyResult> SetModeAsync(RoutingMode mode, CancellationToken ct = default)
     {
+        if (Connections.Of(mode) is { } wanted && Settings.TurnedOff.Contains(wanted))
+            return new ApplyResult(false, $"{Connections.Label(wanted)} is turned off");
         if (!Status.CanModify)
             return new ApplyResult(false, "Administrator rights are needed to change routing");
 
@@ -203,7 +208,7 @@ public sealed class RouteController
         try
         {
             ResetHealing();
-            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides);
+            var detection = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
             var result = _engine.Apply(mode, detection);
             if (result.Success)
             {
@@ -252,12 +257,32 @@ public sealed class RouteController
 
     /// Saves the user's adapter choice. An adapter that stops being present in its slot is reset to the
     /// automatic metric so a stale preferred metric cannot keep winning.
-    public async Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default)
+    public Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default) =>
+        ChangeAdaptersAsync(
+            s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac, WifiOverrideMac = overrides.WifiMac },
+            $"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}, wifi={overrides.WifiMac ?? "auto"}",
+            ct);
+
+    /// Turns a connection off (it then counts as Not used, but keeps its adapter choice and its card row) or back on.
+    public Task SetTurnedOffAsync(ConnectionId id, bool off, CancellationToken ct = default) =>
+        ChangeAdaptersAsync(
+            s => s with
+            {
+                TurnedOff = off
+                    ? s.TurnedOff.Append(id).Distinct().ToList()
+                    : s.TurnedOff.Where(x => x != id).ToList() is { Count: > 0 } rest ? rest : Array.Empty<ConnectionId>(),
+            },
+            $"{Connections.Label(id)} turned {(off ? "off" : "on")}",
+            ct);
+
+    /// Applies a change to which adapters fill the slots (overrides or the off list), then re-detects. An adapter that
+    /// leaves its slot is reset to the automatic metric, and a mode left with nothing behind it falls back.
+    async Task ChangeAdaptersAsync(Func<AppSettings, AppSettings> change, string logLine, CancellationToken ct)
     {
-        void SaveOverrides()
+        void Save()
         {
-            UpdateSettings(s => s with { PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac, WifiOverrideMac = overrides.WifiMac });
-            _log($"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}, wifi={overrides.WifiMac ?? "auto"}");
+            UpdateSettings(change);
+            _log(logLine);
         }
 
         if (Status.CanModify)
@@ -265,18 +290,18 @@ public sealed class RouteController
             await _gate.WaitAsync(ct);
             try
             {
-                // Inside the gate: a refresh already queued must still see the old overrides,
+                // Inside the gate: a refresh already queued must still see the old settings,
                 // so Status.Adapters below is the set we are replacing, not the new one.
                 var previous = Status.Adapters;
                 ResetHealing();
-                SaveOverrides();
-                var next = AdapterDetector.Detect(_adapters.GetAdapters(), overrides);
+                Save();
+                var next = AdapterDetector.Detect(_adapters.GetAdapters(), Settings.Overrides, Settings.TurnedOff);
 
-                // The connection the saved Mode points at may have just become "Not used" (e.g. Wi-Fi set to Not
-                // used while Mode=Wifi): fall back to the first still-used connection in rank order, or Auto if
-                // none are used, so the user is never stranded on a mode with nothing behind it. Done before the
-                // reset loop below, so a failure in that loop cannot skip this. Auto itself has no "current
-                // connection" (Connections.Of(Auto) is null), so this is a no-op while already in Auto.
+                // The connection the saved Mode points at may have just become unused (e.g. Wi-Fi set to Not
+                // used, or the LAN turned off, while in that mode): fall back to the first still-used connection in
+                // rank order, or Auto if none are used, so the user is never stranded on a mode with nothing behind it.
+                // Done before the reset loop below, so a failure in that loop cannot skip this. Auto itself has no
+                // "current connection" (Connections.Of(Auto) is null), so this is a no-op while already in Auto.
                 if (Connections.Of(Settings.Mode) is { } currentMain && !next.IsUsed(currentMain))
                 {
                     var oldMode = Settings.Mode;
@@ -298,6 +323,9 @@ public sealed class RouteController
                     var reset = _engine.Reset(old);
                     _log(reset.Success ? $"Reset {old.Name} to automatic metric" : $"Reset {old.Name} failed: {reset.Error}");
                 }
+
+                // The path change this causes is the user's doing: the refresh below must not toast it.
+                _userChangePending = true;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -310,7 +338,7 @@ public sealed class RouteController
         }
         else
         {
-            SaveOverrides();
+            Save();
         }
 
         await RefreshAsync(measureLatency: true, ct);

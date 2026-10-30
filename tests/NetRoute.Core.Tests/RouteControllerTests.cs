@@ -19,6 +19,7 @@ public class RouteControllerTests
     readonly FakeLatencyProbe _probe = new();
     readonly List<AppSettings> _saved = new();
     readonly List<string> _toasts = new();
+    readonly List<string> _log = new();
 
     public RouteControllerTests()
     {
@@ -33,7 +34,7 @@ public class RouteControllerTests
     RouteController Create(AppSettings? settings = null, bool canModify = true, INetworkNameSource? names = null)
     {
         var controller = new RouteController(_adapters, _metrics, _routes, _probe,
-            settings ?? new AppSettings(), canModify, _saved.Add, _ => { }, _clock, names: names);
+            settings ?? new AppSettings(), canModify, _saved.Add, _log.Add, _clock, names: names);
         controller.AutoSwitched += _toasts.Add;
         return controller;
     }
@@ -1108,5 +1109,84 @@ public class RouteControllerTests
 
         Assert.Equal(3, names.CallCount);
         Assert.Equal("pzhome", controller.Status.WifiNetwork);
+    }
+
+    [Fact]
+    public async Task Turning_the_lan_off_resets_its_metric_and_saves()
+    {
+        var controller = Create();
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Equal([ConnectionId.Lan], controller.Settings.TurnedOff);
+        Assert.Equal([ConnectionId.Lan], _saved.Last().TurnedOff);
+        Assert.Contains("LAN turned off", _log);
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
+        Assert.Null(controller.Status.LanLatencyMs);
+
+        // Later refreshes keep it off: its metric is not set again.
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+    }
+
+    [Fact]
+    public async Task Turning_off_the_mode_connection_falls_back_without_a_toast()
+    {
+        _routes.BestV4 = 10;
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(measureLatency: true);
+        _toasts.Clear();
+
+        _routes.BestV4 = 31; // Windows follows the new metrics
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Empty(_toasts);
+    }
+
+    [Fact]
+    public async Task Turning_it_back_on_restores_the_slot()
+    {
+        var controller = Create(new AppSettings { TurnedOff = [ConnectionId.Lan] });
+        await controller.RefreshAsync(measureLatency: true);
+        Assert.Null(controller.Status.Adapters.Lan);
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: false);
+
+        Assert.Empty(controller.Settings.TurnedOff);
+        Assert.Equal(10, controller.Status.Adapters.Lan?.Index);
+        Assert.Equal(new InterfaceMetricState(false, 50), _metrics.Get(10, IpFamily.IPv4));
+        Assert.Contains("LAN turned on", _log);
+    }
+
+    [Fact]
+    public async Task Mode_change_to_an_off_connection_is_refused()
+    {
+        var controller = Create(new AppSettings { TurnedOff = [ConnectionId.Lan] });
+        await controller.RefreshAsync(measureLatency: true);
+
+        var result = await controller.SetModeAsync(RoutingMode.Lan);
+
+        Assert.Equal(new ApplyResult(false, "LAN is turned off"), result);
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+    }
+
+    [Fact]
+    public async Task Without_admin_the_switch_is_saved_only()
+    {
+        var controller = Create(canModify: false);
+        await controller.RefreshAsync(measureLatency: true);
+        var writes = _metrics.SetCalls.Count;
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal([ConnectionId.Lan], controller.Settings.TurnedOff);
+        Assert.Equal(writes, _metrics.SetCalls.Count);
+        Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
     }
 }
