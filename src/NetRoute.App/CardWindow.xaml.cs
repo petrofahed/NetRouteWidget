@@ -131,7 +131,7 @@ public partial class CardWindow : Window
 
     /// The live speed through each exit, left of its latency. An empty text hides the figure (the row looks as before).
     /// Only touches a TextBlock when its text changed: this is called every second.
-    /// Wi-Fi has no speed source yet (v6.2): it shows "—" whenever phone or lan shows a real figure, else nothing.
+    /// Wi-Fi has no speed source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
     public void RenderSpeeds(string phone, string lan)
     {
         SetSpeed(PhoneSpeed, phone);
@@ -147,7 +147,7 @@ public partial class CardWindow : Window
     }
 
     /// Today's total data through each exit, right of its latency. An empty text hides the figure (the row looks as before).
-    /// Wi-Fi has no totals source yet (v6.2): it shows "—" whenever phone or lan shows a real figure, else nothing.
+    /// Wi-Fi has no totals source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
     public void RenderTotals(string phone, string lan)
     {
         SetSpeed(PhoneTotal, phone);

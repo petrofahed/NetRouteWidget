@@ -1,7 +1,7 @@
 # NetRoute Widget v6: Wi-Fi as a third connection — Design
 
 **Date:** 2026-10-22
-**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). On 2026-10-30 the user moved the path map lanes forward and added a per-connection on/off switch: they ship as **v6.1**, and the later phases are renumbered (Smart routing v6.2, usage v6.3, network picker v6.4). The cable-pull heal check on the real machine is still to be run by the user.
+**Status:** Approved; v6.0 implemented and reviewed (Tasks 1-14). On 2026-10-30 the user moved the path map lanes forward and added a per-connection on/off switch: they ship as **v6.1**, and the later phases are renumbered (Smart routing v6.2, usage v6.3, network picker v6.4). v6.1 implemented (plan `2026-10-30-netroute-v6-1-path-map-lanes-and-on-off.md`). The cable-pull heal check on the real machine is still to be run by the user.
 **Builds on:**
 - `2026-10-02-netroute-widget-v1-design.md`: card, modes, metrics, auto-heal.
 - `2026-10-02-netroute-v2-smart-routing-design.md`: sing-box, waiting list, popup.
