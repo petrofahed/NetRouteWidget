@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Team"
+  short_description: "Coordinate the shared PR team using Codex personas"
+  default_prompt: "Use $pr-team to carry PR #<number> through its agreed finish line."
