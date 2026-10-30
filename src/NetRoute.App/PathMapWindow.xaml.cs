@@ -95,7 +95,7 @@ public partial class PathMapWindow : Window
     }
 
     static string? FirstProblem(PathMapView view) =>
-        view.Lan.Nodes.Concat(view.Phone.Nodes)
+        view.Lanes.SelectMany(l => l.Nodes)
             .FirstOrDefault(n => n.State is HopDisplay.Broken or HopDisplay.Suspect)?.Id;
 
     void RenderDiagnosis(IReadOnlyList<string> lines)

@@ -13,6 +13,15 @@ public sealed record AdapterOverrides(string? PhoneDescription, string? LanMac, 
     public const string NotUsed = "none";
 
     public static readonly AdapterOverrides None = new(null, null);
+
+    /// Whether this choice turns the slot off for good ("Not used"). Wi-Fi with nothing saved is Not used too.
+    public bool IsNotUsed(ConnectionId id) => id switch
+    {
+        ConnectionId.Phone => PhoneDescription == NotUsed,
+        ConnectionId.Lan => LanMac == NotUsed,
+        ConnectionId.Wifi => WifiMac is null or NotUsed,
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, null),
+    };
 }
 
 /// One adapter (or lack of one) per connection slot.

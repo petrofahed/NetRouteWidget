@@ -1127,9 +1127,12 @@ public class RouteControllerTests
         Assert.True(controller.Status.Adapters.IsTurnedOff(ConnectionId.Lan));
         Assert.Null(controller.Status.LanLatencyMs);
 
-        // Later refreshes keep it off: its metric is not set again.
+        // Later refreshes keep it off: its metric is not set again and it is not probed.
+        _probe.Calls.Clear();
         await controller.RefreshAsync(measureLatency: true);
         Assert.True(_metrics.Get(10, IpFamily.IPv4)!.UseAutomatic);
+        Assert.Contains("192.168.42.11", _probe.Calls);
+        Assert.DoesNotContain("192.168.86.42", _probe.Calls);
     }
 
     [Fact]
@@ -1174,6 +1177,43 @@ public class RouteControllerTests
 
         Assert.Equal(new ApplyResult(false, "LAN is turned off"), result);
         Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+    }
+
+    [Fact]
+    public async Task Without_admin_turning_off_the_mode_connection_still_falls_back()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan }, canModify: false);
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetTurnedOffAsync(ConnectionId.Lan, off: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(RoutingMode.Phone, controller.Status.Mode);
+    }
+
+    [Fact]
+    public async Task A_saved_mode_on_an_off_connection_falls_back_at_refresh()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan, TurnedOff = [ConnectionId.Lan] });
+
+        await controller.RefreshAsync(measureLatency: true);
+
+        Assert.Equal(RoutingMode.Phone, controller.Settings.Mode);
+        Assert.Equal(new InterfaceMetricState(false, 5), _metrics.Get(31, IpFamily.IPv4));
+        Assert.Contains("Lan is no longer used; switching to Phone", _log);
+    }
+
+    [Fact]
+    public async Task Setting_a_slot_to_not_used_forgets_that_it_was_off()
+    {
+        var controller = Create(new AppSettings { TurnedOff = [ConnectionId.Lan] });
+        await controller.RefreshAsync(measureLatency: true);
+
+        await controller.SetOverridesAsync(new AdapterOverrides(null, AdapterOverrides.NotUsed));
+        Assert.Empty(controller.Settings.TurnedOff);
+
+        await controller.SetOverridesAsync(AdapterOverrides.None);
+        Assert.Equal(10, controller.Status.Adapters.Lan?.Index); // picked again: on, not still off
     }
 
     [Fact]

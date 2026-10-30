@@ -64,7 +64,8 @@ sealed class PathMapCanvas : Canvas
         var lanes = view.Lanes;
         var spacing = lanes.Count <= 2 ? TwoLaneSpacing : ThreeLaneSpacing;
         List<double> ys = lanes.Count == 1 ? [DefaultMidY] : lanes.Select((_, i) => FirstLaneY + i * spacing).ToList();
-        var midY = ys.Count == 0 ? DefaultMidY : (ys[0] + ys[^1]) / 2;
+        // Up to two lanes keep the v5 centre line (190, a little above the lanes' midpoint) so that layout is unchanged.
+        var midY = lanes.Count <= 2 ? DefaultMidY : (ys[0] + ys[^1]) / 2;
         Height = Math.Max(CanvasHeight, ys.Count == 0 ? 0 : ys[^1] + BelowLastLane);
 
         var extraRows = Math.Max(0, lanes.Count - 2);

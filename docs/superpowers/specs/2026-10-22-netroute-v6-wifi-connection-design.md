@@ -330,6 +330,10 @@ Without this, sing-box would keep sending unmatched traffic to the phone (mobile
 
 **What off does not do.** It does not disable the adapter in Windows. With the cable still in, Windows can still send local traffic over it, and if every NetRoute-managed connection fails Windows may fall to it by its automatic metric.
 
+**Smart routing with the LAN off (call: same as Not used).** Smart routing sees an off LAN exactly as a missing one. sing-box keeps running; LAN-only rules still name the last known LAN interface, so with the cable in their traffic can still leave over it, and the LAN counts as offline, so the "Use phone until LAN is back" popup may appear. Pausing the LAN outbound while it is off belongs with v6.2 (Smart routing over three connections).
+
+**Safety net (call).** Every refresh checks that the saved mode's connection is in use; if it is not (turned off without administrator rights, or a hand-edited file), the mode falls back as above. A mode change is checked against the off list again once it holds the controller's lock, so a click racing a turn-off cannot land on an off connection. A path change caused by turning a connection off or by Choose adapters is the user's own and is not toasted.
+
 
 ## Settings and migration
 

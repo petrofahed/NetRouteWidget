@@ -180,4 +180,17 @@ public sealed class SettingsStoreTests : IDisposable
         File.WriteAllText(FilePath, "{ \"SettingsVersion\": 6, \"Mode\": \"Lan\", \"TurnedOff\": [\"Lan\", \"Lan\"] }");
         Assert.Equal([ConnectionId.Lan], store.Load().Settings.TurnedOff);
     }
+
+    [Fact]
+    public void An_unknown_TurnedOff_entry_is_dropped_not_a_failed_load()
+    {
+        var store = new SettingsStore(FilePath);
+        File.WriteAllText(FilePath, "{ \"SettingsVersion\": 6, \"Mode\": \"Lan\", \"PhoneOverride\": \"kept\", \"TurnedOff\": [\"Satellite\", \"wifi\", 7, {}, \"Lan\"] }");
+
+        var result = store.Load();
+
+        Assert.False(result.Recovered);
+        Assert.Equal("kept", result.Settings.PhoneOverride);
+        Assert.Equal([ConnectionId.Wifi, ConnectionId.Lan], result.Settings.TurnedOff);
+    }
 }

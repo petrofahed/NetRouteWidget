@@ -60,6 +60,7 @@ public class PathMonitorTests
         await rig.Monitor.EndpointRoundAsync(CancellationToken.None);
         var snapshot = rig.Monitor.Snapshot();
 
+        Assert.NotEmpty(rig.Hops.Sources);
         Assert.All(rig.Hops.Sources, s => Assert.Equal(Ip("192.168.1.4"), s));
         Assert.Equal([Ip("192.168.1.4")], rig.Endpoint.Sources);
         Assert.Same(wifi, snapshot.Lanes[ConnectionId.Wifi].Adapter);
