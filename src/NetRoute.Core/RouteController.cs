@@ -271,12 +271,20 @@ public sealed class RouteController
     /// Saves the user's adapter choice. An adapter that stops being present in its slot is reset to the
     /// automatic metric so a stale preferred metric cannot keep winning.
     public Task SetOverridesAsync(AdapterOverrides overrides, CancellationToken ct = default) =>
+        ChangeAdapterChoicesAsync(overrides, turnedOff: null, ct);
+
+    /// Saves all adapter choices and enabled flags together, so fallback sees only the dialog's final state.
+    public Task SetAdapterChoicesAsync(AdapterOverrides overrides, IReadOnlyList<ConnectionId> turnedOff, CancellationToken ct = default) =>
+        ChangeAdapterChoicesAsync(overrides, AppSettings.OffList(turnedOff), ct);
+
+    // null keeps the existing flags for callers that change only adapter overrides.
+    Task ChangeAdapterChoicesAsync(AdapterOverrides overrides, IReadOnlyList<ConnectionId>? turnedOff, CancellationToken ct) =>
         ChangeAdaptersAsync(
             s => s with
             {
                 PhoneOverride = overrides.PhoneDescription, LanOverrideMac = overrides.LanMac, WifiOverrideMac = overrides.WifiMac,
                 // A slot set to Not used has no row to turn back on: forget that it was off, so picking it later starts on.
-                TurnedOff = AppSettings.OffList(s.TurnedOff.Where(id => !overrides.IsNotUsed(id))),
+                TurnedOff = AppSettings.OffList((turnedOff ?? s.TurnedOff).Where(id => !overrides.IsNotUsed(id))),
             },
             $"Adapter overrides: phone={overrides.PhoneDescription ?? "auto"}, lan={overrides.LanMac ?? "auto"}, wifi={overrides.WifiMac ?? "auto"}",
             ct);

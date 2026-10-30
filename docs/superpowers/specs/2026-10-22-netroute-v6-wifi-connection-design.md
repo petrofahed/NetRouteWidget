@@ -317,7 +317,9 @@ Without this, sing-box would keep sending unmatched traffic to the phone (mobile
 
 **Why (what the user said, 2026-10-30).** "I want to do some tests on the Wi-Fi, and sometimes I need also a feature to enable/disable, let's say, the LAN." The user picked a quick switch on the card over disconnecting the adapter in Windows, knowing that Windows can still use the cable.
 
-**What it is.** Each card row's coloured dot is a switch. Clicking it turns that connection **off**; clicking again turns it back **on**. The tooltip says "Turn LAN off" or "Turn LAN on" (with the connection's label).
+**What it is.** Choose adapters has an **Enabled** on/off toggle beside each adapter. Adapter choices and toggles are staged locally and applied together on **OK**; **Cancel** or closing the dialog discards them. A Not-used slot has a disabled, off toggle and no saved off flag. Choosing an adapter after Not used starts it enabled; changing between chosen adapters preserves the toggle. Detect automatically changes the local choices without resetting off toggles unless a slot becomes Not used. Duplicate adapter choices remain invalid even when a chosen slot is off.
+
+Each card row's coloured dot remains a shortcut for the same setting. Clicking it turns that connection **off**; clicking again turns it back **on**. The tooltip says "Turn LAN off" or "Turn LAN on" (with the connection's label).
 
 **While a connection is off (call: it is "Not used" for everything except the card row):**
 - NetRoute treats it like Not used: no metric changes, no latency probes, no path-map lane, never a heal or backup target, no route pin.

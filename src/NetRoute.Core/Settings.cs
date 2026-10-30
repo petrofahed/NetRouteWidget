@@ -28,7 +28,7 @@ public sealed record AppSettings
     /// Devices on the local network the user tests in the path window's "Local network" tab.
     public IReadOnlyList<LocalDevice> LocalDevices { get; init; } = Array.Empty<LocalDevice>();
 
-    /// Connections the user switched off on the card (v6.1). They keep their adapter choice but count as Not used.
+    /// Connections switched off in Choose adapters or on the card (v6.1). They keep their adapter choice but count as Not used.
     [JsonConverter(typeof(LenientConnectionListConverter))]
     public IReadOnlyList<ConnectionId> TurnedOff { get; init; } = Array.Empty<ConnectionId>();
 
