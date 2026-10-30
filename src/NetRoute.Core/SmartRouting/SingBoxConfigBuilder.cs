@@ -10,35 +10,7 @@ public enum RouteExit { Phone, Lan }
 public sealed record SingBoxConfigInput(
     RuleSet Rules, IReadOnlyDictionary<ConnectionId, string> Interfaces, string? LanDns,
     ConnectionId DefaultExit, IReadOnlyDictionary<RuleTarget, IReadOnlyList<ConnectionId>> Candidates,
-    IReadOnlyDictionary<RuleTarget, ConnectionId?> Selected, int ApiPort, string ApiSecret)
-{
-    // Transitional constructor for the existing controller; all compilation uses the generic path below.
-    public SingBoxConfigInput(RuleSet rules, string phoneInterface, string lanInterface, string? lanDns,
-        RouteExit defaultExit, bool lanRulesOnPhone, int apiPort, string apiSecret)
-        : this(rules, new Dictionary<ConnectionId, string>
-        {
-            [ConnectionId.Phone] = phoneInterface, [ConnectionId.Lan] = lanInterface,
-        }, lanDns, LegacyExit(defaultExit),
-        new Dictionary<RuleTarget, IReadOnlyList<ConnectionId>>
-        {
-            [RuleTarget.Home] = lanRulesOnPhone ? [ConnectionId.Lan, ConnectionId.Phone] : [ConnectionId.Lan],
-            [RuleTarget.Lan] = lanRulesOnPhone ? [ConnectionId.Lan, ConnectionId.Phone] : [ConnectionId.Lan],
-            [RuleTarget.Wifi] = [ConnectionId.Lan],
-            [RuleTarget.Phone] = [ConnectionId.Phone, LegacyExit(defaultExit)],
-        }, new Dictionary<RuleTarget, ConnectionId?>
-        {
-            [RuleTarget.Home] = lanRulesOnPhone ? ConnectionId.Phone : ConnectionId.Lan,
-            [RuleTarget.Lan] = lanRulesOnPhone ? ConnectionId.Phone : ConnectionId.Lan,
-            [RuleTarget.Wifi] = ConnectionId.Lan, [RuleTarget.Phone] = ConnectionId.Phone,
-        }, apiPort, apiSecret) { }
-
-    static ConnectionId LegacyExit(RouteExit exit) => exit switch
-    {
-        RouteExit.Phone => ConnectionId.Phone,
-        RouteExit.Lan => ConnectionId.Lan,
-        _ => throw new ArgumentOutOfRangeException(nameof(exit), exit, null),
-    };
-}
+    IReadOnlyDictionary<RuleTarget, ConnectionId?> Selected, int ApiPort, string ApiSecret);
 
 /// RuleIndexToEntryId maps route.rules indexes (as sing-box logs them in "router: match[N]") to RuleEntry ids.
 public sealed record SingBoxConfig(string Json, IReadOnlyDictionary<int, string> RuleIndexToEntryId,
@@ -50,7 +22,6 @@ public static class SingBoxConfigBuilder
     public const string PhoneTag = "phone";
     public const string LanTag = "lan";
     public const string WifiTag = "wifi";
-    public const string LanOnlyTag = "only-home"; // Transitional controller/parser name; one Home selector, no legacy duplicate.
     public const string UnavailableTag = "unavailable";
     public const string UnavailableInterface = "NetRoute-unavailable-5c5ae1de-6830-449e-9c8d-eef065497719";
     public const string DefaultTag = "default";

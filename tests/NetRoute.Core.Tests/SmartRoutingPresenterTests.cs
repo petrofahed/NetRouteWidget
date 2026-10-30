@@ -6,7 +6,7 @@ public class SmartRoutingPresenterTests
 
     static SmartRoutingStatus Status(SmartState state = SmartState.Running, string? message = null, bool lanRulesOnPhone = false,
                                      IReadOnlyList<string>? waiting = null, int rules = 4, DailyStats? today = null) =>
-        new(state, message, RouteExit.Phone, lanRulesOnPhone, true, waiting ?? [], rules, today ?? NoStats);
+        new(state, message, ConnectionId.Phone, [new WaitingTarget(RuleTarget.Home, ConnectionId.Phone, waiting ?? [], lanRulesOnPhone, !lanRulesOnPhone && waiting is not null, 1)], rules, today ?? NoStats);
 
     [Theory]
     [InlineData(0, "0 KB")]
@@ -41,9 +41,9 @@ public class SmartRoutingPresenterTests
             SmartRoutingPresenter.Row(Status(SmartState.Unavailable, "Needs both phone and LAN connected")));
         Assert.Equal(new SmartRow("⚠ Smart routing stopped — sing-box keeps crashing (see log)", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(SmartState.Faulted, "Smart routing stopped — sing-box keeps crashing (see log)")));
-        Assert.Equal(new SmartRow("⏸ LAN-only traffic waiting (LAN offline)", SmartTone.Warning),
+        Assert.Equal(new SmartRow("⏸ 1 app waiting for Home", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(waiting: ["YouTube"])));
-        Assert.Equal(new SmartRow("⚠ Using phone for all traffic — LAN offline", SmartTone.Warning),
+        Assert.Equal(new SmartRow("⚠ Using Phone for waiting exceptions", SmartTone.Warning),
             SmartRoutingPresenter.Row(Status(lanRulesOnPhone: true)));
     }
 
@@ -54,7 +54,7 @@ public class SmartRoutingPresenterTests
     }
 
     static SmartRoutingStatus LanProfileStatus(int rules) =>
-        new(SmartState.Running, null, RouteExit.Lan, false, true, [], rules, new DailyStats(new DateOnly(2026, 10, 3), new Dictionary<string, long>()), Profile: RouteExit.Lan);
+        new(SmartState.Running, null, ConnectionId.Lan, [], rules, new DailyStats(new DateOnly(2026, 10, 3), new Dictionary<string, long>()), Profile: ConnectionId.Lan);
 
     [Fact]
     public void Faulted_row_appends_the_detail_when_there_is_one()
@@ -89,9 +89,9 @@ public class SmartRoutingPresenterTests
     [Fact]
     public void Waiting_text_names_the_items()
     {
-        Assert.Equal("YouTube is waiting — the LAN is offline.", SmartRoutingPresenter.WaitingText(["YouTube"]));
-        Assert.Equal("YouTube, Windows Update are waiting — the LAN is offline.",
-            SmartRoutingPresenter.WaitingText(["YouTube", "Windows Update"]));
+        Assert.Equal("YouTube waiting for LAN.", SmartRoutingPresenter.WaitingText(new WaitingTarget(RuleTarget.Lan, ConnectionId.Phone, ["YouTube"], false, true, 1)));
+        Assert.Equal("YouTube, Windows Update waiting for LAN.",
+            SmartRoutingPresenter.WaitingText(new WaitingTarget(RuleTarget.Lan, ConnectionId.Phone, ["YouTube", "Windows Update"], false, true, 1)));
     }
 
     static readonly IReadOnlyList<RuleItem> Catalog =
@@ -140,10 +140,10 @@ public class SmartRoutingPresenterTests
     [Fact]
     public void Can_use_phone_only_while_running_with_lan_offline()
     {
-        var offline = Status() with { LanOnline = false };
+        var offline = Status() with { Targets = [new WaitingTarget(RuleTarget.Home, ConnectionId.Phone, [], false, true, 1)] };
 
         Assert.True(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline).CanUsePhone);
-        Assert.False(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline with { LanRulesOnPhone = true }).CanUsePhone);
+        Assert.False(SmartRoutingPage.Build(Catalog, new() { Enabled = true }, offline with { Targets = [new WaitingTarget(RuleTarget.Home, ConnectionId.Phone, [], true, false, 1)] }).CanUsePhone);
     }
 
     [Fact]
@@ -170,8 +170,8 @@ public class SmartRoutingPresenterTests
         new("vscode-updates", "upd", "Updates", "VS Code updates", [], ["update.code.visualstudio.com"], true, RouteExit.Lan, CarveOut: true),
     ];
 
-    static SmartRoutingStatus StatusFor(RouteExit profile, Dictionary<string, long>? kept = null) =>
-        new(SmartState.Running, null, profile, false, true, [], 3, new DailyStats(new DateOnly(2026, 10, 3), kept ?? new()), Profile: profile);
+    static SmartRoutingStatus StatusFor(ConnectionId profile, Dictionary<string, long>? kept = null) =>
+        new(SmartState.Running, null, profile, [], 3, new DailyStats(new DateOnly(2026, 10, 3), kept ?? new()), Profile: profile);
 
     [Fact]
     public void The_phone_view_lists_the_lan_items_and_carve_outs_with_the_lan_rules()
@@ -182,13 +182,13 @@ public class SmartRoutingPresenterTests
             PhoneUserRules = [new UserRule(UserRuleType.App, "b.exe")],
         };
 
-        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Phone), RouteExit.Phone);
+        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(ConnectionId.Phone), ConnectionId.Phone);
 
         Assert.Equal(new[] { "youtube", "vscode-updates" }, page.Groups.SelectMany(g => g.Items).Select(i => i.Id));
         Assert.Equal(new[] { "video", "upd" }, page.Groups.Select(g => g.Id));
         Assert.Equal(new[] { "a.exe" }, page.UserRules.Select(r => r.Rule.Value));
-        Assert.Equal(RouteExit.Phone, page.EditingProfile);
-        Assert.Equal(RouteExit.Phone, page.ActiveProfile);
+        Assert.Equal(ConnectionId.Phone, page.EditingProfile);
+        Assert.Equal(ConnectionId.Phone, page.ActiveProfile);
     }
 
     [Fact]
@@ -200,13 +200,13 @@ public class SmartRoutingPresenterTests
             PhoneUserRules = [new UserRule(UserRuleType.App, "b.exe")],
         };
 
-        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Phone), RouteExit.Lan);
+        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(ConnectionId.Phone), ConnectionId.Lan);
 
         Assert.Equal(new[] { "claude", "vscode-updates" }, page.Groups.SelectMany(g => g.Items).Select(i => i.Id));
         Assert.Equal(new[] { "ai", "upd" }, page.Groups.Select(g => g.Id));
         Assert.Equal(new[] { "b.exe" }, page.UserRules.Select(r => r.Rule.Value));
-        Assert.Equal(RouteExit.Lan, page.EditingProfile);
-        Assert.Equal(RouteExit.Phone, page.ActiveProfile); // editing the other list does not change the active profile
+        Assert.Equal(ConnectionId.Lan, page.EditingProfile);
+        Assert.Equal(ConnectionId.Phone, page.ActiveProfile); // editing the other list does not change the active profile
     }
 
     [Fact]
@@ -214,7 +214,7 @@ public class SmartRoutingPresenterTests
     {
         var settings = new SmartRoutingSettings { PhoneUserRules = [new UserRule(UserRuleType.App, "B.exe")] };
 
-        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(RouteExit.Lan, new() { ["app:b.exe"] = 700 }), RouteExit.Lan);
+        var page = SmartRoutingPage.Build(V4Catalog, settings, StatusFor(ConnectionId.Lan, new() { ["app:b.exe"] = 700 }), ConnectionId.Lan);
 
         Assert.Equal(700, Assert.Single(page.UserRules).TodayBytes);
     }
@@ -228,13 +228,13 @@ public class SmartRoutingPresenterTests
     }
 
     [Theory]
-    [InlineData(RouteExit.Phone, RouteExit.Lan, false, true, "→ via phone")]  // Phone view, LAN item switched off
-    [InlineData(RouteExit.Phone, RouteExit.Lan, true, true, "→ via phone")]   // Phone view, carve-out off
-    [InlineData(RouteExit.Lan, RouteExit.Phone, false, true, "→ via LAN")]    // LAN view, phone item switched off
-    [InlineData(RouteExit.Lan, RouteExit.Phone, false, false, "→ phone")]     // LAN view, phone item on
-    [InlineData(RouteExit.Lan, RouteExit.Lan, true, false, "→ LAN")]          // LAN view, carve-out on
-    [InlineData(RouteExit.Lan, RouteExit.Lan, true, true, "→ via phone")]     // LAN view, carve-out off: its app's phone rule catches it
-    public void Item_captions_say_where_the_item_goes(RouteExit editing, RouteExit exit, bool carveOut, bool off, string expected)
+    [InlineData(ConnectionId.Phone, RouteExit.Lan, false, true, "→ via phone")]  // Phone view, LAN item switched off
+    [InlineData(ConnectionId.Phone, RouteExit.Lan, true, true, "→ via phone")]   // Phone view, carve-out off
+    [InlineData(ConnectionId.Lan, RouteExit.Phone, false, true, "→ via LAN")]    // LAN view, phone item switched off
+    [InlineData(ConnectionId.Lan, RouteExit.Phone, false, false, "→ phone")]     // LAN view, phone item on
+    [InlineData(ConnectionId.Lan, RouteExit.Lan, true, false, "→ LAN")]          // LAN view, carve-out on
+    [InlineData(ConnectionId.Lan, RouteExit.Lan, true, true, "→ via phone")]     // LAN view, carve-out off: its app's phone rule catches it
+    public void Item_captions_say_where_the_item_goes(ConnectionId editing, RouteExit exit, bool carveOut, bool off, string expected)
     {
         var item = new PageItem("x", "X", On: !off, TodayBytes: 0, exit, carveOut);
 
@@ -246,6 +246,6 @@ public class SmartRoutingPresenterTests
     {
         var item = new PageItem("youtube", "YouTube", On: true, TodayBytes: 2048);
 
-        Assert.Equal("2 KB", SmartRoutingPage.ItemCaption(item, RouteExit.Phone));
+        Assert.Equal("2 KB", SmartRoutingPage.ItemCaption(item, ConnectionId.Phone));
     }
 }

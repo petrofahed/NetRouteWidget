@@ -12,15 +12,6 @@ public sealed record RuleSet(IReadOnlyList<RuleEntry> Entries)
     public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings) =>
         Build(catalog, settings, ConnectionId.Phone);
 
-    // Transitional profile adapter for the controller until it moves to ConnectionId.
-    public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profileDefault) =>
-        Build(catalog, settings, profileDefault switch
-        {
-            RouteExit.Phone => ConnectionId.Phone,
-            RouteExit.Lan => ConnectionId.Lan,
-            _ => throw new ArgumentOutOfRangeException(nameof(profileDefault), profileDefault, null),
-        });
-
     public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, ConnectionId profile)
     {
         _ = SmartRoutingPolicy.TargetOf(profile);

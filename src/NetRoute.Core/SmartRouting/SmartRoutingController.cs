@@ -4,19 +4,18 @@ namespace NetRoute.Core;
 
 public enum SmartState { Off, Unavailable, Starting, Running, Faulted }
 
+public sealed record WaitingTarget(RuleTarget Target, ConnectionId Main, IReadOnlyList<string> Names, bool UsingMain, bool CanUseMain, long Generation);
+
 public sealed record SmartRoutingStatus(
-    SmartState State, string? Message, RouteExit DefaultExit, bool LanRulesOnPhone, bool LanOnline,
-    IReadOnlyList<string> WaitingNames, int RuleCount, DailyStats Today, string? Detail = null, RouteExit Profile = RouteExit.Phone)
+    SmartState State, string? Message, ConnectionId DefaultExit, IReadOnlyList<WaitingTarget> Targets,
+    int RuleCount, DailyStats Today, string? Detail = null, ConnectionId Profile = ConnectionId.Phone)
 {
     public bool IsActive => State == SmartState.Running;
-    public bool Waiting => WaitingNames.Count > 0;
+    public bool Waiting => Targets.Any(target => target.Names.Count > 0);
 }
 
-/// Owns the sing-box lifecycle for Smart routing: when it runs, with which config, which exit the selectors use,
-/// crash/restart policy, LAN-outage "waiting" detection and the kept-off-4G counter.
-/// All state is guarded by one gate; host events arrive on other threads and queue behind it.
-/// LAN-only traffic never falls back to the phone on its own: when the LAN adapter vanishes sing-box keeps running
-/// (bound to the last-known LAN name) so those connections wait; only UseLanRulesOnPhoneAsync moves them.
+/// Owns the single gated sing-box lifecycle, per-target exception consent/recovery and usage accounting.
+/// Non-metered targets never gain Phone membership without explicit consent bound to the clicked main/context.
 public sealed class SmartRoutingController
 {
     public const int CrashLimit = 3;
@@ -26,7 +25,7 @@ public sealed class SmartRoutingController
     const int DetailMaxLength = 120;
     static readonly Regex AnsiCodes = new(@"\u001B\[[0-9;]*[A-Za-z]", RegexOptions.Compiled);
     static readonly Regex TimestampPrefix = new(@"^\s*[+-]\d{4}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(\.\d+)?\s+", RegexOptions.Compiled);
-    static readonly Regex ConnectionId = new(@"\[\d+\s[^\]]*\]\s*", RegexOptions.Compiled);
+    static readonly Regex ConnectionIdPattern = new(@"\[\d+\s[^\]]*\]\s*", RegexOptions.Compiled);
     static readonly Regex LevelCounter = new(@"(?<=[A-Z])\[\d{4}\]\s*", RegexOptions.Compiled); // "FATAL[0000] message"
     static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
     public static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(5);
@@ -39,10 +38,6 @@ public sealed class SmartRoutingController
     public static readonly TimeSpan ApiStartGrace = TimeSpan.FromSeconds(30);
 
     const string FaultMessage = "Smart routing stopped — sing-box keeps crashing (see log)";
-    const string NeedsBothMessage = "Needs both phone and LAN connected";
-    /// sing-box doesn't understand Wi-Fi as a routing exit yet (v6.2): while Wi-Fi carries the internet, Smart routing
-    /// pauses entirely rather than send unmatched traffic to the phone (mobile data) or to a dead connection.
-    public const string WifiPausedMessage = "Paused while on Wi-Fi";
 
     readonly IReadOnlyList<RuleItem> _catalog;
     readonly ISingBoxHost _host;
@@ -58,30 +53,37 @@ public sealed class SmartRoutingController
     readonly ITrafficSource? _traffic;
 
     ISingBoxApi? _api;
-    LanWaitTracker? _tracker;
+    RuleWaitTracker? _tracker;
     RuleSet _rules = new([]);
     NetworkStatus? _net;
     AppSettings? _settings;
     string? _runningKey;
-    string? _lastLanName;
+    readonly Dictionary<ConnectionId, string> _lastNames = new();
+    readonly Dictionary<ConnectionId, string?> _bindingIdentities = new();
+    IReadOnlyDictionary<ConnectionId, string> _interfaces = new Dictionary<ConnectionId, string>();
+    string? _permissionContext;
+    sealed class TargetState
+    {
+        public ConnectionId? PermittedMain;
+        public long ActionGeneration;
+        public bool Blocked;
+        public bool AppliedUseMain, PendingBack, PopupRaised, KeepWaiting;
+        public int HealthyChecks;
+        public DateTimeOffset? OfflineSince;
+    }
+    readonly Dictionary<RuleTarget, TargetState> _targets = Enum.GetValues<RuleTarget>().ToDictionary(target => target, _ => new TargetState());
+    readonly Dictionary<RuleTarget, ConnectionId?> _appliedTargets = new();
+    long _nextActionGeneration;
     string? _lastLanDns;
     volatile bool _stopping;
     bool _shutdown;
     bool _faulted;
     bool _lastEnabled;
-    RouteExit _wantedExit = RouteExit.Phone;
-    RouteExit _appliedExit = RouteExit.Phone;
-    bool _lanRulesOnPhone;
-    bool _appliedLanRulesOnPhone;
-    bool _lanOnline = true;
-    DateTimeOffset? _lanOfflineSince;
-    int _lanHealthyCount;
+    ConnectionId _wantedExit = ConnectionId.Phone;
+    ConnectionId _appliedExit = ConnectionId.Phone;
     int _apiFailures;
     DateTimeOffset _apiGraceUntil;
     bool _graceLogged;
-    bool _lanBackToastPending;
-    bool _popupRaised;
-    bool _keepWaiting;
     string? _lastCrashDetail;
     UsageAttribution _attribution;
     bool _adapterReadFailed;
@@ -111,7 +113,7 @@ public sealed class SmartRoutingController
         _todayTotals = _usage.TodayTotals(Today());
         _host.LineReceived += line => _ = ProcessLineAsync(line);
         _host.Exited += code => _ = HandleExitAsync(code);
-        Status = new SmartRoutingStatus(SmartState.Off, null, RouteExit.Phone, false, true, [], 0, _usage.TodayKept(Today()));
+        Status = new SmartRoutingStatus(SmartState.Off, null, ConnectionId.Phone, [], 0, _usage.TodayKept(Today()));
     }
 
     public SmartRoutingStatus Status { get; private set; }
@@ -133,7 +135,7 @@ public sealed class SmartRoutingController
     public void SetUsageWatched(bool watched) => _usageWatched = watched;
 
     public event Action<SmartRoutingStatus>? StatusChanged;
-    public event Action<IReadOnlyList<string>>? WaitingDetected;
+    public event Action<WaitingTarget>? WaitingDetected;
     public event Action<string>? Notify;
 
     public async Task ApplyAsync(NetworkStatus net, AppSettings settings, CancellationToken ct = default)
@@ -147,16 +149,7 @@ public sealed class SmartRoutingController
                 _net = net;
                 _settings = settings;
                 _traffic?.SetAdapters(net.Adapters.Phone, net.Adapters.Lan);
-                if (net.Adapters.Lan is { } lan)
-                {
-                    _lastLanName = lan.Name;
-                    _lastLanDns = lan.DnsServer ?? _lastLanDns; // a LAN with no DNS yet must not forget a known one
-                }
-                else if (_lastLanName is null)
-                {
-                    // Fresh process with the LAN absent (cable out at boot, router rebooting): use the saved name.
-                    _lastLanName = settings.SmartRouting.LastLanInterface;
-                }
+                RefreshBindings(net, settings);
 
                 var smart = settings.SmartRouting;
                 if (smart.Enabled && !_lastEnabled)
@@ -164,34 +157,36 @@ public sealed class SmartRoutingController
                     // Switching it on again clears a fault and any leftover outage choices.
                     _faulted = false;
                     _crashes.Clear();
-                    _lanRulesOnPhone = false;
-                    _keepWaiting = false;
-                    _popupRaised = false;
-                    _lanBackToastPending = false;
+                    ResetPermissions();
                 }
                 _lastEnabled = smart.Enabled;
-                _rules = RuleSet.Build(_catalog, smart, ProfileOf(net));
+                _rules = RuleSet.Build(_catalog, smart, SmartRoutingPolicy.ProfileOf(net));
                 _attribution = UsageAttribution.Build(_catalog, smart);
-                UpdateLanHealth(net);
+                var wanted = SmartRoutingPolicy.WantedExit(net);
+                var context = System.Text.Json.JsonSerializer.Serialize(new { Profile = SmartRoutingPolicy.ProfileOf(net), Main = wanted, settings.Overrides, settings.TurnedOff, Bindings = _interfaces, Slots = Connections.All.Select(id => new { Id = id, Used = net.Adapters.IsUsed(id), Off = net.Adapters.IsTurnedOff(id) }) });
+                if (_permissionContext != context) ResetPermissions();
+                _permissionContext = context;
+                if (wanted is { } nextExit) _wantedExit = nextExit;
+                foreach (var target in _targets.Values)
+                    if (target.PermittedMain is { } permitted && permitted != wanted)
+                    {
+                        target.PermittedMain = null;
+                        target.PendingBack = false;
+                    }
+                UpdateTargetHealth(net);
 
                 var (state, _) = Desired();
                 if (state != SmartState.Running)
                 {
-                    _lanBackToastPending = false;
+                    foreach (var target in _targets.Values) target.PendingBack = false;
                     await StopIfRunningAsync().ConfigureAwait(false);
                     Publish();
                     return;
                 }
 
-                _wantedExit = WantedExit(net);
                 if (!_host.IsRunning || _runningKey != KeyFor(net)) await StartAsync(ct).ConfigureAwait(false);
                 else await SyncSelectorsAsync(ct).ConfigureAwait(false);
-                // Only once the selector really moved back (a failed select is retried by the next Apply).
-                if (_lanBackToastPending && _host.IsRunning && _appliedLanRulesOnPhone == _lanRulesOnPhone)
-                {
-                    _lanBackToastPending = false;
-                    Raise(Notify, "LAN back — LAN-only traffic is back on the LAN");
-                }
+                NotifyAppliedRecovery();
                 Publish();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -206,43 +201,57 @@ public sealed class SmartRoutingController
         }
     }
 
-    public async Task UseLanRulesOnPhoneAsync()
+    public async Task UseMainAsync(WaitingTarget request)
     {
+        var target = request.Target;
+        var main = request.Main;
+        _ = SmartRoutingPolicy.SelectorTag(target);
+        _ = SmartRoutingPolicy.Tag(main);
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            // Only meaningful inside a real outage; a stray click must not move LAN-only traffic to the phone.
-            if (_shutdown || Desired().State != SmartState.Running || _lanOnline) return;
-            _lanRulesOnPhone = true;
-            _lanBackToastPending = false;
-            _popupRaised = true;
-            _log("Smart routing: LAN-only traffic uses the phone until the LAN is back");
-            await SyncSelectorsAsync(default).ConfigureAwait(false);
+            if (_shutdown || _net is null || Desired().State != SmartState.Running
+                || !_host.IsRunning || _runningKey != KeyFor(_net)
+                || SmartRoutingPolicy.WantedExit(_net) != main || NormalSelection(target) is not null
+                || !_rules.Entries.Any(entry => entry.Target == target)
+                || request.Generation != _targets[target].ActionGeneration) return;
+            var state = _targets[target];
+            state.PermittedMain = main;
+            state.PendingBack = false;
+            state.PopupRaised = true;
+            await ApplyRoutingAsync(default).ConfigureAwait(false);
             Publish();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log($"Smart routing: could not switch LAN-only traffic to the phone: {ex.Message}");
+            _log($"Smart routing: could not use {main} for {target}: {ex.Message}");
             SafePublish();
         }
-        finally
-        {
-            _gate.Release();
-        }
+        finally { _gate.Release(); }
     }
 
-    public async Task KeepWaitingAsync()
+    public async Task KeepWaitingAsync(WaitingTarget request)
     {
+        var target = request.Target;
+        _ = SmartRoutingPolicy.SelectorTag(target);
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_shutdown || Desired().State != SmartState.Running || _lanOnline) return;
-            _keepWaiting = true;
+            if (!_shutdown && Desired().State == SmartState.Running && NormalSelection(target) is null
+                && _net is not null && SmartRoutingPolicy.WantedExit(_net) == request.Main
+                && _host.IsRunning && _runningKey == KeyFor(_net)
+                && _rules.Entries.Any(entry => entry.Target == target)
+                && request.Generation == _targets[target].ActionGeneration)
+                _targets[target].KeepWaiting = true;
         }
-        finally
-        {
-            _gate.Release();
-        }
+        finally { _gate.Release(); }
+    }
+
+    async Task ApplyRoutingAsync(CancellationToken ct)
+    {
+        if (_net is null) return;
+        if (!_host.IsRunning || _runningKey != KeyFor(_net)) await StartAsync(ct).ConfigureAwait(false);
+        else await SyncSelectorsAsync(ct).ConfigureAwait(false);
     }
 
     /// A copy of the usage history and the live rates, for the Usage tab.
@@ -331,7 +340,7 @@ public sealed class SmartRoutingController
                 _apiFailures = 0;
                 _usage.Update(
                     new UsagePoll(snapshot.Connections, snapshot.UploadTotal, snapshot.DownloadTotal, PhoneAdapterBytes(),
-                        _appliedExit == RouteExit.Phone, _time.GetLocalNow()),
+                        _appliedExit == ConnectionId.Phone, _time.GetLocalNow()),
                     _attribution);
                 _liveSpeed = _usage.Live;
                 _todayTotals = _usage.TodayTotals(Today());
@@ -528,42 +537,65 @@ public sealed class SmartRoutingController
         if (_faulted) return (SmartState.Faulted, FaultMessage);
         if (!net.CanModify) return (SmartState.Unavailable, "Needs administrator rights");
         if (net.Mode == RoutingMode.Auto) return (SmartState.Unavailable, "Paused in Auto mode"); // the widget steps aside
-        // sing-box doesn't route through Wi-Fi yet (v6.2): pause rather than send unmatched traffic to the phone or a
-        // dead connection. Checks BOTH Mode and Carrier: Carrier alone goes stale the instant Wi-Fi is physically
-        // absent, has no gateway yet (DHCP pending right after every Wi-Fi reconnect), or has been healed off onto
-        // the LAN, even though Mode is still Wifi - any of those would otherwise fall through to the phone-default
-        // logic below. Takes priority over the "needs phone" check below. Qualified: "ConnectionId" below this point
-        // is the log-line-parsing Regex field, not the enum.
-        if (net.Mode == RoutingMode.Wifi || net.Carrier == global::NetRoute.Core.ConnectionId.Wifi) return (SmartState.Unavailable, WifiPausedMessage);
-        // Losing the phone must stop sing-box (v1 then falls back to the LAN). Losing the LAN must NOT, and neither
-        // does never having seen it: LAN-only traffic has to wait for it, so sing-box runs against the last-known
-        // (or saved, or placeholder) LAN adapter name. In the LAN profile the LAN list stays active too (it is not an
-        // exception of that profile), so LAN-only items still wait for the LAN instead of falling onto the phone.
-        if (net.Adapters.Phone is null) return (SmartState.Unavailable, NeedsBothMessage);
+        if (SmartRoutingPolicy.WantedExit(net) is null) return (SmartState.Unavailable, "No usable internet connection");
         return (SmartState.Running, null);
     }
 
-    /// The exit for traffic no rule claims. v1 falls back to the phone whenever the LAN is unplugged, and in LAN mode
-    /// it heals onto the phone, so unmatched traffic follows; LAN-only items never do (they use their own selector).
-    static RouteExit WantedExit(NetworkStatus net) => net.Mode switch
+    void RefreshBindings(NetworkStatus net, AppSettings settings)
     {
-        RoutingMode.Lan => net.IsHealing || net.Adapters.Lan is not { HasGateway: true, IPv4: not null } ? RouteExit.Phone : RouteExit.Lan, // a LAN with no gateway/IPv4 counts as absent
-        _ => net.Mode == RoutingMode.Phone && net.IsHealing ? RouteExit.Lan : RouteExit.Phone,
-    };
-
-    /// The Smart routing profile is the routing mode: LAN mode = "LAN + exceptions", Phone (and Auto, which pauses) = "Phone + exceptions".
-    static RouteExit ProfileOf(NetworkStatus? net) => net?.Mode == RoutingMode.Lan ? RouteExit.Lan : RouteExit.Phone;
-
-    /// A saved or last-known name equal to the phone's would bind the "lan" outbound to the phone: use the placeholder instead.
-    string LanName(NetworkStatus net)
-    {
-        if (net.Adapters.Lan?.Name is { } live) return live;
-        return _lastLanName is { } name && !string.Equals(name, net.Adapters.Phone?.Name, StringComparison.OrdinalIgnoreCase) ? name : LanPlaceholder;
+        foreach (var id in Connections.All)
+        {
+            var identity = id switch
+            {
+                ConnectionId.Phone => settings.Overrides.PhoneDescription,
+                ConnectionId.Lan => settings.Overrides.LanMac,
+                ConnectionId.Wifi => settings.Overrides.WifiMac,
+                _ => throw new ArgumentOutOfRangeException(nameof(id)),
+            };
+            if (_bindingIdentities.TryGetValue(id, out var old) && old != identity)
+            {
+                _lastNames.Remove(id);
+                if (id == ConnectionId.Lan) _lastLanDns = null;
+            }
+            _bindingIdentities[id] = identity;
+            if (!net.Adapters.IsUsed(id)) continue;
+            if (net.Adapters.Adapter(id) is { } adapter)
+            {
+                _lastNames[id] = adapter.Name;
+                if (id == ConnectionId.Lan) _lastLanDns = adapter.DnsServer ?? _lastLanDns;
+            }
+            else if (id == ConnectionId.Lan && !_lastNames.ContainsKey(id)
+                && settings.SmartRouting.LastLanInterface is { } saved) _lastNames[id] = saved;
+        }
+        var names = new Dictionary<ConnectionId, string>();
+        foreach (var id in Connections.All.Where(net.Adapters.IsUsed))
+        {
+            var live = net.Adapters.Adapter(id)?.Name;
+            var cached = _lastNames.GetValueOrDefault(id);
+            // A stale name must not bind a different current connection (especially the Phone).
+            if (live is null && net.Adapters.Present.Any(pair => pair.Id != id && string.Equals(pair.Adapter.Name, cached, StringComparison.OrdinalIgnoreCase))) cached = null;
+            names[id] = live ?? cached ?? (id == ConnectionId.Lan ? LanPlaceholder : $"NetRoute-{SmartRoutingPolicy.Tag(id)}-not-connected");
+        }
+        _interfaces = names;
     }
-    string? LanDns(NetworkStatus net) => net.Adapters.Lan?.DnsServer ?? _lastLanDns;
 
-    string KeyFor(NetworkStatus net) =>
-        $"{net.Adapters.Phone!.Name}|{LanName(net)}|{LanDns(net)}|{_rules.Fingerprint}";
+    string? LanDns() => _interfaces.ContainsKey(ConnectionId.Lan) ? _lastLanDns : null;
+    HashSet<ConnectionId> Answering() => _net is null ? [] : Connections.All.Where(id => _net.Adapters.IsUsed(id)
+        && _net.Adapters.Adapter(id) is { HasGateway: true, IPv4: not null }
+        && _net.LatencyMs.GetValueOrDefault(id) is not null).ToHashSet();
+    ConnectionId? NormalSelection(RuleTarget target) => _net is null ? null : SmartRoutingPolicy.Select(
+        target, SmartRoutingPolicy.ProfileOf(_net), _wantedExit, _net.Adapters, Answering(), false);
+    bool UsingMain(RuleTarget target) => _targets[target].PermittedMain == _wantedExit;
+    IReadOnlyDictionary<RuleTarget, IReadOnlyList<ConnectionId>> CandidateMap() => Enum.GetValues<RuleTarget>().ToDictionary(target => target,
+        target => SmartRoutingPolicy.Candidates(target, SmartRoutingPolicy.ProfileOf(_net), _wantedExit, _net!.Adapters, UsingMain(target)));
+    IReadOnlyDictionary<RuleTarget, ConnectionId?> SelectedMap() => Enum.GetValues<RuleTarget>().ToDictionary(target => target,
+        target => SmartRoutingPolicy.Select(target, SmartRoutingPolicy.ProfileOf(_net), _wantedExit, _net!.Adapters, Answering(), UsingMain(target)));
+
+    string KeyFor(NetworkStatus net) => System.Text.Json.JsonSerializer.Serialize(new
+    {
+        Profile = SmartRoutingPolicy.ProfileOf(net), Interfaces = _interfaces, Dns = LanDns(), _rules.Fingerprint,
+        Candidates = CandidateMap(), Overrides = _targets.Select(pair => new { pair.Key, pair.Value.PermittedMain }),
+    });
 
     async Task StartAsync(CancellationToken ct)
     {
@@ -584,16 +616,20 @@ public sealed class SmartRoutingController
             var port = _freePort();
             var secret = Guid.NewGuid().ToString("N");
             var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
-                _rules, net.Adapters.Phone!.Name, LanName(net), LanDns(net),
-                _wantedExit, _lanRulesOnPhone, port, secret));
-            _tracker = new LanWaitTracker(config.RuleIndexToEntryId, _time);
+                _rules, _interfaces, LanDns(), _wantedExit, CandidateMap(), SelectedMap(), port, secret));
+            _tracker = new RuleWaitTracker(config.RuleIndexToEntryId, config.RuleIndexToTarget, _time);
             _api = _createApi(port, secret);
             _log($"Smart routing: starting sing-box ({_rules.Entries.Count} rules, exit {_wantedExit})");
             await _host.StartAsync(config.Json, ct).ConfigureAwait(false);
             _apiGraceUntil = _time.GetUtcNow() + ApiStartGrace;
             _runningKey = KeyFor(net);
             _appliedExit = _wantedExit;
-            _appliedLanRulesOnPhone = _lanRulesOnPhone;
+            _appliedTargets.Clear();
+            foreach (var (target, selected) in SelectedMap())
+            {
+                _appliedTargets[target] = selected;
+                _targets[target].AppliedUseMain = UsingMain(target);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -657,49 +693,81 @@ public sealed class SmartRoutingController
     async Task SyncSelectorsAsync(CancellationToken ct)
     {
         if (_api is null) return;
-        if (_appliedExit != _wantedExit
-            && await _api.SelectAsync(SingBoxConfigBuilder.DefaultTag, Tag(_wantedExit), ct).ConfigureAwait(false))
-        {
+        if (_appliedExit != _wantedExit && await _api.SelectAsync(SingBoxConfigBuilder.DefaultTag, SmartRoutingPolicy.Tag(_wantedExit), ct).ConfigureAwait(false))
             _appliedExit = _wantedExit;
-            _log($"Smart routing: default exit is now {_wantedExit}");
-        }
-        if (_appliedLanRulesOnPhone != _lanRulesOnPhone
-            && await _api.SelectAsync(SingBoxConfigBuilder.LanOnlyTag,
-                   _lanRulesOnPhone ? SingBoxConfigBuilder.PhoneTag : SingBoxConfigBuilder.LanTag, ct).ConfigureAwait(false))
+        foreach (var (target, selected) in SelectedMap())
         {
-            _appliedLanRulesOnPhone = _lanRulesOnPhone;
-        }
-    }
-
-    static string Tag(RouteExit exit) => exit == RouteExit.Lan ? SingBoxConfigBuilder.LanTag : SingBoxConfigBuilder.PhoneTag;
-
-    /// When a probe ends a "use phone until LAN is back" period it queues the "LAN back" toast (see ApplyAsync).
-    void UpdateLanHealth(NetworkStatus net)
-    {
-        var healthy = net.Adapters.Lan is not null && net.LanLatencyMs is not null;
-        if (!healthy)
-        {
-            if (_lanOnline)
+            if (_appliedTargets.TryGetValue(target, out var applied) && applied == selected) continue;
+            if (await _api.SelectAsync(SmartRoutingPolicy.SelectorTag(target), selected is { } id ? SmartRoutingPolicy.Tag(id) : SingBoxConfigBuilder.UnavailableTag, ct).ConfigureAwait(false))
             {
-                // Only failures seen from now on belong to this outage; earlier ones are stale.
-                _tracker?.Clear();
-                _lanOfflineSince = _time.GetUtcNow();
+                _appliedTargets[target] = selected;
+                _targets[target].AppliedUseMain = UsingMain(target);
             }
-            _lanHealthyCount = 0;
-            _lanOnline = false;
-            return;
         }
-        if (_lanOnline || ++_lanHealthyCount < LanHealthyChecksToRevert) return;
-
-        _lanOnline = true;
-        _lanOfflineSince = null;
-        _popupRaised = false;
-        _keepWaiting = false;
-        _tracker?.Clear();
-        if (!_lanRulesOnPhone) return;
-        _lanRulesOnPhone = false; // pushed to sing-box by SyncSelectorsAsync (or a restart) later in ApplyAsync
-        _lanBackToastPending = true;
     }
+
+    void ResetPermissions()
+    {
+        foreach (var target in Enum.GetValues<RuleTarget>())
+            _targets[target] = new TargetState { ActionGeneration = ++_nextActionGeneration };
+        foreach (var target in Enum.GetValues<RuleTarget>()) _tracker?.Clear(target);
+    }
+
+    void UpdateTargetHealth(NetworkStatus net)
+    {
+        var answering = Answering();
+        foreach (var (target, state) in _targets)
+        {
+            var blocked = NormalSelection(target) is null;
+            if (blocked && !state.Blocked)
+            {
+                state.ActionGeneration = ++_nextActionGeneration;
+                state.PopupRaised = state.KeepWaiting = false;
+                state.OfflineSince = _time.GetUtcNow();
+                _tracker?.Clear(target);
+            }
+            state.Blocked = blocked;
+            var healthy = target switch
+            {
+                RuleTarget.Home => SmartRoutingPolicy.Candidates(target, SmartRoutingPolicy.ProfileOf(net), _wantedExit, net.Adapters, false).Any(answering.Contains),
+                RuleTarget.Lan => answering.Contains(ConnectionId.Lan),
+                RuleTarget.Wifi => answering.Contains(ConnectionId.Wifi),
+                RuleTarget.Phone => answering.Contains(ConnectionId.Phone),
+                _ => throw new ArgumentOutOfRangeException(nameof(target)),
+            };
+            if (!healthy)
+            {
+                state.HealthyChecks = 0;
+                state.OfflineSince ??= _time.GetUtcNow();
+                continue;
+            }
+            if (++state.HealthyChecks < LanHealthyChecksToRevert) continue;
+            state.OfflineSince = null;
+            state.PopupRaised = state.KeepWaiting = false;
+            _tracker?.Clear(target);
+            if (state.PermittedMain is null) continue;
+            state.PermittedMain = null;
+            state.PendingBack = true;
+        }
+    }
+
+    void NotifyAppliedRecovery()
+    {
+        if (!_host.IsRunning || _net is null || _runningKey != KeyFor(_net)) return;
+        foreach (var (target, selected) in SelectedMap())
+        {
+            var state = _targets[target];
+            if (!state.PendingBack || state.AppliedUseMain || !_appliedTargets.TryGetValue(target, out var applied) || applied != selected) continue;
+            state.PendingBack = false;
+            Raise(Notify, $"{TargetLabel(target)} back — exception traffic restored");
+        }
+    }
+
+    public static string TargetLabel(RuleTarget target) => target switch
+    {
+        RuleTarget.Home => "Home", RuleTarget.Lan => "LAN", RuleTarget.Wifi => "Wi-Fi", RuleTarget.Phone => "Phone",
+        _ => throw new ArgumentOutOfRangeException(nameof(target), target, null),
+    };
 
     void RecordCrash(string message, string? detail = null)
     {
@@ -719,7 +787,7 @@ public sealed class SmartRoutingController
     {
         var text = AnsiCodes.Replace(raw, "");
         text = TimestampPrefix.Replace(text, "");
-        text = ConnectionId.Replace(text, "");
+        text = ConnectionIdPattern.Replace(text, "");
         text = LevelCounter.Replace(text, " ");
         text = Whitespace.Replace(text, " ").Trim();
         return text.Length <= DetailMaxLength ? text : text[..(DetailMaxLength - 1)] + "…";
@@ -730,21 +798,31 @@ public sealed class SmartRoutingController
         var (desired, message) = Desired();
         // Not wanted but still alive: a stop failed. Say so instead of claiming the stop worked.
         if (desired != SmartState.Running && _host.IsRunning) message = "sing-box could not be stopped (see log)";
-        var state = desired == SmartState.Running && !(_host.IsRunning && _runningKey is not null) ? SmartState.Starting : desired;
-        IReadOnlyList<string> waiting = state == SmartState.Running && !_lanOnline && !_lanRulesOnPhone && _tracker is not null
-            ? _tracker.RecentFailures(WaitWindow)
-                .Select(id => _rules.Entries.FirstOrDefault(e => e.Id == id)?.Name ?? id).ToList()
-            : [];
-
-        Status = new SmartRoutingStatus(state, message, _appliedExit, _lanRulesOnPhone, _lanOnline, waiting,
-            _rules.Entries.Count, _usage.TodayKept(Today()), state == SmartState.Faulted ? _lastCrashDetail : null, ProfileOf(_net));
+        var applied = _host.IsRunning && _runningKey is not null && (_net is null || _runningKey == KeyFor(_net));
+        var state = desired == SmartState.Running && !applied ? SmartState.Starting : desired;
+        var targets = new List<WaitingTarget>();
+        foreach (var target in _rules.Entries.Select(entry => entry.Target).Distinct().Order())
+        {
+            var pending = _targets[target];
+            var usingMain = state == SmartState.Running && pending.AppliedUseMain
+                && _appliedTargets.GetValueOrDefault(target) == _wantedExit;
+            var waiting = NormalSelection(target) is null;
+            IReadOnlyList<string> names = state == SmartState.Running && waiting && !usingMain && _tracker is not null
+                ? _tracker.RecentFailures(target, WaitWindow).Select(id => _rules.Entries.FirstOrDefault(entry => entry.Id == id)?.Name ?? id).ToList() : [];
+            targets.Add(new WaitingTarget(target, _wantedExit, names, usingMain,
+                state == SmartState.Running && waiting && !usingMain, pending.ActionGeneration));
+        }
+        Status = new SmartRoutingStatus(state, message, _appliedExit, targets, _rules.Entries.Count,
+            _usage.TodayKept(Today()), state == SmartState.Faulted ? _lastCrashDetail : null, SmartRoutingPolicy.ProfileOf(_net));
         Raise(StatusChanged, Status);
-
-        if (waiting.Count == 0 || _popupRaised || _keepWaiting) return;
-        // A flaky LAN must not spam popups: only a sustained outage asks the question.
-        if (_lanOfflineSince is not { } since || _time.GetUtcNow() - since < LanOfflinePopupDelay) return;
-        _popupRaised = true;
-        Raise(WaitingDetected, waiting);
+        foreach (var target in targets)
+        {
+            var pending = _targets[target.Target];
+            if (target.Names.Count == 0 || pending.PopupRaised || pending.KeepWaiting
+                || pending.OfflineSince is not { } since || _time.GetUtcNow() - since < LanOfflinePopupDelay) continue;
+            pending.PopupRaised = true;
+            Raise(WaitingDetected, target);
+        }
     }
 
     void SafePublish()

@@ -23,7 +23,7 @@ public class UsageReportTests
 
     static UsageReportModel Build(UsageSnapshot usage, int range = 7, SmartRoutingSettings? settings = null,
                                   bool canAssign = true, UsageSort? sort = null, string? filter = null,
-                                  RouteExit profile = RouteExit.Phone) =>
+                                  ConnectionId profile = ConnectionId.Phone) =>
         UsageReport.Build(usage, Today, range, Catalog, settings ?? new SmartRoutingSettings(), canAssign, sort ?? UsageSort.Default, filter, profile);
 
     [Theory]
@@ -266,9 +266,9 @@ public class UsageReportTests
         var settings = new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "chrome.exe"));
 
         Assert.False(Build(usage, settings: settings).Rows.Single().Exception.InException);
-        Assert.True(Build(usage, settings: settings, profile: RouteExit.Lan).Rows.Single().Exception.InException);
-        Assert.Equal(RouteExit.Phone, Build(usage, settings: settings).Profile);
-        Assert.Equal(RouteExit.Lan, Build(usage, settings: settings, profile: RouteExit.Lan).Profile);
+        Assert.True(Build(usage, settings: settings, profile: ConnectionId.Lan).Rows.Single().Exception.InException);
+        Assert.Equal(ConnectionId.Phone, Build(usage, settings: settings).Profile);
+        Assert.Equal(ConnectionId.Lan, Build(usage, settings: settings, profile: ConnectionId.Lan).Profile);
     }
 
     [Fact]

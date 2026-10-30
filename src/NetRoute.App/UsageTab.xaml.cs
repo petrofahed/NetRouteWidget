@@ -53,9 +53,9 @@ public partial class UsageTab : UserControl
     public event Action<string>? FilterChanged;
     /// A row's context-menu item was clicked: (row key, the profile the menu was rendered for, true = send to the exception
     /// list / false = exclude from it). The state is the one the menu DISPLAYED, never re-read at click time.
-    public event Action<string, RouteExit, bool>? ExceptionRequested;
+    public event Action<string, ConnectionId, bool>? ExceptionRequested;
 
-    RouteExit _renderedProfile = RouteExit.Phone;
+    ConnectionId _renderedProfile = ConnectionId.Phone;
 
     public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording, bool windowsTracking)
     {

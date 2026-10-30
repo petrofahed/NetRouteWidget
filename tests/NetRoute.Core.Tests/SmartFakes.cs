@@ -35,6 +35,7 @@ sealed class FakeSingBoxHost : ISingBoxHost
 
 sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
 {
+    public FakeSingBoxHost? Host { get; set; }
     public bool ConnectionsUnreachable { get; set; }
     public bool SelectResult { get; set; } = true;
     public int Disposals { get; private set; }
@@ -50,6 +51,16 @@ sealed class FakeSingBoxApi : ISingBoxApi, IDisposable
     public Task<bool> SelectAsync(string group, string outbound, CancellationToken ct = default)
     {
         Selects.Add((group, outbound));
+        if (Host is { } host)
+        {
+            if (!host.IsRunning || host.Starts.Count == 0) return Task.FromResult(false);
+            using var json = System.Text.Json.JsonDocument.Parse(host.Starts.Last());
+            var selector = json.RootElement.GetProperty("outbounds").EnumerateArray()
+                .FirstOrDefault(node => node.GetProperty("tag").GetString() == group);
+            if (selector.ValueKind == System.Text.Json.JsonValueKind.Undefined
+                || !selector.TryGetProperty("outbounds", out var members)
+                || !members.EnumerateArray().Any(node => node.GetString() == outbound)) return Task.FromResult(false);
+        }
         return Task.FromResult(SelectResult);
     }
 

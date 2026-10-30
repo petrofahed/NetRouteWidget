@@ -27,13 +27,281 @@ public class SmartRoutingControllerTests
                                   IReadOnlyList<RuleItem>? catalog = null, ITrafficSource? traffic = null, bool watched = true)
     {
         var c = new SmartRoutingController(catalog ?? Catalog, _host, (_, _) => _api, freePort ?? (() => 40000), restored, _logs.Add, _time, counters, traffic);
-        c.WaitingDetected += _popups.Add;
+        c.WaitingDetected += target => _popups.Add(target.Names);
+        _api.Host = _host;
         c.Notify += _notes.Add;
         c.SetUsageWatched(watched);
         return c;
     }
 
+    static WaitingTarget Request(SmartRoutingController controller, RuleTarget target, ConnectionId? main = null)
+    {
+        var request = controller.Status.Targets.Single(item => item.Target == target);
+        return main is { } id ? request with { Main = id } : request;
+    }
+
     static AppSettings On(bool enabled = true) => new() { SmartRouting = new SmartRoutingSettings { Enabled = enabled } };
+
+    [Fact]
+    public async Task Use_main_rebuilds_actual_membership_before_acknowledging_phone_permission()
+    {
+        var c = Create();
+        _api.Host = _host;
+        await c.ApplyAsync(Net(lanMs: null), On());
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
+
+        Assert.Equal(2, _host.Starts.Count);
+        using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+        var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+        Assert.Contains("phone", home.GetProperty("outbounds").EnumerateArray().Select(node => node.GetString()));
+        Assert.Equal("phone", home.GetProperty("default").GetString());
+        Assert.True(c.Status.Targets.Single(target => target.Target == RuleTarget.Home).UsingMain);
+        Assert.False(await _api.SelectAsync("only-wifi", "phone")); // actual config, not an unconditional-success fake
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Off_or_not_used_lan_cannot_survive_through_a_cached_or_running_binding(bool notUsed)
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), OnWithSavedLan("Ethernet"));
+        var net = Net() with
+        {
+            Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()],
+                new AdapterOverrides(null, notUsed ? AdapterOverrides.NotUsed : null), [ConnectionId.Lan]),
+        };
+        await c.ApplyAsync(net, OnWithSavedLan("Ethernet"));
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.DoesNotContain("\"bind_interface\": \"Ethernet\"", _host.Starts.Last());
+        Assert.Equal(SmartState.Running, c.Status.State);
+    }
+
+    [Theory]
+    [InlineData(RoutingMode.Lan, ConnectionId.Lan)]
+    [InlineData(RoutingMode.Wifi, ConnectionId.Wifi)]
+    public async Task Nonmetered_current_path_runs_without_any_phone(RoutingMode mode, ConnectionId expected)
+    {
+        var c = Create();
+        var net = Net(mode, phone: false, wifi: true, carrier: expected)
+            .WithLatency(ConnectionId.Wifi, 20);
+        await c.ApplyAsync(net, On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(expected, c.Status.DefaultExit);
+        Assert.Equal(expected, c.Status.Profile);
+    }
+
+    [Fact]
+    public async Task No_physical_current_path_pauses_and_does_not_infer_the_tun_as_phone()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(phone: false, lan: false) with { ActivePath = InternetPath.Phone }, On());
+        Assert.Equal(SmartState.Unavailable, c.Status.State);
+        Assert.Empty(_host.Starts);
+    }
+
+    static System.Text.Json.JsonElement Selector(string json, string tag) =>
+        System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("outbounds").EnumerateArray()
+            .Single(node => node.GetProperty("tag").GetString() == tag).Clone();
+
+    [Fact]
+    public async Task A_wifi_grant_does_not_become_mobile_permission_on_a_same_profile_automatic_heal()
+    {
+        var c = Create();
+        var net = Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Wifi, lanMs: null).WithLatency(ConnectionId.Wifi, null);
+        await c.ApplyAsync(net, On());
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Wifi));
+        Assert.Equal(2, _host.Starts.Count); // pending explicit grant was compiled, not silently ignored
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+        Assert.Equal("unavailable", Selector(_host.Starts.Last(), "only-home").GetProperty("default").GetString());
+        await c.ApplyAsync(net with { Carrier = ConnectionId.Phone, HealTarget = ConnectionId.Phone }, On());
+        var home = Selector(_host.Starts.Last(), "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
+        Assert.Equal("unavailable", home.GetProperty("default").GetString());
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Wifi)); // old popup cannot grant on the new main
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+    }
+
+    [Fact]
+    public async Task Automatic_mode_fallback_after_turning_home_off_does_not_grant_phone_to_home_rules()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+        var settings = On() with { TurnedOff = [ConnectionId.Lan] };
+        var net = Net(RoutingMode.Phone) with
+        {
+            Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]),
+        };
+        await c.ApplyAsync(net, settings);
+        var home = Selector(_host.Starts.Last(), "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
+        Assert.Equal("unavailable", home.GetProperty("default").GetString());
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
+    }
+
+    [Fact]
+    public async Task Unchanged_membership_failed_selection_retries_without_advancing_applied_state()
+    {
+        var c = Create();
+        var healthy = Net(wifi: true).WithLatency(ConnectionId.Wifi, 20);
+        await c.ApplyAsync(healthy, On());
+        _api.SelectResult = false;
+        var fallback = healthy.WithLatency(ConnectionId.Lan, null);
+        await c.ApplyAsync(fallback, On());
+        Assert.Single(_api.Selects, select => select == ("only-home", "wifi"));
+        _api.SelectResult = true;
+        await c.ApplyAsync(fallback, On());
+        Assert.Equal(2, _api.Selects.Count(select => select == ("only-home", "wifi")));
+        Assert.Single(_host.Starts);
+        Assert.Empty(_notes);
+    }
+
+    [Fact]
+    public async Task Target_failures_and_keep_waiting_are_independent_and_stale_main_clicks_do_nothing()
+    {
+        var c = Create(catalog: []);
+        var settings = On() with { SmartRouting = new SmartRoutingSettings { Enabled = true }
+            .WithUserRule(ConnectionId.Phone, new(UserRuleType.App, "lan.exe", Exit: ConnectionId.Lan))
+            .WithUserRule(ConnectionId.Phone, new(UserRuleType.App, "wifi.exe", Exit: ConnectionId.Wifi)) };
+        var net = Net(wifi: true, lanMs: null).WithLatency(ConnectionId.Wifi, null);
+        await c.ApplyAsync(net, settings);
+        await c.KeepWaitingAsync(Request(c, RuleTarget.Lan));
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+        await c.ProcessLineAsync(MatchYouTube.Replace("only-home", "only-lan"));
+        await c.ProcessLineAsync(FailLanOnly.Replace("only-home", "only-lan"));
+        await c.ProcessLineAsync(MatchYouTube.Replace("match[3]", "match[4]").Replace("[42", "[43").Replace("only-home", "only-wifi"));
+        await c.ProcessLineAsync(FailLanOnly.Replace("[42", "[43").Replace("only-home", "only-wifi"));
+        Assert.Equal(["lan.exe"], c.Status.Targets.Single(target => target.Target == RuleTarget.Lan).Names);
+        Assert.Equal(["wifi.exe"], c.Status.Targets.Single(target => target.Target == RuleTarget.Wifi).Names);
+        Assert.Equal(["wifi.exe"], Assert.Single(_popups));
+        await c.ApplyAsync(net with { Mode = RoutingMode.Lan, Carrier = ConnectionId.Wifi }, settings);
+        await c.UseMainAsync(Request(c, RuleTarget.Wifi, ConnectionId.Phone));
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+    }
+
+    [Fact]
+    public async Task Literal_target_recovery_requires_its_own_three_consecutive_answers()
+    {
+        var c = Create(catalog: []);
+        var settings = On() with { SmartRouting = new SmartRoutingSettings { Enabled = true }
+            .WithUserRule(ConnectionId.Phone, new(UserRuleType.App, "lan.exe", Exit: ConnectionId.Lan)) };
+        var down = Net(wifi: true, lanMs: null).WithLatency(ConnectionId.Wifi, null);
+        await c.ApplyAsync(down, settings);
+        await c.UseMainAsync(Request(c, RuleTarget.Lan, ConnectionId.Phone));
+        for (var i = 0; i < 3; i++) await c.ApplyAsync(down.WithLatency(ConnectionId.Wifi, 20), settings);
+        Assert.Empty(_notes); // Wi-Fi fallback answering is not "LAN back".
+        Assert.Contains(c.Status.Targets, target => target.Target == RuleTarget.Lan && target.UsingMain);
+        await c.ApplyAsync(down.WithLatency(ConnectionId.Lan, 12), settings);
+        await c.ApplyAsync(down, settings); // breaks the consecutive streak
+        for (var i = 0; i < 2; i++) await c.ApplyAsync(down.WithLatency(ConnectionId.Lan, 12), settings);
+        Assert.Empty(_notes);
+        Assert.Contains(c.Status.Targets, target => target.Target == RuleTarget.Lan && target.UsingMain);
+        await c.ApplyAsync(down.WithLatency(ConnectionId.Lan, 12), settings);
+        Assert.Equal(["LAN back — exception traffic restored"], _notes);
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+    }
+
+    [Fact]
+    public async Task Failed_stop_of_old_off_lan_binding_is_not_claimed_as_new_applied_routing()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        _host.StopThrows = new IOException("cannot stop old binding");
+        var off = Net() with { Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan()], AdapterOverrides.None, [ConnectionId.Lan]) };
+        var settings = On() with { TurnedOff = [ConnectionId.Lan] };
+        await c.ApplyAsync(off, settings);
+        Assert.Single(_host.Starts);
+        Assert.True(_host.IsRunning);
+        Assert.Equal(SmartState.Starting, c.Status.State);
+        Assert.False(c.Status.IsActive);
+        _host.StopThrows = null;
+        await c.ApplyAsync(off, settings);
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.DoesNotContain("\"bind_interface\": \"Ethernet\"", _host.Starts.Last());
+        Assert.Equal(SmartState.Running, c.Status.State);
+    }
+
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("main")]
+    [InlineData("off")]
+    public async Task An_old_action_cannot_grant_after_context_changes_away_and_back(string change)
+    {
+        var c = Create();
+        var settings = On() with { WifiOverrideMac = "AA-BB-CC-00-00-18" };
+        var down = Net(wifi: true, lanMs: null, carrier: ConnectionId.Phone).WithLatency(ConnectionId.Wifi, null);
+        await c.ApplyAsync(down, settings);
+        var old = Request(c, RuleTarget.Home);
+        if (change == "profile") await c.ApplyAsync(down with { Mode = RoutingMode.Lan }, settings);
+        else if (change == "main") await c.ApplyAsync(down with { Carrier = ConnectionId.Wifi }, settings);
+        else await c.ApplyAsync(down with
+        {
+            Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan(), TestAdapters.Wifi()], settings.Overrides, [ConnectionId.Lan]),
+        }, settings with { TurnedOff = [ConnectionId.Lan] });
+        await c.ApplyAsync(down, settings);
+        var fresh = Request(c, RuleTarget.Home);
+        Assert.Equal(old.Target, fresh.Target);
+        Assert.Equal(old.Main, fresh.Main);
+        Assert.NotEqual(old.Generation, fresh.Generation);
+        var starts = _host.Starts.Count;
+        await c.UseMainAsync(old);
+        Assert.Equal(starts, _host.Starts.Count);
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+        await c.UseMainAsync(fresh);
+        Assert.Contains(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
+    }
+
+    [Fact]
+    public async Task Recovered_then_new_outage_rejects_old_grant_and_keep_waiting_snapshots()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(lanMs: null), On());
+        var old = Request(c, RuleTarget.Home);
+        for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(lanMs: null), On());
+        Assert.NotEqual(old.Generation, Request(c, RuleTarget.Home).Generation);
+        await c.UseMainAsync(old);
+        await c.KeepWaitingAsync(old);
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+        _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
+        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync(FailLanOnly);
+        Assert.Single(_popups); // stale KeepWaiting did not mute the new outage
+        await c.UseMainAsync(Request(c, RuleTarget.Home));
+        Assert.Contains(c.Status.Targets, target => target.UsingMain);
+    }
+
+    [Fact]
+    public async Task Stable_probes_and_a_pending_unanswered_grant_preserve_the_action_generation()
+    {
+        var c = Create();
+        var down = Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Wifi, lanMs: null).WithLatency(ConnectionId.Wifi, null);
+        await c.ApplyAsync(down, On());
+        var pending = Request(c, RuleTarget.Home);
+        Assert.True(pending.CanUseMain);
+        await c.ApplyAsync(down, On());
+        Assert.Equal(pending.Generation, Request(c, RuleTarget.Home).Generation);
+        await c.UseMainAsync(pending);
+        Assert.Equal(pending.Generation, Request(c, RuleTarget.Home).Generation);
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.DoesNotContain(c.Status.Targets, target => target.UsingMain);
+        Assert.Equal("unavailable", Selector(_host.Starts.Last(), "only-home").GetProperty("default").GetString());
+    }
+
+    [Fact]
+    public async Task A_failed_start_cannot_queue_mobile_consent_from_a_nonrunning_snapshot()
+    {
+        var c = Create();
+        _host.StartThrows = new IOException("startup failed");
+        await c.ApplyAsync(Net(lanMs: null), On());
+        Assert.Equal(SmartState.Starting, c.Status.State);
+        await c.UseMainAsync(Request(c, RuleTarget.Home));
+        _host.StartThrows = null;
+        await c.ApplyAsync(Net(lanMs: null), On());
+        var home = Selector(_host.Starts.Last(), "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
+        Assert.Equal("unavailable", home.GetProperty("default").GetString());
+    }
 
     static NetworkStatus Net(RoutingMode mode = RoutingMode.Phone, int phoneIndex = 31, bool lan = true, int? lanMs = 12,
                              bool healing = false, bool canModify = true, bool phone = true, string lanName = "Ethernet", string? lanDns = "192.168.86.1",
@@ -45,7 +313,7 @@ public class SmartRoutingControllerTests
             InternetPath.Phone, InternetPath.None,
             new Dictionary<ConnectionId, int?> { [ConnectionId.Phone] = 30, [ConnectionId.Lan] = lan ? lanMs : null },
             canModify, null, IsHealing: healing)
-        { Carrier = carrier };
+        { Carrier = carrier, HealTarget = healing ? (mode == RoutingMode.Phone ? ConnectionId.Lan : ConnectionId.Phone) : null };
 
     [Fact]
     public async Task Disabled_does_not_start()
@@ -69,7 +337,7 @@ public class SmartRoutingControllerTests
         Assert.Contains("\"Ethernet 31\"", json);
         Assert.Contains("\"Ethernet\"", json);
         Assert.Contains("127.0.0.1:40000", json);
-        Assert.Equal((SmartState.Running, 1, RouteExit.Phone), (c.Status.State, c.Status.RuleCount, c.Status.DefaultExit));
+        Assert.Equal((SmartState.Running, 1, ConnectionId.Phone), (c.Status.State, c.Status.RuleCount, c.Status.DefaultExit));
     }
 
     [Theory]
@@ -87,15 +355,14 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
-    public async Task Phone_lost_stops_sing_box()
+    public async Task Phone_lost_keeps_smart_running_on_the_remaining_lan()
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-
         await c.ApplyAsync(Net(phone: false), On());
-
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal((SmartState.Unavailable, "Needs both phone and LAN connected"), (c.Status.State, c.Status.Message));
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
     }
 
     // ---- Final pass C1: start with the LAN absent ----
@@ -113,7 +380,7 @@ public class SmartRoutingControllerTests
         var json = Assert.Single(_host.Starts);
         Assert.Contains("\"bind_interface\": \"Ethernet 9\"", json);
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.False(c.Status.LanOnline);
+        Assert.False(!c.Status.Targets.Any(target => target.Target == RuleTarget.Home && (target.CanUseMain || target.UsingMain)));
     }
 
     [Fact]
@@ -126,7 +393,7 @@ public class SmartRoutingControllerTests
         var json = Assert.Single(_host.Starts);
         Assert.Contains("\"bind_interface\": \"" + SmartRoutingController.LanPlaceholder + "\"", json);
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.False(c.Status.LanOnline);
+        Assert.False(!c.Status.Targets.Any(target => target.Target == RuleTarget.Home && (target.CanUseMain || target.UsingMain)));
 
         _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
         await c.ProcessLineAsync(MatchYouTube);
@@ -171,7 +438,7 @@ public class SmartRoutingControllerTests
         Assert.Single(_host.Starts);
         Assert.Equal(0, _host.Stops);
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.False(c.Status.LanOnline);
+        Assert.False(!c.Status.Targets.Any(target => target.Target == RuleTarget.Home && (target.CanUseMain || target.UsingMain)));
     }
 
     [Fact]
@@ -225,7 +492,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
 
         Assert.Single(_host.Starts);
-        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
     }
 
     [Fact]
@@ -236,9 +503,9 @@ public class SmartRoutingControllerTests
 
         await c.ApplyAsync(Net(healing: true), On());
 
-        Assert.Single(_host.Starts);
-        Assert.Contains(("default", "lan"), _api.Selects);
-        Assert.Equal(RouteExit.Lan, c.Status.DefaultExit);
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
     }
 
     [Fact]
@@ -334,7 +601,7 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(FailLanOnly.Replace("[42", "[43"));
 
         Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
-        Assert.Equal(new[] { "YouTube" }, c.Status.WaitingNames);
+        Assert.Equal(new[] { "YouTube" }, c.Status.Targets.SelectMany(target => target.Names).ToList());
     }
 
     [Fact]
@@ -347,7 +614,7 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Empty(_popups);
-        Assert.Empty(c.Status.WaitingNames);
+        Assert.Empty(c.Status.Targets.SelectMany(target => target.Names).ToList());
     }
 
     [Fact]
@@ -362,9 +629,9 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(MatchYouTube);
         await c.ProcessLineAsync(FailLanOnly);
 
-        Assert.True(c.Status.LanOnline);
+        Assert.True(!c.Status.Targets.Any(target => target.Target == RuleTarget.Home && (target.CanUseMain || target.UsingMain)));
         Assert.Empty(_popups);
-        Assert.Empty(c.Status.WaitingNames);
+        Assert.Empty(c.Status.Targets.SelectMany(target => target.Names).ToList());
     }
 
     [Fact]
@@ -373,7 +640,7 @@ public class SmartRoutingControllerTests
         var c = Create();
         await c.ApplyAsync(Net(), On());
         await c.ApplyAsync(Net(lanMs: null), On());
-        await c.KeepWaitingAsync();
+        await c.KeepWaitingAsync(Request(c, RuleTarget.Home));
         await c.ProcessLineAsync(MatchYouTube);
         await c.ProcessLineAsync(FailLanOnly);
         Assert.Empty(_popups);
@@ -394,20 +661,21 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
         await c.ApplyAsync(Net(lanMs: null), On());
 
-        await c.UseLanRulesOnPhoneAsync();
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
 
-        Assert.Contains(("only-home", "phone"), _api.Selects);
-        Assert.True(c.Status.LanRulesOnPhone);
-        Assert.Empty(c.Status.WaitingNames);
+        Assert.Contains("\"only-home\"", _host.Starts.Last());
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Contains(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
+        Assert.Empty(c.Status.Targets.SelectMany(target => target.Names).ToList());
 
         await c.ApplyAsync(Net(), On());
         await c.ApplyAsync(Net(), On());
-        Assert.True(c.Status.LanRulesOnPhone);
+        Assert.Contains(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
         await c.ApplyAsync(Net(), On());
 
-        Assert.False(c.Status.LanRulesOnPhone);
-        Assert.Equal(("only-home", "lan"), _api.Selects.Last());
-        Assert.Contains("LAN back — LAN-only traffic is back on the LAN", _notes);
+        Assert.DoesNotContain(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
+        Assert.Equal(3, _host.Starts.Count);
+        Assert.Contains("Home back — exception traffic restored", _notes);
     }
 
     [Fact]
@@ -457,10 +725,10 @@ public class SmartRoutingControllerTests
         var c = Create();
         await c.ApplyAsync(Net(), On());
 
-        await c.UseLanRulesOnPhoneAsync();
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
 
         Assert.Empty(_api.Selects);
-        Assert.False(c.Status.LanRulesOnPhone);
+        Assert.DoesNotContain(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
     }
 
     [Fact]
@@ -468,7 +736,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-        await c.KeepWaitingAsync();
+        await c.KeepWaitingAsync(Request(c, RuleTarget.Home));
 
         await c.ApplyAsync(Net(lanMs: null), On()); // a real outage starts afterwards
         _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
@@ -484,13 +752,13 @@ public class SmartRoutingControllerTests
         var c = Create();
         await c.ApplyAsync(Net(), On());
         await c.ApplyAsync(Net(lanMs: null), On());
-        await c.UseLanRulesOnPhoneAsync();
-        Assert.True(c.Status.LanRulesOnPhone);
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
+        Assert.Contains(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
 
         await c.ApplyAsync(Net(), On(false));
         await c.ApplyAsync(Net(), On());
 
-        Assert.False(c.Status.LanRulesOnPhone);
+        Assert.DoesNotContain(c.Status.Targets, target => target.Target == RuleTarget.Home && target.UsingMain);
     }
 
     // ---- R3: popup noise on a flaky LAN ----
@@ -508,7 +776,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On()); // healthy again, well inside the delay
 
         Assert.Empty(_popups);
-        Assert.Empty(c.Status.WaitingNames);
+        Assert.Empty(c.Status.Targets.SelectMany(target => target.Names).ToList());
     }
 
     [Fact]
@@ -521,7 +789,7 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Empty(_popups);
-        Assert.Equal(new[] { "YouTube" }, c.Status.WaitingNames); // the card row shows it straight away
+        Assert.Equal(new[] { "YouTube" }, c.Status.Targets.SelectMany(target => target.Names).ToList()); // the card row shows it straight away
 
         _time.Advance(TimeSpan.FromSeconds(9));
         await c.ApplyAsync(Net(lanMs: null), On());
@@ -672,19 +940,21 @@ public class SmartRoutingControllerTests
     }
 
     [Fact]
-    public async Task Lan_back_toast_comes_after_the_selector_moves_back()
+    public async Task Recovery_toast_follows_applied_config_with_phone_membership_removed()
     {
         var c = Create();
-        var selectsAtToast = -1;
-        c.Notify += _ => selectsAtToast = _api.Selects.Count;
-        await c.ApplyAsync(Net(), On());
+        var restoredAtToast = false;
+        c.Notify += _ =>
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+            var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+            restoredAtToast = home.GetProperty("default").GetString() == "lan"
+                && !home.GetProperty("outbounds").EnumerateArray().Any(node => node.GetString() == "phone");
+        };
         await c.ApplyAsync(Net(lanMs: null), On());
-        await c.UseLanRulesOnPhoneAsync();
-        Assert.Single(_api.Selects);
-
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
         for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(), On());
-
-        Assert.Equal(2, selectsAtToast);
+        Assert.True(restoredAtToast);
     }
 
     [Fact]
@@ -693,7 +963,7 @@ public class SmartRoutingControllerTests
         var c = Create();
         await c.ApplyAsync(Net(), On());
         await c.ApplyAsync(Net(lanMs: null), On());
-        await c.UseLanRulesOnPhoneAsync();
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
 
         for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(canModify: false), On());
 
@@ -790,22 +1060,19 @@ public class SmartRoutingControllerTests
     // N3: the toast only follows a selector move that really happened
 
     [Fact]
-    public async Task Lan_back_toast_waits_for_the_selector_and_the_next_apply_retries()
+    public async Task Recovery_toast_waits_for_successful_membership_restart_and_retries()
     {
         var c = Create();
-        await c.ApplyAsync(Net(), On());
         await c.ApplyAsync(Net(lanMs: null), On());
-        await c.UseLanRulesOnPhoneAsync();
-        _api.SelectResult = false; // sing-box refuses the select
-
+        await c.UseMainAsync(Request(c, RuleTarget.Home, ConnectionId.Phone));
+        _host.StartThrows = new InvalidOperationException("failed recovery restart");
         for (var i = 0; i < 3; i++) await c.ApplyAsync(Net(), On());
         Assert.Empty(_notes);
-
-        _api.SelectResult = true;
+        Assert.Equal(SmartState.Starting, c.Status.State);
+        _host.StartThrows = null;
         await c.ApplyAsync(Net(), On());
-
         Assert.Single(_notes);
-        Assert.Equal(("only-home", "lan"), _api.Selects.Last());
+        Assert.Equal(SmartState.Running, c.Status.State);
     }
 
     // N4: a LAN without DNS yet must not forget a known one
@@ -853,7 +1120,7 @@ public class SmartRoutingControllerTests
 
         Assert.Single(_host.Starts);
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.Equal(RouteExit.Lan, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
     }
 
     [Fact]
@@ -864,9 +1131,9 @@ public class SmartRoutingControllerTests
 
         await c.ApplyAsync(Net(RoutingMode.Lan, healing: true), On());
 
-        Assert.Single(_host.Starts);
-        Assert.Contains(("default", "phone"), _api.Selects);
-        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
     }
 
     [Fact]
@@ -877,11 +1144,11 @@ public class SmartRoutingControllerTests
 
         await c.ApplyAsync(Net(RoutingMode.Lan, lan: false), On());
 
-        Assert.Single(_host.Starts);
-        Assert.Equal(0, _host.Stops);
+        Assert.Equal(2, _host.Starts.Count);
+        Assert.Equal(1, _host.Stops);
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.Contains(("default", "phone"), _api.Selects);
-        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
+        Assert.Equal("unavailable", Selector(_host.Starts.Last(), "only-home").GetProperty("default").GetString());
     }
 
     // ---- Live-fix 1 (L3) ----
@@ -899,7 +1166,7 @@ public class SmartRoutingControllerTests
 
         await c.ApplyAsync(LanModeWithLan(TestAdapters.Lan()), On());
 
-        Assert.Equal(RouteExit.Lan, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
     }
 
     [Theory]
@@ -911,7 +1178,7 @@ public class SmartRoutingControllerTests
 
         await c.ApplyAsync(LanModeWithLan(TestAdapters.Lan() with { HasGateway = hasGateway, IPv4 = ipv4 }), On());
 
-        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit);
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
     }
 
     [Fact]
@@ -939,7 +1206,7 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Equal(new[] { "VS Code updates" }, Assert.Single(_popups));
-        Assert.Empty(_api.Selects); // nothing was moved to the phone
+        Assert.DoesNotContain(_api.Selects, select => select.Group != "default" && select.Outbound == "phone");
     }
 
     [Fact]
@@ -955,7 +1222,7 @@ public class SmartRoutingControllerTests
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
-        Assert.Empty(_api.Selects); // nothing was moved to the phone
+        Assert.DoesNotContain(_api.Selects, select => select.Group != "default" && select.Outbound == "phone");
     }
 
     // ---- Final pass I2: Auto pauses ----
@@ -975,49 +1242,42 @@ public class SmartRoutingControllerTests
     // ---- Task 11: Smart routing pauses while Wi-Fi carries the internet ----
 
     [Fact]
-    public async Task Wifi_mode_pauses_smart_routing()
+    public async Task Wifi_mode_runs_smart_routing()
     {
         var c = Create();
-        await c.ApplyAsync(Net(), On()); // running first, to prove the host gets stopped
-
-        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Wifi), On());
-
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
-
-        // The card footer: the existing "Paused " transform in SmartRoutingPresenter.Row must produce this, not a doubled message.
-        var row = SmartRoutingPresenter.Row(c.Status);
-        Assert.Equal(("⚡ Smart routing paused while on Wi-Fi", SmartTone.Muted), (row.Text, row.Tone));
-    }
-
-    [Fact]
-    public async Task Lan_unplugged_with_wifi_present_pauses()
-    {
-        var c = Create();
-        await c.ApplyAsync(Net(RoutingMode.Lan), On()); // running on the LAN
-
-        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false, wifi: true, carrier: ConnectionId.Wifi), On());
-
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
-        // Unmatched traffic must never fall onto the phone just because the LAN vanished while Wi-Fi carries.
-        Assert.DoesNotContain(("default", "phone"), _api.Selects);
-    }
-
-    [Fact]
-    public async Task Leaving_wifi_resumes()
-    {
-        var c = Create();
-        await c.ApplyAsync(Net(RoutingMode.Lan), On()); // running on the LAN
-
-        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false, wifi: true, carrier: ConnectionId.Wifi), On());
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal(SmartState.Unavailable, c.Status.State);
-
-        await c.ApplyAsync(Net(RoutingMode.Lan, wifi: true, carrier: ConnectionId.Lan), On());
-
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Wifi).WithLatency(ConnectionId.Wifi, 20), On());
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.Equal(2, _host.Starts.Count);
+        Assert.Equal(ConnectionId.Wifi, c.Status.DefaultExit);
+        using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+        var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
+    }
+
+    [Fact]
+    public async Task Lan_unplugged_with_wifi_present_runs_on_wifi()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false, wifi: true, carrier: ConnectionId.Wifi).WithLatency(ConnectionId.Wifi, 20), On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(ConnectionId.Wifi, c.Status.DefaultExit);
+        using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+        var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
+    }
+
+    [Fact]
+    public async Task Leaving_wifi_keeps_running_and_recompiles_changed_selector_membership()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(RoutingMode.Lan), On());
+        await c.ApplyAsync(Net(RoutingMode.Lan, lan: false, wifi: true, carrier: ConnectionId.Wifi).WithLatency(ConnectionId.Wifi, 20), On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        await c.ApplyAsync(Net(RoutingMode.Lan, wifi: true, carrier: ConnectionId.Lan).WithLatency(ConnectionId.Wifi, 20), On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
+        Assert.Equal(3, _host.Starts.Count);
     }
 
     [Fact]
@@ -1034,46 +1294,42 @@ public class SmartRoutingControllerTests
     // ---- Final-review fix C2: Mode=Wifi must pause even when Carrier has already moved off Wi-Fi ----
 
     [Fact]
-    public async Task Wifi_mode_pauses_even_when_carrier_is_lan()
-    {
-        var c = Create();
-        await c.ApplyAsync(Net(), On()); // running first, to prove the host gets stopped
-
-        // Wi-Fi present but, e.g., healed off onto the LAN, or mid-reconnect with no gateway yet.
-        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Lan), On());
-
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
-        // Unmatched traffic must never fall onto the phone just because Carrier isn't (yet) Wi-Fi.
-        Assert.DoesNotContain(("default", "phone"), _api.Selects);
-    }
-
-    [Fact]
-    public async Task Wifi_mode_pauses_even_when_carrier_is_phone()
+    public async Task Wifi_profile_can_run_on_lan_carrier()
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-
-        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Phone), On());
-
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
-        Assert.DoesNotContain(("default", "phone"), _api.Selects);
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Lan).WithLatency(ConnectionId.Wifi, 20), On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
+        using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+        var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
     }
 
     [Fact]
-    public async Task Wifi_mode_pauses_when_wifi_adapter_entirely_absent()
+    public async Task Wifi_profile_can_run_on_phone_without_spilling_home_rules()
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: true, carrier: ConnectionId.Phone).WithLatency(ConnectionId.Wifi, 20), On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit);
+        using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+        var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
+    }
 
-        // Mode is still Wifi (e.g. Wi-Fi just dropped) but no Wi-Fi adapter is detected at all; Carrier resolves
-        // to whatever else qualifies. Must not fall through to WantedExit/ProfileOf's phone-default behavior.
-        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: false, carrier: ConnectionId.Lan), On());
-
-        Assert.Equal(1, _host.Stops);
-        Assert.Equal((SmartState.Unavailable, SmartRoutingController.WifiPausedMessage), (c.Status.State, c.Status.Message));
-        Assert.DoesNotContain(("default", "phone"), _api.Selects);
+    [Fact]
+    public async Task Wifi_profile_with_missing_wifi_can_run_on_lan()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(), On());
+        await c.ApplyAsync(Net(RoutingMode.Wifi, wifi: false, carrier: ConnectionId.Lan).WithLatency(ConnectionId.Wifi, 20), On());
+        Assert.Equal(SmartState.Running, c.Status.State);
+        Assert.Equal(ConnectionId.Lan, c.Status.DefaultExit);
+        using var json = System.Text.Json.JsonDocument.Parse(_host.Starts.Last());
+        var home = json.RootElement.GetProperty("outbounds").EnumerateArray().Single(node => node.GetProperty("tag").GetString() == "only-home");
+        Assert.DoesNotContain(home.GetProperty("outbounds").EnumerateArray(), node => node.GetString() == "phone");
     }
 
     // ---- Final pass M1: why it failed ----
@@ -1425,7 +1681,7 @@ public class SmartRoutingControllerTests
         Assert.Contains("youtube.com", json);
         Assert.Contains("update.code.visualstudio.com", json);
         Assert.DoesNotContain("claude.ai", json);
-        Assert.Equal(RouteExit.Phone, c.Status.Profile);
+        Assert.Equal(ConnectionId.Phone, c.Status.Profile);
         Assert.Equal(2, c.Status.RuleCount);
     }
 
@@ -1443,7 +1699,7 @@ public class SmartRoutingControllerTests
         Assert.Contains("update.code.visualstudio.com", json); // the carve-out is active in both profiles
         // The LAN list stays active (after the phone rule): those downloads wait for the LAN instead of riding 4G.
         Assert.True(json.IndexOf("claude.ai", StringComparison.Ordinal) < json.IndexOf("youtube.com", StringComparison.Ordinal));
-        Assert.Equal(RouteExit.Lan, c.Status.Profile);
+        Assert.Equal(ConnectionId.Lan, c.Status.Profile);
         Assert.Equal(3, c.Status.RuleCount);
         Assert.Equal(SmartState.Running, c.Status.State);
     }
@@ -1471,10 +1727,10 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(RoutingMode.Lan, lan: false), On());
 
         Assert.Equal(SmartState.Running, c.Status.State);
-        Assert.Equal(RouteExit.Phone, c.Status.DefaultExit); // unmatched traffic heals onto the phone, as LAN mode does today
+        Assert.Equal(ConnectionId.Phone, c.Status.DefaultExit); // unmatched traffic heals onto the phone, as LAN mode does today
         Assert.Contains("claude.ai", _host.Starts[^1]);       // the phone exceptions are still there
         Assert.Empty(_popups);
-        Assert.Empty(c.Status.WaitingNames);
+        Assert.Empty(c.Status.Targets.SelectMany(target => target.Names).ToList());
     }
 
     [Theory]

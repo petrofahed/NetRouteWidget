@@ -26,7 +26,7 @@
                     <TextBlock x:Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" />
                     <TextBlock x:Name="TotalText" Margin="0,4,0,0" Foreground="{DynamicResource TextSecondary}" />
                     <Button x:Name="UsePhoneButton" Content="Use phone until LAN is back (uses mobile data)" Margin="0,8,0,0"
-                            HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" Click="OnUsePhone" />
+                            HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" />
                     <TextBlock x:Name="HintText" Margin="0,8,0,0" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
                     <TextBlock Text="Changing a rule restarts Smart routing for about a second. Downloads already running may keep their old route until they reconnect."
                                Margin="0,2,0,4" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />

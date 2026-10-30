@@ -53,51 +53,51 @@ public class SingBoxLogParserTests
     [Fact]
     public void Tracker_reports_the_entry_of_a_failed_lan_only_connection()
     {
-        var tracker = new LanWaitTracker(new Dictionary<int, string> { [1] = "youtube" });
+        var tracker = new RuleWaitTracker(new Dictionary<int, string> { [1] = "youtube" }, new Dictionary<int, RuleTarget> { [1] = RuleTarget.Home });
 
         Assert.Null(tracker.Observe(SingBoxLogParser.Parse(Match)!));
         Assert.Equal("youtube", tracker.Observe(SingBoxLogParser.Parse(FailSelector)!));
-        Assert.Equal(new[] { "youtube" }, tracker.RecentFailures(TimeSpan.FromSeconds(30)));
+        Assert.Equal(new[] { "youtube" }, tracker.RecentFailures(RuleTarget.Home, TimeSpan.FromSeconds(30)));
     }
 
     [Fact]
     public void Tracker_ignores_failures_of_connections_not_routed_lan_only()
     {
-        var tracker = new LanWaitTracker(new Dictionary<int, string> { [1] = "youtube" });
+        var tracker = new RuleWaitTracker(new Dictionary<int, string> { [1] = "youtube" }, new Dictionary<int, RuleTarget> { [1] = RuleTarget.Home });
 
         tracker.Observe(new RuleMatched("9", 1, "default"));   // matched an index but not routed only-home
         Assert.Null(tracker.Observe(new DialFailed("9", "phone")));
         Assert.Null(tracker.Observe(new DialFailed("unknown", "lan")));
-        Assert.Empty(tracker.RecentFailures(TimeSpan.FromSeconds(30)));
+        Assert.Empty(tracker.RecentFailures(RuleTarget.Home, TimeSpan.FromSeconds(30)));
     }
 
     [Fact]
     public void Tracker_maps_both_rule_indexes_to_one_entry()
     {
-        var tracker = new LanWaitTracker(new Dictionary<int, string> { [4] = "onedrive", [5] = "onedrive" });
+        var tracker = new RuleWaitTracker(new Dictionary<int, string> { [4] = "onedrive", [5] = "onedrive" }, new Dictionary<int, RuleTarget> { [4] = RuleTarget.Home, [5] = RuleTarget.Home });
 
         tracker.Observe(new RuleMatched("a", 4, "only-home"));
         tracker.Observe(new RuleMatched("b", 5, "only-home"));
         tracker.Observe(new DialFailed("a", "only-home"));
         tracker.Observe(new DialFailed("b", "only-home"));
 
-        Assert.Equal(new[] { "onedrive" }, tracker.RecentFailures(TimeSpan.FromSeconds(30)));
+        Assert.Equal(new[] { "onedrive" }, tracker.RecentFailures(RuleTarget.Home, TimeSpan.FromSeconds(30)));
     }
 
     [Fact]
     public void Old_failures_fall_out_of_the_window_and_clear_empties()
     {
         var time = new FakeTimeProvider();
-        var tracker = new LanWaitTracker(new Dictionary<int, string> { [1] = "youtube" }, time);
+        var tracker = new RuleWaitTracker(new Dictionary<int, string> { [1] = "youtube" }, new Dictionary<int, RuleTarget> { [1] = RuleTarget.Home }, time);
         tracker.Observe(new RuleMatched("1", 1, "only-home"));
         tracker.Observe(new DialFailed("1", "only-home"));
 
         time.Advance(TimeSpan.FromSeconds(31));
-        Assert.Empty(tracker.RecentFailures(TimeSpan.FromSeconds(30)));
+        Assert.Empty(tracker.RecentFailures(RuleTarget.Home, TimeSpan.FromSeconds(30)));
 
         tracker.Observe(new RuleMatched("2", 1, "only-home"));
         tracker.Observe(new DialFailed("2", "only-home"));
-        tracker.Clear();
-        Assert.Empty(tracker.RecentFailures(TimeSpan.FromSeconds(30)));
+        tracker.Clear(RuleTarget.Home);
+        Assert.Empty(tracker.RecentFailures(RuleTarget.Home, TimeSpan.FromSeconds(30)));
     }
 }

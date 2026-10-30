@@ -11,8 +11,18 @@ public class SingBoxConfigBuilderTests
         new RuleEntry("onedrive", "OneDrive", ["OneDrive.exe"], ["onedrive.live.com"]),
     ]);
 
-    static SingBoxConfigInput Input(RouteExit exit = RouteExit.Phone, bool lanRulesOnPhone = false, string? lanDns = "192.168.86.1") =>
-        new(Rules, "Ethernet 5", "Ethernet", lanDns, exit, lanRulesOnPhone, 41234, "s3cret");
+    static SingBoxConfigInput Input(ConnectionId exit = ConnectionId.Phone, bool lanRulesOnPhone = false, string? lanDns = "192.168.86.1")
+    {
+        var input = GenericInput(exit, new Dictionary<ConnectionId, string>
+        {
+            [ConnectionId.Phone] = "Ethernet 5", [ConnectionId.Lan] = "Ethernet",
+        }) with { Rules = Rules, LanDns = lanDns, ApiSecret = "s3cret" };
+        return !lanRulesOnPhone ? input : input with
+        {
+            Candidates = new Dictionary<RuleTarget, IReadOnlyList<ConnectionId>>(input.Candidates) { [RuleTarget.Home] = [ConnectionId.Lan, ConnectionId.Phone] },
+            Selected = new Dictionary<RuleTarget, ConnectionId?>(input.Selected) { [RuleTarget.Home] = ConnectionId.Phone },
+        };
+    }
 
     static JsonNode Parse(SingBoxConfig c) => JsonNode.Parse(c.Json)!;
 
@@ -20,7 +30,7 @@ public class SingBoxConfigBuilderTests
         root["outbounds"]!.AsArray().Single(o => (string)o!["tag"]! == tag)!;
 
     static SingBoxConfig BuildWith(params RuleEntry[] entries) =>
-        SingBoxConfigBuilder.Build(new SingBoxConfigInput(new RuleSet(entries), "Ethernet 5", "Ethernet", null, RouteExit.Lan, false, 41234, "s3cret"));
+        SingBoxConfigBuilder.Build(Input(ConnectionId.Lan, lanDns: null) with { Rules = new RuleSet(entries) });
 
     static JsonArray RouteRules(SingBoxConfig c) => Parse(c)["route"]!["rules"]!.AsArray();
 
@@ -39,7 +49,7 @@ public class SingBoxConfigBuilderTests
         Assert.True((bool)Outbound(root, "only-home")["interrupt_exist_connections"]!);
         Assert.True((bool)Outbound(root, "default")["interrupt_exist_connections"]!);
 
-        var healed = Parse(SingBoxConfigBuilder.Build(Input(RouteExit.Lan, lanRulesOnPhone: true)));
+        var healed = Parse(SingBoxConfigBuilder.Build(Input(ConnectionId.Lan, lanRulesOnPhone: true)));
         Assert.Equal("phone", (string)Outbound(healed, "only-home")["default"]!);
         Assert.Equal("lan", (string)Outbound(healed, "default")["default"]!);
     }

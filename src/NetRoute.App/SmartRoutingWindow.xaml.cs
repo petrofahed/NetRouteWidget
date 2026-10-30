@@ -18,7 +18,7 @@ public partial class SmartRoutingWindow : Window
     readonly Dictionary<string, bool?> _groupOn = new(); // the model's state per group (null = mixed)
     readonly List<Button> _addButtons = [];
     string? _structureKey;
-    RouteExit _renderedProfile = RouteExit.Phone; // the profile of the model last rendered: the list the user is looking at
+    ConnectionId _renderedProfile = ConnectionId.Phone; // the profile of the model last rendered: the list the user is looking at
 
     public SmartRoutingWindow()
     {
@@ -35,17 +35,19 @@ public partial class SmartRoutingWindow : Window
     public event Action<string, bool>? GroupToggled;
     /// The three user-rule events carry the profile whose list the screen showed when the user clicked (the model last
     /// rendered), so an edit lands in the list the user saw even if the App's editing profile has just changed.
-    public event Action<UserRule, bool, RouteExit>? UserRuleToggled;
-    public event Action<UserRule, RouteExit>? UserRuleRemoved;
-    public event Action<UserRuleType, RouteExit>? AddRuleRequested;
-    public event Action? UsePhoneRequested;
-    public event Action<RouteExit>? EditingProfileChanged;
+    public event Action<UserRule, bool, ConnectionId>? UserRuleToggled;
+    public event Action<UserRule, ConnectionId>? UserRuleRemoved;
+    public event Action<UserRuleType, ConnectionId>? AddRuleRequested;
+    public event Action<WaitingTarget>? UseMainRequested;
+    WaitingTarget? _renderedWaiting;
+    RoutedEventHandler? _useMainClick;
+    public event Action<ConnectionId>? EditingProfileChanged;
     public event Action<int>? UsageRangeChanged;
     public event Action<UsageSort>? UsageSortChanged;
     public event Action<string>? UsageFilterChanged;
     /// Right-click menu on a Usage row: (row key, the profile the row was rendered for, true = send to / false = exclude from
     /// that profile's exception list).
-    public event Action<string, RouteExit, bool>? UsageExceptionRequested;
+    public event Action<string, ConnectionId, bool>? UsageExceptionRequested;
     public event Action? ClearUsageRequested;
     /// "Edit rules file…" link: open the user rules file (rules.user.json) in the default editor.
     public event Action? EditRulesFileRequested;
@@ -119,11 +121,16 @@ public partial class SmartRoutingWindow : Window
         MasterToggle.IsChecked = model.Enabled;
         StatusText.Text = model.Status.Text;
         // The selector's checked state comes from the model, so a click is undone until the App confirms (like the card's mode buttons).
-        var lanView = model.EditingProfile == RouteExit.Lan;
+        _renderedWaiting = model.Targets.FirstOrDefault(target => target.CanUseMain);
+        if (_useMainClick is not null) UsePhoneButton.Click -= _useMainClick;
+        var capturedRequest = _renderedWaiting;
+        _useMainClick = (_, _) => { if (capturedRequest is { } request) UseMainRequested?.Invoke(request); };
+        UsePhoneButton.Click += _useMainClick;
+        var lanView = model.EditingProfile == ConnectionId.Lan;
         EditPhoneProfile.IsChecked = !lanView;
         EditLanProfile.IsChecked = lanView;
-        EditPhoneProfile.Content = "Phone + exceptions" + (model.ActiveProfile == RouteExit.Phone ? "  ● active" : "");
-        EditLanProfile.Content = "LAN + exceptions" + (model.ActiveProfile == RouteExit.Lan ? "  ● active" : "");
+        EditPhoneProfile.Content = "Phone + exceptions" + (model.ActiveProfile == ConnectionId.Phone ? "  ● active" : "");
+        EditLanProfile.Content = "LAN + exceptions" + (model.ActiveProfile == ConnectionId.Lan ? "  ● active" : "");
         TotalText.Text = lanView
             ? "Everything else goes through the LAN. These go through the phone."
             : $"Kept off 4G today: {ByteFormat.Human(model.TotalToday)}";
@@ -131,6 +138,9 @@ public partial class SmartRoutingWindow : Window
             ? "Turned-off items go through the LAN like everything else. Your LAN list (the Phone + exceptions view) stays active in this profile too: those downloads wait for the LAN instead of falling onto 4G."
             : "Turned-off items go through the phone like everything else.";
         UsePhoneButton.Visibility = model.CanUsePhone ? Visibility.Visible : Visibility.Collapsed;
+        if (_renderedWaiting is { } waiting)
+            UsePhoneButton.Content = $"Use {Connections.Label(waiting.Main)} until {SmartRoutingController.TargetLabel(waiting.Target)} is back"
+                + (Connections.IsMetered(waiting.Main) ? " (uses mobile data)" : "");
 
         foreach (var group in model.Groups)
         {
@@ -207,7 +217,7 @@ public partial class SmartRoutingWindow : Window
         DockPanel.SetDock(addApp, Dock.Right);
         header.Children.Add(addWebsite);
         header.Children.Add(addApp);
-        header.Children.Add(new TextBlock { Text = model.EditingProfile == RouteExit.Lan ? "My phone rules" : "My rules", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(new TextBlock { Text = model.EditingProfile == ConnectionId.Lan ? "My phone rules" : "My rules", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
         panel.Children.Add(header);
 
         if (model.UserRules.Count == 0)
@@ -249,9 +259,8 @@ public partial class SmartRoutingWindow : Window
 
     void OnMaster(object sender, RoutedEventArgs e) => MasterToggled?.Invoke(MasterToggle.IsChecked == true);
 
-    void OnEditPhoneProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(RouteExit.Phone);
+    void OnEditPhoneProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(ConnectionId.Phone);
 
-    void OnEditLanProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(RouteExit.Lan);
+    void OnEditLanProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(ConnectionId.Lan);
 
-    void OnUsePhone(object sender, RoutedEventArgs e) => UsePhoneRequested?.Invoke();
 }

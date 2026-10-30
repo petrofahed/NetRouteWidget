@@ -10,7 +10,7 @@ public class UsageExceptionsTests
     ];
 
     /// What a click does when the menu displayed the current state.
-    static SmartRoutingSettings Toggle(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings s, RouteExit profile, string key) =>
+    static SmartRoutingSettings Toggle(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings s, ConnectionId profile, string key) =>
         UsageExceptions.Set(catalog, s, profile, key, !UsageExceptions.Describe(catalog, s, profile, key).InException);
 
     [Fact]
@@ -19,10 +19,10 @@ public class UsageExceptionsTests
         var on = new SmartRoutingSettings();
         var off = on.WithItem("youtube", false);
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, on, RouteExit.Phone, "youtube"));
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, off, RouteExit.Phone, "youtube"));
-        Assert.False(Toggle(Catalog, on, RouteExit.Phone, "youtube").IsItemOn(Catalog[0]));
-        Assert.True(Toggle(Catalog, off, RouteExit.Phone, "youtube").IsItemOn(Catalog[0]));
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, on, ConnectionId.Phone, "youtube"));
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, off, ConnectionId.Phone, "youtube"));
+        Assert.False(Toggle(Catalog, on, ConnectionId.Phone, "youtube").IsItemOn(Catalog[0]));
+        Assert.True(Toggle(Catalog, off, ConnectionId.Phone, "youtube").IsItemOn(Catalog[0]));
     }
 
     [Fact]
@@ -30,9 +30,9 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(new ExceptionState(false, false, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, RouteExit.Phone, "claude"));
-        Assert.Equal(new ExceptionState(false, false, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "youtube"));
-        Assert.Equal(s, Toggle(Catalog, s, RouteExit.Phone, "claude"));
+        Assert.Equal(new ExceptionState(false, false, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "claude"));
+        Assert.Equal(new ExceptionState(false, false, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "youtube"));
+        Assert.Equal(s, Toggle(Catalog, s, ConnectionId.Phone, "claude"));
     }
 
     [Fact]
@@ -40,9 +40,9 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "claude"));
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "vscode-updates"));
-        Assert.False(Toggle(Catalog, s, RouteExit.Lan, "claude").IsItemOn(Catalog[1]));
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "claude"));
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "vscode-updates"));
+        Assert.False(Toggle(Catalog, s, ConnectionId.Lan, "claude").IsItemOn(Catalog[1]));
     }
 
     [Fact]
@@ -50,30 +50,30 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Phone, "app:chrome.exe"));
-        var added = Toggle(Catalog, s, RouteExit.Phone, "app:chrome.exe");
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "app:chrome.exe"));
+        var added = Toggle(Catalog, s, ConnectionId.Phone, "app:chrome.exe");
         Assert.Equal(new UserRule(UserRuleType.App, "chrome.exe", true), Assert.Single(added.UserRules));
         Assert.Empty(added.PhoneUserRules);
-        Assert.True(UsageExceptions.Describe(Catalog, added, RouteExit.Phone, "app:chrome.exe").InException);
+        Assert.True(UsageExceptions.Describe(Catalog, added, ConnectionId.Phone, "app:chrome.exe").InException);
 
-        var removed = Toggle(Catalog, added, RouteExit.Phone, "app:chrome.exe");
+        var removed = Toggle(Catalog, added, ConnectionId.Phone, "app:chrome.exe");
         Assert.False(Assert.Single(removed.UserRules).Enabled); // the rule stays listed on the Config tab, switched off
-        Assert.False(UsageExceptions.Describe(Catalog, removed, RouteExit.Phone, "app:chrome.exe").InException);
+        Assert.False(UsageExceptions.Describe(Catalog, removed, ConnectionId.Phone, "app:chrome.exe").InException);
 
-        var again = Toggle(Catalog, removed, RouteExit.Phone, "app:chrome.exe");
+        var again = Toggle(Catalog, removed, ConnectionId.Phone, "app:chrome.exe");
         Assert.True(Assert.Single(again.UserRules).Enabled);
     }
 
     [Fact]
     public void In_the_lan_profile_an_application_goes_to_the_phone_list()
     {
-        var added = Toggle(Catalog, new SmartRoutingSettings(), RouteExit.Lan, "app:qbittorrent.exe");
+        var added = Toggle(Catalog, new SmartRoutingSettings(), ConnectionId.Lan, "app:qbittorrent.exe");
 
         Assert.Empty(added.UserRules);
         Assert.Equal(new UserRule(UserRuleType.App, "qbittorrent.exe", true), Assert.Single(added.PhoneUserRules));
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, added, RouteExit.Lan, "app:qbittorrent.exe"));
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Phone), UsageExceptions.Describe(Catalog, added, ConnectionId.Lan, "app:qbittorrent.exe"));
         // The same app is not an exception of the other profile.
-        Assert.False(UsageExceptions.Describe(Catalog, added, RouteExit.Phone, "app:qbittorrent.exe").InException);
+        Assert.False(UsageExceptions.Describe(Catalog, added, ConnectionId.Phone, "app:qbittorrent.exe").InException);
     }
 
     [Fact]
@@ -81,10 +81,10 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings().WithUserRule(new UserRule(UserRuleType.Website, "dropbox.com"));
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, RouteExit.Phone, "user:website:dropbox.com"));
-        Assert.False(Assert.Single(Toggle(Catalog, s, RouteExit.Phone, "user:website:dropbox.com").UserRules).Enabled);
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, "user:website:dropbox.com"));
+        Assert.False(Assert.Single(Toggle(Catalog, s, ConnectionId.Phone, "user:website:dropbox.com").UserRules).Enabled);
         // In the LAN profile that rule belongs to the other list: not changeable here.
-        Assert.False(UsageExceptions.Describe(Catalog, s, RouteExit.Lan, "user:website:dropbox.com").CanChange);
+        Assert.False(UsageExceptions.Describe(Catalog, s, ConnectionId.Lan, "user:website:dropbox.com").CanChange);
     }
 
     [Theory]
@@ -97,8 +97,8 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.False(UsageExceptions.Describe(Catalog, s, RouteExit.Phone, key).CanChange);
-        Assert.Equal(s, Toggle(Catalog, s, RouteExit.Phone, key));
+        Assert.False(UsageExceptions.Describe(Catalog, s, ConnectionId.Phone, key).CanChange);
+        Assert.Equal(s, Toggle(Catalog, s, ConnectionId.Phone, key));
     }
 
     [Fact]
@@ -106,11 +106,11 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        var off = UsageExceptions.Set(Catalog, s, RouteExit.Phone, "youtube", false);
+        var off = UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "youtube", false);
         Assert.False(off.IsItemOn(Catalog[0]));
-        Assert.Equal(off, UsageExceptions.Set(Catalog, off, RouteExit.Phone, "youtube", false)); // second time: nothing changes
-        Assert.True(UsageExceptions.Set(Catalog, off, RouteExit.Phone, "youtube", true).IsItemOn(Catalog[0]));
-        Assert.Equal(s, UsageExceptions.Set(Catalog, s, RouteExit.Phone, "youtube", true)); // already on
+        Assert.Equal(off, UsageExceptions.Set(Catalog, off, ConnectionId.Phone, "youtube", false)); // second time: nothing changes
+        Assert.True(UsageExceptions.Set(Catalog, off, ConnectionId.Phone, "youtube", true).IsItemOn(Catalog[0]));
+        Assert.Equal(s, UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "youtube", true)); // already on
     }
 
     [Fact]
@@ -118,11 +118,11 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        var added = UsageExceptions.Set(Catalog, s, RouteExit.Phone, "app:chrome.exe", true);
+        var added = UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "app:chrome.exe", true);
         Assert.Equal("chrome.exe", Assert.Single(added.UserRules).Value);
-        Assert.Equal(added, UsageExceptions.Set(Catalog, added, RouteExit.Phone, "app:chrome.exe", true));
-        Assert.Equal(s, UsageExceptions.Set(Catalog, s, RouteExit.Phone, "app:chrome.exe", false)); // nothing to remove
-        Assert.False(Assert.Single(UsageExceptions.Set(Catalog, added, RouteExit.Phone, "app:chrome.exe", false).UserRules).Enabled);
+        Assert.Equal(added, UsageExceptions.Set(Catalog, added, ConnectionId.Phone, "app:chrome.exe", true));
+        Assert.Equal(s, UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "app:chrome.exe", false)); // nothing to remove
+        Assert.False(Assert.Single(UsageExceptions.Set(Catalog, added, ConnectionId.Phone, "app:chrome.exe", false).UserRules).Enabled);
     }
 
     [Fact]
@@ -130,10 +130,10 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.Website, "dropbox.com")] };
 
-        var off = UsageExceptions.Set(Catalog, s, RouteExit.Phone, "user:website:dropbox.com", false);
+        var off = UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "user:website:dropbox.com", false);
 
         Assert.False(Assert.Single(off.UserRules).Enabled);
-        Assert.Equal(off, UsageExceptions.Set(Catalog, off, RouteExit.Phone, "user:website:dropbox.com", false));
+        Assert.Equal(off, UsageExceptions.Set(Catalog, off, ConnectionId.Phone, "user:website:dropbox.com", false));
     }
 
     [Fact]
@@ -141,8 +141,8 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        var lan = UsageExceptions.Set(Catalog, s, RouteExit.Lan, "app:qbittorrent.exe", true);
-        var phone = UsageExceptions.Set(Catalog, s, RouteExit.Phone, "app:qbittorrent.exe", true);
+        var lan = UsageExceptions.Set(Catalog, s, ConnectionId.Lan, "app:qbittorrent.exe", true);
+        var phone = UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "app:qbittorrent.exe", true);
 
         Assert.Empty(lan.UserRules);
         Assert.Equal("qbittorrent.exe", Assert.Single(lan.PhoneUserRules).Value);
@@ -155,8 +155,8 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings();
 
-        Assert.Equal(s, UsageExceptions.Set(Catalog, s, RouteExit.Phone, "claude", true));
-        Assert.Equal(s, UsageExceptions.Set(Catalog, s, RouteExit.Phone, "other", true));
+        Assert.Equal(s, UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "claude", true));
+        Assert.Equal(s, UsageExceptions.Set(Catalog, s, ConnectionId.Phone, "other", true));
     }
 
     static readonly IReadOnlyList<RuleItem> ClaimCatalog =
@@ -170,12 +170,12 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings { UserRules = [new UserRule(UserRuleType.App, "code.exe")] };
 
-        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(ClaimCatalog, s, RouteExit.Phone, "vscode"));
-        var off = UsageExceptions.Set(ClaimCatalog, s, RouteExit.Phone, "vscode", false);
+        Assert.Equal(new ExceptionState(true, true, RouteExit.Lan), UsageExceptions.Describe(ClaimCatalog, s, ConnectionId.Phone, "vscode"));
+        var off = UsageExceptions.Set(ClaimCatalog, s, ConnectionId.Phone, "vscode", false);
         Assert.False(Assert.Single(off.UserRules).Enabled);
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(ClaimCatalog, off, RouteExit.Phone, "vscode"));
-        Assert.True(Assert.Single(UsageExceptions.Set(ClaimCatalog, off, RouteExit.Phone, "vscode", true).UserRules).Enabled);
-        Assert.False(UsageExceptions.Describe(ClaimCatalog, new SmartRoutingSettings(), RouteExit.Phone, "vscode").CanChange); // no such rule: locked
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), UsageExceptions.Describe(ClaimCatalog, off, ConnectionId.Phone, "vscode"));
+        Assert.True(Assert.Single(UsageExceptions.Set(ClaimCatalog, off, ConnectionId.Phone, "vscode", true).UserRules).Enabled);
+        Assert.False(UsageExceptions.Describe(ClaimCatalog, new SmartRoutingSettings(), ConnectionId.Phone, "vscode").CanChange); // no such rule: locked
     }
 
     [Fact]
@@ -183,10 +183,10 @@ public class UsageExceptionsTests
     {
         var s = new SmartRoutingSettings { PhoneUserRules = [new UserRule(UserRuleType.App, "STEAM.exe", Enabled: false)] };
 
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Phone), UsageExceptions.Describe(ClaimCatalog, s, RouteExit.Lan, "steam"));
-        var on = UsageExceptions.Set(ClaimCatalog, s, RouteExit.Lan, "steam", true);
+        Assert.Equal(new ExceptionState(false, true, RouteExit.Phone), UsageExceptions.Describe(ClaimCatalog, s, ConnectionId.Lan, "steam"));
+        var on = UsageExceptions.Set(ClaimCatalog, s, ConnectionId.Lan, "steam", true);
         Assert.True(Assert.Single(on.PhoneUserRules).Enabled);
         Assert.Empty(on.UserRules);
-        Assert.False(UsageExceptions.Describe(ClaimCatalog, new SmartRoutingSettings(), RouteExit.Lan, "steam").CanChange);
+        Assert.False(UsageExceptions.Describe(ClaimCatalog, new SmartRoutingSettings(), ConnectionId.Lan, "steam").CanChange);
     }
 }

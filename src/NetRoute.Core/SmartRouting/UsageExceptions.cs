@@ -8,9 +8,9 @@ public readonly record struct ExceptionState(bool InException, bool CanChange, R
 /// and rule lists as the Config tab. profile = the active profile's default exit (Phone = "Phone + exceptions").
 public static class UsageExceptions
 {
-    public static ExceptionState Describe(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string key)
+    public static ExceptionState Describe(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, ConnectionId profile, string key)
     {
-        var destination = profile == RouteExit.Phone ? RouteExit.Lan : RouteExit.Phone;
+        var destination = profile == ConnectionId.Phone ? RouteExit.Lan : RouteExit.Phone;
         if (catalog.FirstOrDefault(i => i.Id == key) is { } item)
         {
             if (Belongs(item, profile)) return new(settings.IsItemOn(item), true, item.Exit);
@@ -29,7 +29,7 @@ public static class UsageExceptions
     /// The settings with the row switched to "on" (in the exceptions of the profile) or off. Unchanged when the row cannot
     /// be changed from here or is already in that state. The caller passes the state the menu DISPLAYED, so a click never
     /// flips what changed on screen in the meantime.
-    public static SmartRoutingSettings Set(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profile, string key, bool on)
+    public static SmartRoutingSettings Set(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, ConnectionId profile, string key, bool on)
     {
         var state = Describe(catalog, settings, profile, key);
         if (!state.CanChange || state.InException == on) return settings;
@@ -54,14 +54,14 @@ public static class UsageExceptions
         list.FirstOrDefault(r => r.Type == UserRuleType.App && item.Processes.Any(p => string.Equals(p, r.Value, StringComparison.OrdinalIgnoreCase)));
 
     /// The Phone profile's exceptions are the LAN items; the LAN profile's are the phone items plus the carve-outs.
-    static bool Belongs(RuleItem item, RouteExit profile) =>
-        profile == RouteExit.Phone ? item.Exit == RouteExit.Lan : item.Exit == RouteExit.Phone || item.CarveOut;
+    static bool Belongs(RuleItem item, ConnectionId profile) =>
+        profile == ConnectionId.Phone ? item.Exit == RouteExit.Lan : item.Exit == RouteExit.Phone || item.CarveOut;
 
-    static IReadOnlyList<UserRule> ListFor(SmartRoutingSettings s, RouteExit profile) =>
-        profile == RouteExit.Phone ? s.UserRules : s.PhoneUserRules;
+    static IReadOnlyList<UserRule> ListFor(SmartRoutingSettings s, ConnectionId profile) =>
+        s.RulesFor(profile);
 
-    static SmartRoutingSettings With(SmartRoutingSettings s, RouteExit profile, UserRule rule) =>
-        profile == RouteExit.Phone ? s.WithUserRule(rule) : s.WithPhoneUserRule(rule);
+    static SmartRoutingSettings With(SmartRoutingSettings s, ConnectionId profile, UserRule rule) =>
+        s.WithUserRule(profile, rule);
 
     /// The exe file name of an "app:" row, or null when the key is not an application row or the name is not a valid exe name.
     static string? AppExe(string key)

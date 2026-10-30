@@ -89,7 +89,7 @@ public class RuleSetTests
             PhoneUserRules = [new UserRule(UserRuleType.App, "ignored.exe")],
         };
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Phone);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Phone);
 
         Assert.Equal(new[] { "vscode-updates", "youtube", "user:app:qbittorrent.exe" }, set.Entries.Select(e => e.Id));
         Assert.All(set.Entries, e => Assert.Equal(RuleTarget.Home, e.Target));
@@ -104,7 +104,7 @@ public class RuleSetTests
             PhoneUserRules = [new UserRule(UserRuleType.Website, "example.com")],
         };
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Lan);
 
         // The update domain (LAN) is matched before the code.exe rule (phone), so a VS Code update never rides the phone.
         // The LAN list stays active after the phone entries: those downloads wait for the LAN instead of healing onto 4G.
@@ -123,7 +123,7 @@ public class RuleSetTests
             PhoneUserRules = [new UserRule(UserRuleType.App, "x.exe", Enabled: false)],
         }.WithItem("claude", false).WithItem("vscode-updates", false);
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Lan);
 
         Assert.Equal(new[] { "vscode", "youtube" }, set.Entries.Select(e => e.Id));
     }
@@ -136,7 +136,7 @@ public class RuleSetTests
             UserRules = [new UserRule(UserRuleType.App, "off.exe", Enabled: false)],
         }.WithItem("youtube", false);
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Lan);
 
         Assert.DoesNotContain(set.Entries, e => e.Id == "youtube" || e.Id == "user:app:off.exe");
     }
@@ -147,7 +147,7 @@ public class RuleSetTests
         var settings = new SmartRoutingSettings();
 
         Assert.Equal(
-            RuleSet.Build(V4Catalog, settings, RouteExit.Phone).Fingerprint,
+            RuleSet.Build(V4Catalog, settings, ConnectionId.Phone).Fingerprint,
             RuleSet.Build(V4Catalog, settings).Fingerprint);
     }
 
@@ -173,8 +173,8 @@ public class RuleSetTests
         var settings = new SmartRoutingSettings();
 
         Assert.NotEqual(
-            RuleSet.Build(V4Catalog, settings, RouteExit.Phone).Fingerprint,
-            RuleSet.Build(V4Catalog, settings, RouteExit.Lan).Fingerprint);
+            RuleSet.Build(V4Catalog, settings, ConnectionId.Phone).Fingerprint,
+            RuleSet.Build(V4Catalog, settings, ConnectionId.Lan).Fingerprint);
     }
 
     [Theory]
