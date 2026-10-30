@@ -211,11 +211,34 @@ def resource_listings(events):
     return shown
 
 
+def write_refused(events):
+    """Evidence in Codex's own event stream (not its reply) that it tried to write the probe and was refused: a
+    completed command or file change naming the probe that failed. An absent probe alone proves nothing, since
+    Codex may simply not have tried."""
+    for line in events.splitlines():
+        try:
+            event = json.loads(line)
+            item = event.get("item") or {}
+            kind, call = event.get("type"), item.get("type")
+        except (ValueError, AttributeError):
+            continue
+        if kind != "item.completed":
+            continue
+        if call == "command_execution" and PROBE in str(item.get("command")) \
+                and (item.get("status") == "failed" or item.get("exit_code") not in (0, None)):
+            return True
+        if call == "file_change" and PROBE in json.dumps(item.get("changes")) and item.get("status") == "failed":
+            return True
+    return False
+
+
 def check_canary(repo, reply, events=""):
     probe = Path(repo) / PROBE
     if probe.exists():
         probe.unlink()
         raise Pending("the read-only settings did not apply: Codex could write a file")
+    if not write_refused(events):
+        raise Pending("the canary shows no refused write attempt: an absent probe alone does not prove read-only")
     line = next((l for l in reply.splitlines() if l.strip().upper().startswith("TOOLS:")), None)
     if line is None:
         raise Pending("the canary reply did not list Codex's tools")

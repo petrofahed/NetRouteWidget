@@ -290,5 +290,29 @@ class AuditTests(unittest.TestCase):
         self.assertIn(old, call.call_args.args[1])
 
 
+cleanup = load("pr-team-cleanup")
+
+
+class CleanupTests(unittest.TestCase):
+    def test_only_build_output_and_the_root_cache_are_disposable(self):
+        self.assertTrue(cleanup.disposable("!! src/NetRoute.App/bin/Debug/x.dll"))
+        self.assertTrue(cleanup.disposable("!! .cache/sing-box/1.14.2/sing-box.zip"))
+        self.assertFalse(cleanup.disposable("!! docs/.cache/notes.txt"))
+        self.assertFalse(cleanup.disposable("!! secrets.env"))
+
+    def test_a_worktree_outside_the_expected_folder_is_kept(self):
+        with tempfile.TemporaryDirectory() as moved, tempfile.TemporaryDirectory() as expected:
+            Path(moved, cleanup.MARKER).write_text("")
+            with patch.object(cleanup, "run") as run:
+                why = cleanup.reasons_to_keep(moved, "pr-7-team", "7", expected=expected)
+            self.assertIn("not where /pr-team creates it", why)
+            run.assert_not_called()  # kept before GitHub or git is even asked
+
+    def test_the_expected_folder_sits_next_to_the_main_checkout(self):
+        common = str(Path("F:/src/NetRouteWidget/.git"))
+        with patch.object(cleanup, "run", return_value=subprocess.CompletedProcess([], 0, common + "\n", "")):
+            self.assertEqual(Path(cleanup.expected_folder("7")), Path("F:/src/NetRouteWidget-pr-7"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

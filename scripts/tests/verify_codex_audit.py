@@ -50,6 +50,17 @@ shown = "other-session" if (mode == "wrongsession" and resumed) else session
 print(json.dumps({"type": "thread.started", "thread_id": shown}))
 if "CANARY" in stdin:
     if mode == "writes": open("CODEX_AUDIT_WRITE_PROBE.txt", "w").write("probe")
+    # A real read-only canary shows the probe write as a command that the sandbox refused (exit 1, status failed).
+    attempt = {"nowriteattempt": None,
+               "writeok": {"exit_code": 0, "status": "completed"},
+               "writeother": {"exit_code": 1, "status": "failed", "command": "pwsh -Command Get-Date"}}.get(
+                   mode, {"exit_code": 1, "status": "failed"})
+    if attempt is not None:
+        item = {"id": "item_w", "type": "command_execution", "aggregated_output": "Access ... is denied.",
+                "command": "pwsh -Command Set-Content -LiteralPath 'CODEX_AUDIT_WRITE_PROBE.txt' -Value probe"}
+        item.update(attempt)
+        print(json.dumps({"type": "item.started", "item": dict(item, status="in_progress", exit_code=None)}))
+        print(json.dumps({"type": "item.completed", "item": item}))
     if mode == "canaryother": open("sneaky.txt", "w").write("x")
     tools = "functions.exec, tools.exec_command, tools.apply_patch, collaboration.spawn_agent"
     if mode == "badtools": tools += ", mcp__codex_apps__gmail_send_email"
@@ -265,6 +276,14 @@ def main():
         c = Case(mode)
         r = c.run(ca)
         pending(f"{name} is pending", r, fragment)
+        check(f"PR text is never sent for {name}", not any(x["has_pr"] for x in c.calls()))
+
+    for mode, name in [("nowriteattempt", "a canary that never tries the write"),
+                       ("writeok", "a canary whose write command succeeds but leaves no file"),
+                       ("writeother", "a canary whose only failed command is not the probe write")]:
+        c = Case(mode)
+        r = c.run(ca)
+        pending(f"{name} is pending", r, "no refused write attempt")
         check(f"PR text is never sent for {name}", not any(x["has_pr"] for x in c.calls()))
 
     c = Case("writes")

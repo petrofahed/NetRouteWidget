@@ -1,11 +1,12 @@
 """Remove /pr-team worktrees whose PR is merged or closed.
 
 Run at the start of every /pr-team. A worktree is removed only when ALL of these are proven:
+- it is where /pr-team creates it: ../NetRouteWidget-pr-<N> next to the main checkout (a moved folder is kept);
 - it carries the `.pr-team-owned` marker that /pr-team writes when it creates the folder;
 - GitHub answers, and says the PR is MERGED or CLOSED;
 - it has no uncommitted or untracked work other than PLAN.md and the marker;
 - every ignored file in it is disposable build/test output (bin/, obj/, TestResults/, .vs/, __pycache__/, and the
-  .cache/ the build downloads the pinned sing-box release into);
+  .cache/ at the worktree root that the build downloads the pinned sing-box release into);
 - every local commit is on GitHub: on a freshly fetched origin branch, or inside the PR head GitHub recorded
   (refs/pull/<N>/head survives a squash merge and a deleted branch).
 If any check cannot be completed, the folder is kept and the reason printed — never discarded.
@@ -19,7 +20,10 @@ import sys
 
 MARKER = ".pr-team-owned"
 ALLOWED_UNTRACKED = {"?? PLAN.md", f"?? {MARKER}"}
-DISPOSABLE_DIRS = {"bin", "obj", "TestResults", ".vs", "__pycache__", ".cache"}
+DISPOSABLE_DIRS = {"bin", "obj", "TestResults", ".vs", "__pycache__"}
+# Disposable only as the worktree's top folder: the build's sing-box download (build/SingBox.props), nothing deeper.
+DISPOSABLE_ROOT_DIRS = {".cache"}
+FOLDER_PREFIX = "NetRouteWidget-pr-"
 
 
 def run(*args, cwd=None):
@@ -40,12 +44,28 @@ def team_worktrees():
 
 
 def disposable(entry):
-    """An ignored-file status line ('!! path') is disposable when a path segment is a build/test dir."""
+    """An ignored-file status line ('!! path') is disposable when a path segment is a build/test dir, or its first
+    segment is a root-only disposable dir."""
     parts = entry[3:].strip().strip('"').replace("\\", "/").rstrip("/").split("/")
-    return any(p in DISPOSABLE_DIRS for p in parts)
+    return any(p in DISPOSABLE_DIRS for p in parts) or parts[0] in DISPOSABLE_ROOT_DIRS
 
 
-def reasons_to_keep(path, branch, n):
+def same_path(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def expected_folder(n):
+    """Where /pr-team creates PR <n>'s worktree: next to the main checkout (the parent of the shared .git)."""
+    common = run("git", "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    if not common:
+        return None
+    return os.path.join(os.path.dirname(os.path.dirname(common)), f"{FOLDER_PREFIX}{n}")
+
+
+def reasons_to_keep(path, branch, n, expected=None):
+    expected = expected if expected is not None else expected_folder(n)
+    if not expected or not same_path(path, expected):
+        return f"not where /pr-team creates it ({expected or 'unknown'})"
     if not os.path.exists(os.path.join(path, MARKER)):
         return "not made by /pr-team (no marker)"
     state = run("gh", "pr", "view", n, "--json", "state", "--jq", ".state")
