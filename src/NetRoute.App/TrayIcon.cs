@@ -57,13 +57,13 @@ sealed class TrayIcon : IDisposable
     {
         _icon.Icon = IconFor(view.TrayColor, view.TrayBadge);
         _icon.Text = view.Tooltip.Length > 127 ? view.Tooltip[..127] : view.Tooltip;
-        _wifi.Visible = view.Rows.Any(r => r.Id == ConnectionId.Wifi); // hidden when no Wi-Fi adapter is configured, matching CardWindow's WifiButton
+        _wifi.Visible = view.Rows.Any(r => r.Id == ConnectionId.Wifi); // Off stays configured and visible here; only the compact card hides it.
         _phone.Checked = mode == RoutingMode.Phone;
         _lan.Checked = mode == RoutingMode.Lan;
         _wifi.Checked = mode == RoutingMode.Wifi;
         _auto.Checked = mode == RoutingMode.Auto;
         _auto.Enabled = canModify;
-        // Matches the card's mode buttons: an item works only while its connection has a row and is on.
+        // Off items stay visible but disabled in the tray; the compact card hides them.
         bool Pickable(ConnectionId id) => canModify && view.Rows.Any(r => r.Id == id && !r.Row.IsOff);
         _phone.Enabled = Pickable(ConnectionId.Phone);
         _lan.Enabled = Pickable(ConnectionId.Lan);

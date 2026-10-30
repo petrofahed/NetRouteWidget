@@ -367,6 +367,78 @@ public class StatusPresenterTests
         Assert.Equal("Internet: Phone (38 ms)", view.Tooltip);
     }
 
+    [Theory]
+    [InlineData(ConnectionId.Phone)]
+    [InlineData(ConnectionId.Lan)]
+    [InlineData(ConnectionId.Wifi)]
+    public void Off_connection_is_hidden_from_the_card_and_returns_when_enabled(ConnectionId id)
+    {
+        var adapters = new[] { TestAdapters.Phone(), TestAdapters.Lan(), TestAdapters.Wifi() };
+        var overrides = new AdapterOverrides(null, null, "AA-BB-CC-00-00-18");
+        var status = StatusWith3(RoutingMode.Auto);
+        var off = StatusPresenter.Present(status with { Adapters = AdapterDetector.Detect(adapters, overrides, [id]) });
+
+        Assert.DoesNotContain(off.VisibleRows, row => row.Id == id);
+        Assert.False(off.IsModeButtonVisible(id));
+        // The tray still receives the configured connection and its disabled state.
+        Assert.True(off.Rows.Single(row => row.Id == id).Row.IsOff);
+
+        var on = StatusPresenter.Present(status with { Adapters = AdapterDetector.Detect(adapters, overrides, []) });
+        Assert.Equal([ConnectionId.Phone, ConnectionId.Lan, ConnectionId.Wifi], on.VisibleRows.Select(row => row.Id));
+        Assert.True(on.IsModeButtonVisible(id));
+    }
+
+    [Fact]
+    public void Chosen_but_disconnected_connections_still_show_rows_and_mode_buttons()
+    {
+        var status = StatusWith3(RoutingMode.Auto) with
+        {
+            Adapters = DetectionResult.Of(null, DetectionIssue.NotFound, null, DetectionIssue.NotFound, null, DetectionIssue.NotFound),
+        };
+        var view = StatusPresenter.Present(status);
+
+        Assert.Equal([ConnectionId.Phone, ConnectionId.Lan, ConnectionId.Wifi], view.VisibleRows.Select(row => row.Id));
+        Assert.All(view.VisibleRows, row =>
+        {
+            Assert.Equal("not connected", row.Row.Address);
+            Assert.True(view.IsModeButtonVisible(row.Id));
+        });
+    }
+
+    [Fact]
+    public void All_off_hides_all_card_rows_and_mode_buttons_without_changing_tray_metadata()
+    {
+        var status = StatusWith3(RoutingMode.Auto) with
+        {
+            Adapters = AdapterDetector.Detect([TestAdapters.Phone(), TestAdapters.Lan(), TestAdapters.Wifi()],
+                new AdapterOverrides(null, null, "AA-BB-CC-00-00-18"), Connections.All),
+        };
+        var view = StatusPresenter.Present(status);
+
+        Assert.Empty(view.VisibleRows);
+        Assert.Equal([ConnectionId.Phone, ConnectionId.Lan, ConnectionId.Wifi], view.Rows.Select(row => row.Id));
+        Assert.All(view.Rows, row =>
+        {
+            Assert.True(row.Row.IsOff);
+            Assert.False(view.IsModeButtonVisible(row.Id));
+        });
+    }
+
+    [Fact]
+    public void Not_used_slots_keep_the_existing_mode_button_visibility()
+    {
+        var status = StatusWith3(RoutingMode.Auto) with
+        {
+            Adapters = DetectionResult.Of(null, DetectionIssue.NotUsed, null, DetectionIssue.NotUsed, null, DetectionIssue.NotUsed),
+        };
+        var view = StatusPresenter.Present(status);
+
+        Assert.Empty(view.VisibleRows);
+        Assert.True(view.IsModeButtonVisible(ConnectionId.Phone));
+        Assert.True(view.IsModeButtonVisible(ConnectionId.Lan));
+        Assert.False(view.IsModeButtonVisible(ConnectionId.Wifi));
+    }
+
     [Fact]
     public void Windows_routing_through_an_off_adapter_is_still_named()
     {

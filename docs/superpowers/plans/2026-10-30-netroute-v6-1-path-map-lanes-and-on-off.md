@@ -6,6 +6,7 @@
 - The path map draws one lane per chosen connection (LAN, Wi-Fi, Phone), so Wi-Fi shows up on the map.
 - Every card row's dot turns that connection off and on again.
 - Choose adapters also has an Enabled on/off toggle beside each adapter. OK applies all choices and toggles together; Cancel or closing discards them. The card dots remain shortcuts.
+- An explicitly off connection's compact-widget row and mode button are hidden. Its configured Choose adapters toggle remains available to turn it on again; chosen but disconnected connections remain visible.
 
 **Architecture:**
 - **Off** is a new `DetectionIssue.TurnedOff`. `AdapterDetector.Detect` takes the saved `TurnedOff` list and empties those slots. Everything that already skips a Not-used slot (metrics, probes, heal, pin, Smart routing, path map) then skips an off one for free. Only the card and tray tell the two apart.
@@ -41,7 +42,7 @@
     - 3 lanes: `"All connections reach the internet."`
     - 1 lane: that lane's own `Line(...)`.
     - 0 lanes: `"No connection is in use."`
-  - Off row on the card: address column `"off"`, latency `""`, `Dot.Gray`, not active.
+  - Raw off-row metadata for the tray: address column `"off"`, latency `""`, `Dot.Gray`, not active. The compact card hides the row and mode button; Choose adapters restores it.
   - Dot tooltip: `"Turn LAN off"` / `"Turn LAN on"`, using `Connections.Label(id)`.
   - Mode refused for an off connection: `"LAN is turned off"`, using `Connections.Label(id)`.
   - Log lines: `"LAN turned off"`, `"LAN turned on"`.
@@ -142,11 +143,13 @@ Run: `dotnet test tests/NetRoute.Core.Tests --filter "Category!=Integration"`
 
 **Owner refinement (2026-10-30):** add an Enabled on/off toggle beside each adapter in `AdapterPickerWindow.xaml`/`.cs`, retaining card dots. Pass saved TurnedOff into the dialog; return staged overrides/off flags only after successful OK validation. Keep Not-used toggles disabled/off, start newly chosen slots enabled, preserve off flags for real-to-real changes and Detect, and retain duplicate-slot validation for disabled choices. `App.ChooseAdapters` calls `RouteController.SetAdapterChoicesAsync` once; it shares `ChangeAdaptersAsync` with the existing override/dot APIs so fallback and metric resets see the final state. Preserve `SetOverridesAsync` semantics. Constrain dialog height to the work area, scroll its adapter fields and keep action buttons reachable. Focused controller tests cover combined final-state fallback, replaced adapter metric reset, multi-slot normalization and non-admin no-write behavior. Owner checks staged OK/Cancel/close, Detect, keyboard and layout on the real widget.
 
+**Later owner refinement (2026-10-30):** an off connection disappears from the compact widget, both row and mode button. Keep raw `CardView.Rows`/`IsOff` for unchanged tray behavior; `VisibleRows` and `IsModeButtonVisible` drive the actual card renderer. Hide only explicit off flags, preserving chosen/disconnected visibility and existing Not-used Phone/LAN button behavior. Collapse row heights and every cell, and mask independent speed/total updates by the shown-row set. Mode-grid columns count visible mode buttons plus Smart; all-off has no empty connection gaps. Choose adapters remains available to re-enable. Focused presenter tests cover all three off/on transitions and restored order, disconnected rows, all-off and unchanged raw/tray metadata.
+
 - [ ] **Step 1: Implement**
   - Each row dot gets `Cursor="Hand"` and a `MouseLeftButtonDown` handler that sets `e.Handled = true`, so the row's drag does not start. The handler raises `TurnedOffRequested(id, !row.IsOff)`.
   - Give the dot a hit area of at least 16 × 16: a transparent `Border` around the ellipse is fine.
   - Tooltip text is from Global Constraints. The dot works without administrator rights too: the controller then only saves the setting, and its probes stop.
-  - `Render` disables the mode button of an off row (`IsEnabled = canModify && !row.IsOff`). The tray does the same for its mode items.
+  - `Render` hides the row and mode button of an off connection. The tray keeps its mode item visible but disabled.
   - In `App.xaml.cs`, wire `_card.TurnedOffRequested += (id, off) => _ = controller.SetTurnedOffAsync(id, off);`.
 
 - [ ] **Step 2: Build.** Run `dotnet build src/NetRoute.App`. Expected: 0 errors and no new warnings.

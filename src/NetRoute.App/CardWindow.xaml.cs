@@ -19,11 +19,11 @@ public partial class CardWindow : Window
     sealed record RowControls(RowDefinition RowDef, Border DotHit, Ellipse Dot, TextBlock Label, TextBlock Address, TextBlock Latency, TextBlock Speed, TextBlock Total);
 
     readonly Dictionary<ConnectionId, RowControls> _rows;
-    /// Which shown rows are turned off, from the last Render: a dot click asks for the opposite.
+    /// Configured off flags, retained separately from the compact card's visible rows.
     readonly HashSet<ConnectionId> _off = [];
+    readonly HashSet<ConnectionId> _shown = [];
     RoutingMode _mode;
     bool _allowClose;
-    bool _wifiShown;
 
     public CardWindow()
     {
@@ -82,40 +82,45 @@ public partial class CardWindow : Window
         Note.Text = view.Note ?? "";
         Note.Visibility = view.Note is null ? Visibility.Collapsed : Visibility.Visible;
         _off.Clear();
+        _off.UnionWith(view.Rows.Where(row => row.Row.IsOff).Select(row => row.Id));
+        var visibleRows = view.VisibleRows;
+        _shown.Clear();
+        _shown.UnionWith(visibleRows.Select(row => row.Id));
         foreach (var id in Connections.CardOrder)
         {
             var controls = _rows[id];
-            var row = view.Rows.FirstOrDefault(r => r.Id == id);
+            var row = visibleRows.FirstOrDefault(r => r.Id == id);
             if (row is not null)
             {
                 RenderRow(row.Row, controls.Dot, controls.Label, controls.Address, controls.Latency);
                 controls.DotHit.Visibility = controls.Label.Visibility = controls.Address.Visibility = controls.Latency.Visibility = Visibility.Visible;
                 controls.DotHit.ToolTip = $"Turn {Connections.Label(id)} {(row.Row.IsOff ? "on" : "off")}";
                 controls.Label.Opacity = controls.Address.Opacity = row.Row.IsOff ? 0.55 : 1.0;
-                if (row.Row.IsOff) _off.Add(id);
                 controls.RowDef.Height = new GridLength(22);
             }
             else
             {
                 controls.DotHit.Visibility = controls.Label.Visibility = controls.Address.Visibility = controls.Latency.Visibility = Visibility.Collapsed;
                 controls.RowDef.Height = new GridLength(0);
-                // RenderSpeeds/RenderTotals run on their own cadence and won't revisit this row until it's
-                // used again; clear any stale figure now so a hidden row can't leave a visible leftover.
+                // Clear stale figures immediately; later speed/total updates also mask the hidden rows.
                 SetSpeed(controls.Speed, "");
                 SetSpeed(controls.Total, "");
             }
         }
-        _wifiShown = view.Rows.Any(r => r.Id == ConnectionId.Wifi);
-        ModeGrid.Columns = _wifiShown ? 4 : 3;
-        WifiButton.Visibility = _wifiShown ? Visibility.Visible : Visibility.Collapsed;
+        var visibleButtons = 0;
+        foreach (var (id, button) in new[]
+        {
+            (ConnectionId.Phone, PhoneButton), (ConnectionId.Lan, LanButton), (ConnectionId.Wifi, WifiButton),
+        })
+        {
+            var visible = view.IsModeButtonVisible(id);
+            button.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            button.IsEnabled = canModify && _shown.Contains(id);
+            if (visible) visibleButtons++;
+        }
+        ModeGrid.Columns = visibleButtons + 1; // Smart stays visible, including when every connection is off.
         SyncModeButtons();
         SmartButton.IsEnabled = canModify;
-        // A connection's mode button works only while it has a row and is on: an off one stays visible but disabled
-        // until it is turned on again, and a Not-used one (no row) cannot be picked either.
-        bool Pickable(ConnectionId id) => canModify && view.Rows.Any(r => r.Id == id) && !_off.Contains(id);
-        PhoneButton.IsEnabled = Pickable(ConnectionId.Phone);
-        LanButton.IsEnabled = Pickable(ConnectionId.Lan);
-        WifiButton.IsEnabled = Pickable(ConnectionId.Wifi);
         AdminHint.Visibility = canModify ? Visibility.Collapsed : Visibility.Visible;
         StartWithWindowsItem.IsChecked = startWithWindows;
         StartWithWindowsItem.IsEnabled = canModify;
@@ -136,6 +141,8 @@ public partial class CardWindow : Window
     /// Wi-Fi has no speed source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
     public void RenderSpeeds(string phone, string lan)
     {
+        phone = _shown.Contains(ConnectionId.Phone) ? phone : "";
+        lan = _shown.Contains(ConnectionId.Lan) ? lan : "";
         SetSpeed(PhoneSpeed, phone);
         SetSpeed(LanSpeed, lan);
         SetSpeed(WifiSpeed, WifiPlaceholder(phone, lan));
@@ -152,6 +159,8 @@ public partial class CardWindow : Window
     /// Wi-Fi has no totals source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
     public void RenderTotals(string phone, string lan)
     {
+        phone = _shown.Contains(ConnectionId.Phone) ? phone : "";
+        lan = _shown.Contains(ConnectionId.Lan) ? lan : "";
         SetSpeed(PhoneTotal, phone);
         SetSpeed(LanTotal, lan);
         SetSpeed(WifiTotal, WifiPlaceholder(phone, lan));
@@ -159,7 +168,7 @@ public partial class CardWindow : Window
 
     /// "—" once Wi-Fi is a shown row and either sibling has a real figure; empty otherwise (Wi-Fi row hidden,
     /// or neither sibling has anything to show, e.g. before the first poll or while speeds aren't displayed).
-    string WifiPlaceholder(string phone, string lan) => _wifiShown && (phone.Length > 0 || lan.Length > 0) ? "—" : "";
+    string WifiPlaceholder(string phone, string lan) => _shown.Contains(ConnectionId.Wifi) && (phone.Length > 0 || lan.Length > 0) ? "—" : "";
 
     public void ShowSpeed(string text)
     {

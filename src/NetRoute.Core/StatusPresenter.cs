@@ -4,7 +4,7 @@ public enum Dot { Green, Amber, Gray }
 
 public enum TrayColor { Green, Blue, Gray, Purple }
 
-/// IsOff: the user turned this connection off on the card; the row stays so it can be turned on again.
+/// IsOff: the connection is configured but off. The tray keeps this metadata; the compact card hides the row.
 public sealed record AdapterRow(string Label, string Address, string Latency, Dot Dot, bool IsActive, bool IsOff = false);
 
 public sealed record ConnectionRow(ConnectionId Id, AdapterRow Row);
@@ -14,6 +14,17 @@ public sealed record CardView(
     IReadOnlyList<ConnectionRow> Rows,
     string Tooltip, TrayColor TrayColor, bool TrayBadge)
 {
+    /// Compact-card rows only. Raw Rows retain off connections for the tray and configured-state metadata.
+    public IReadOnlyList<ConnectionRow> VisibleRows => Rows.Where(row => !row.Row.IsOff).ToList();
+
+    public bool IsModeButtonVisible(ConnectionId id) => id switch
+    {
+        // Preserve the existing disabled Phone/LAN buttons for Not-used slots; only explicit off hides them.
+        ConnectionId.Phone or ConnectionId.Lan => !Rows.Any(row => row.Id == id && row.Row.IsOff),
+        ConnectionId.Wifi => Rows.Any(row => row.Id == id && !row.Row.IsOff),
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, null),
+    };
+
     /// Compatibility helpers for callers written before Wi-Fi existed: a used connection's row,
     /// or a "not connected" placeholder for one that (unexpectedly) isn't in Rows.
     public AdapterRow Row(ConnectionId id) =>

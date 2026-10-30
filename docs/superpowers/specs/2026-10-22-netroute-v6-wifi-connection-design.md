@@ -319,13 +319,13 @@ Without this, sing-box would keep sending unmatched traffic to the phone (mobile
 
 **What it is.** Choose adapters has an **Enabled** on/off toggle beside each adapter. Adapter choices and toggles are staged locally and applied together on **OK**; **Cancel** or closing the dialog discards them. A Not-used slot has a disabled, off toggle and no saved off flag. Choosing an adapter after Not used starts it enabled; changing between chosen adapters preserves the toggle. Detect automatically changes the local choices without resetting off toggles unless a slot becomes Not used. Duplicate adapter choices remain invalid even when a chosen slot is off.
 
-Each card row's coloured dot remains a shortcut for the same setting. Clicking it turns that connection **off**; clicking again turns it back **on**. The tooltip says "Turn LAN off" or "Turn LAN on" (with the connection's label).
+Each shown card row's coloured dot remains a shortcut to turn that connection **off**. Its row and mode button then disappear from the compact widget. Turn it back **on** using the configured toggle in Choose adapters, which stays available. A chosen but disconnected connection stays visible; only an explicit off flag hides it.
 
-**While a connection is off (call: it is "Not used" for everything except the card row):**
+**While a connection is off (its choice stays configured, while NetRoute stops managing it):**
 - NetRoute treats it like Not used: no metric changes, no latency probes, no path-map lane, never a heal or backup target, no route pin.
 - Its adapter is reset to the automatic metric when it is turned off, as when a slot becomes Not used.
 - If the saved mode points at it, the mode falls back exactly as for Not used (first still-used connection in `FallbackOrder`, else Auto), and the log says so.
-- The card **keeps its row**: grey dot, the usual label, the address column reads "off", no latency, normal weight. Its mode button and tray item stay visible but disabled.
+- The compact card **hides its row and mode button**, including speed and total cells on later updates; the remaining mode buttons and Smart fill the available columns. All-off leaves no connection rows or mode buttons. Its tray item stays visible but disabled. Raw presentation metadata retains the off flag for the tray; the compact card consumes only visible rows. Turning on restores its row in Phone, LAN, Wi-Fi order and its mode button.
 - A mode change to an off connection is refused: "LAN is turned off".
 - The adapter choice in Choose adapters is untouched, so turning it on again needs no re-picking. A slot set to Not used has no row, so it cannot be turned off.
 - The setting is saved (`TurnedOff`, a list of connection ids) and survives a restart. Without administrator rights it is saved and takes effect like an adapter choice does.
