@@ -53,10 +53,16 @@ if "CANARY" in stdin:
     # A real read-only canary shows the probe write as a command that the sandbox refused (exit 1, status failed).
     attempt = {"nowriteattempt": None,
                "writeok": {"exit_code": 0, "status": "completed"},
-               "writeother": {"exit_code": 1, "status": "failed", "command": "pwsh -Command Get-Date"}}.get(
-                   mode, {"exit_code": 1, "status": "failed"})
+               "writeother": {"exit_code": 1, "status": "failed", "command": "pwsh -Command Get-Date"},
+               "readfails": {"exit_code": 1, "status": "failed",
+                             "command": "pwsh -Command Get-Content CODEX_AUDIT_WRITE_PROBE.txt",
+                             "aggregated_output": "Cannot find path 'CODEX_AUDIT_WRITE_PROBE.txt' because it does not exist."},
+               "badparameter": {"exit_code": 1, "status": "failed",
+                                "aggregated_output": "Set-Content: A parameter cannot be found that matches parameter name 'Nonexistent'."},
+               }.get(mode, {"exit_code": 1, "status": "failed"})
     if attempt is not None:
-        item = {"id": "item_w", "type": "command_execution", "aggregated_output": "Access ... is denied.",
+        item = {"id": "item_w", "type": "command_execution",
+                "aggregated_output": "Set-Content: Access to the path 'F:\\repo\\CODEX_AUDIT_WRITE_PROBE.txt' is denied.",
                 "command": "pwsh -Command Set-Content -LiteralPath 'CODEX_AUDIT_WRITE_PROBE.txt' -Value probe"}
         item.update(attempt)
         print(json.dumps({"type": "item.started", "item": dict(item, status="in_progress", exit_code=None)}))
@@ -280,7 +286,9 @@ def main():
 
     for mode, name in [("nowriteattempt", "a canary that never tries the write"),
                        ("writeok", "a canary whose write command succeeds but leaves no file"),
-                       ("writeother", "a canary whose only failed command is not the probe write")]:
+                       ("writeother", "a canary whose only failed command is not the probe write"),
+                       ("readfails", "a canary whose probe command only fails to read the missing file"),
+                       ("badparameter", "a canary whose probe write fails on a mistyped parameter")]:
         c = Case(mode)
         r = c.run(ca)
         pending(f"{name} is pending", r, "no refused write attempt")

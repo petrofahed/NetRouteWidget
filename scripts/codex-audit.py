@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -211,10 +212,17 @@ def resource_listings(events):
     return shown
 
 
+# What the sandbox says when it refuses a write: Windows ("Access to the path '...' is denied", "Access is denied")
+# and POSIX shells ("Permission denied", "Read-only file system"). A failure without one of these (a read of the
+# missing probe, a mistyped parameter) is not a refused write.
+DENIED = re.compile(r"access to the path .* is denied|access is denied|permission denied|read-only file system|"
+                    r"\bEACCES\b|\bEPERM\b|\bEROFS\b", re.IGNORECASE)
+
+
 def write_refused(events):
-    """Evidence in Codex's own event stream (not its reply) that it tried to write the probe and was refused: a
-    completed command or file change naming the probe that failed. An absent probe alone proves nothing, since
-    Codex may simply not have tried."""
+    """Evidence in Codex's own event stream (not its reply) that it tried to write the probe and the sandbox refused:
+    a completed command or file change that names the probe, failed, and reports a permission denial. An absent probe
+    alone proves nothing, since Codex may simply not have tried."""
     for line in events.splitlines():
         try:
             event = json.loads(line)
@@ -225,9 +233,11 @@ def write_refused(events):
         if kind != "item.completed":
             continue
         if call == "command_execution" and PROBE in str(item.get("command")) \
-                and (item.get("status") == "failed" or item.get("exit_code") not in (0, None)):
+                and (item.get("status") == "failed" or item.get("exit_code") not in (0, None)) \
+                and DENIED.search(str(item.get("aggregated_output"))):
             return True
-        if call == "file_change" and PROBE in json.dumps(item.get("changes")) and item.get("status") == "failed":
+        if call == "file_change" and PROBE in json.dumps(item.get("changes")) and item.get("status") == "failed" \
+                and DENIED.search(json.dumps(item)):
             return True
     return False
 
