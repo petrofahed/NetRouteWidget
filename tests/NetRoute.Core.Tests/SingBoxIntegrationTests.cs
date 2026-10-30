@@ -6,6 +6,14 @@ namespace NetRoute.Core.Tests;
 [Trait("Category", "Integration")]
 public partial class SingBoxIntegrationTests
 {
+    static SingBoxConfigInput ConfigInput(RuleSet rules) => new(rules,
+        new Dictionary<ConnectionId, string> { [ConnectionId.Phone] = "Ethernet 5", [ConnectionId.Lan] = "Ethernet" },
+        "192.168.86.1", ConnectionId.Phone,
+        Enum.GetValues<RuleTarget>().ToDictionary(target => target,
+            target => (IReadOnlyList<ConnectionId>)(target == RuleTarget.Phone ? new[] { ConnectionId.Phone } : new[] { ConnectionId.Lan })),
+        Enum.GetValues<RuleTarget>().ToDictionary(target => target,
+            target => (ConnectionId?)(target == RuleTarget.Phone ? ConnectionId.Phone : ConnectionId.Lan)), 41234, "s3cret");
+
     internal static string SingBoxExe => Path.Combine(AppContext.BaseDirectory, "sing-box", "sing-box.exe");
 
     internal static (int ExitCode, string Output) RunSingBox(params string[] args)
@@ -42,9 +50,8 @@ public partial class SingBoxIntegrationTests
     [Fact]
     public void Built_config_passes_sing_box_check()
     {
-        var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
-            RuleSet.Build(RuleCatalog.Load(RuleCatalog.DefaultPath), new SmartRoutingSettings()),
-            "Ethernet 5", "Ethernet", "192.168.86.1", RouteExit.Phone, false, 41234, "s3cret"));
+        var config = SingBoxConfigBuilder.Build(ConfigInput(
+            RuleSet.Build(RuleCatalog.Load(RuleCatalog.DefaultPath), new SmartRoutingSettings())));
         var path = Path.Combine(Path.GetTempPath(), $"netroute-check-{Guid.NewGuid():N}.json");
         File.WriteAllText(path, config.Json);
         try
@@ -59,8 +66,7 @@ public partial class SingBoxIntegrationTests
     public void Config_with_process_rules_passes_sing_box_check()
     {
         var rules = new RuleSet([new RuleEntry("app", "My App", ["My App.exe", "qbittorrent.exe"], ["example.com"])]);
-        var config = SingBoxConfigBuilder.Build(new SingBoxConfigInput(
-            rules, "Ethernet 5", "Ethernet", "192.168.86.1", RouteExit.Phone, false, 41234, "s3cret"));
+        var config = SingBoxConfigBuilder.Build(ConfigInput(rules));
         var path = Path.Combine(Path.GetTempPath(), $"netroute-check-{Guid.NewGuid():N}.json");
         File.WriteAllText(path, config.Json);
         try
@@ -88,9 +94,9 @@ public partial class SingBoxIntegrationTests
               "outbounds": [
                 { "type": "direct", "tag": "phone" },
                 { "type": "direct", "tag": "lan", "bind_interface": "NoSuchAdapter" },
-                { "type": "selector", "tag": "lan-only", "outbounds": ["lan", "phone"], "default": "lan" },
+                { "type": "selector", "tag": "only-home", "outbounds": ["lan", "phone"], "default": "lan" },
                 { "type": "selector", "tag": "default", "outbounds": ["phone", "lan"], "default": "phone" } ],
-              "route": { "rules": [ { "action": "sniff" }, { "process_path_regex": [{{regex}}], "outbound": "lan-only" } ], "final": "default" },
+              "route": { "rules": [ { "action": "sniff" }, { "process_path_regex": [{{regex}}], "outbound": "only-home" } ], "final": "default" },
               "experimental": { "clash_api": { "external_controller": "127.0.0.1:{{apiPort}}", "secret": "itest" } } }
             """;
         var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
@@ -106,11 +112,11 @@ public partial class SingBoxIntegrationTests
             using var client = new HttpClient(new HttpClientHandler { Proxy = new System.Net.WebProxy($"http://127.0.0.1:{proxyPort}"), UseProxy = true })
                 { Timeout = TimeSpan.FromSeconds(10) };
 
-            await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("http://192.0.2.1:81/")); // lan-only -> missing adapter
+            await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("http://192.0.2.1:81/")); // only-home -> missing adapter
 
-            Assert.True(SpinWait.SpinUntil(() => events.OfType<RuleMatched>().Any(m => m.Outbound == "lan-only"), TimeSpan.FromSeconds(10)),
+            Assert.True(SpinWait.SpinUntil(() => events.OfType<RuleMatched>().Any(m => m.Outbound == "only-home"), TimeSpan.FromSeconds(10)),
                 "the process rule never matched; sing-box said: " + string.Join(" | ", lines));
-            Assert.Equal(1, events.OfType<RuleMatched>().First(m => m.Outbound == "lan-only").RuleIndex);
+            Assert.Equal(1, events.OfType<RuleMatched>().First(m => m.Outbound == "only-home").RuleIndex);
         }
         finally
         {
@@ -129,9 +135,9 @@ public partial class SingBoxIntegrationTests
               "outbounds": [
                 { "type": "direct", "tag": "phone" },
                 { "type": "direct", "tag": "lan", "bind_interface": "NoSuchAdapter" },
-                { "type": "selector", "tag": "lan-only", "outbounds": ["lan", "phone"], "default": "lan" },
+                { "type": "selector", "tag": "only-home", "outbounds": ["lan", "phone"], "default": "lan" },
                 { "type": "selector", "tag": "default", "outbounds": ["phone", "lan"], "default": "phone" } ],
-              "route": { "rules": [ { "action": "sniff" }, { "domain_suffix": ["example.com"], "outbound": "lan-only" } ], "final": "default" },
+              "route": { "rules": [ { "action": "sniff" }, { "domain_suffix": ["example.com"], "outbound": "only-home" } ], "final": "default" },
               "experimental": { "clash_api": { "external_controller": "127.0.0.1:{{apiPort}}", "secret": "itest" } } }
             """;
         var host = new NetRoute.Core.Windows.SingBoxHost(SingBoxExe);
@@ -149,14 +155,14 @@ public partial class SingBoxIntegrationTests
             using var client = new HttpClient(new HttpClientHandler { Proxy = new System.Net.WebProxy($"http://127.0.0.1:{proxyPort}"), UseProxy = true })
                 { Timeout = TimeSpan.FromSeconds(15) };
 
-            await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("https://example.com/")); // lan-only -> missing adapter
+            await Assert.ThrowsAnyAsync<Exception>(() => client.GetAsync("https://example.com/")); // only-home -> missing adapter
             Assert.True(SpinWait.SpinUntil(() => events.OfType<DialFailed>().Any(), TimeSpan.FromSeconds(10)));
-            var matched = events.OfType<RuleMatched>().FirstOrDefault(m => m.Outbound == "lan-only");
-            Assert.True(matched is not null, "no RuleMatched for lan-only; parsed events: " + string.Join(" | ", events));
+            var matched = events.OfType<RuleMatched>().FirstOrDefault(m => m.Outbound == "only-home");
+            Assert.True(matched is not null, "no RuleMatched for only-home; parsed events: " + string.Join(" | ", events));
             Assert.Equal(1, matched.RuleIndex);
-            Assert.Contains(events.OfType<DialFailed>(), f => f.ConnectionId == matched.ConnectionId && f.Outbound == "lan-only");
+            Assert.Contains(events.OfType<DialFailed>(), f => f.ConnectionId == matched.ConnectionId && f.Outbound == "only-home");
 
-            Assert.True(await api.SelectAsync("lan-only", "phone"));
+            Assert.True(await api.SelectAsync("only-home", "phone"));
             using var ok = await client.GetAsync("https://example.com/"); // now via the working direct outbound
             Assert.True(ok.IsSuccessStatusCode);
         }

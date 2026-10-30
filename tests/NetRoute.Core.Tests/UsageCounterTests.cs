@@ -10,7 +10,7 @@ public class UsageCounterTests
 
     static SingBoxConnection Conn(string id, long up, long down, string exit = "phone", string? host = null,
                                   string? process = null, bool lanOnly = false) =>
-        new(id, host, process, lanOnly ? ["lan", "lan-only"] : [exit, "default"], up, down);
+        new(id, host, process, lanOnly ? ["lan", "only-home"] : [exit, "default"], up, down);
 
     /// Totals default to the sum of the open connections, i.e. no closed connections.
     static UsagePoll Poll(DateTimeOffset now, SingBoxConnection[] conns, long? up = null, long? down = null,
@@ -34,6 +34,54 @@ public class UsageCounterTests
         counter.Update(Poll(T0.AddSeconds(1), [Conn("1", 15, 190, host: "youtube.com", process: "chrome.exe")]), Attr);
 
         Assert.Equal(new UsageRow(new Traffic(15, 190), default, 0), Row(counter, D0, "youtube"));
+    }
+
+    [Theory]
+    [InlineData("lan", "only-home", 0, 100, 100)]
+    [InlineData("wifi", "only-home", 0, 100, 100)]
+    [InlineData("wifi", "only-lan", 0, 100, 100)]
+    [InlineData("lan", "only-wifi", 0, 100, 100)]
+    [InlineData("wifi", "default", 0, 100, 0)]
+    [InlineData("phone", "only-home", 100, 0, 0)]
+    public void Physical_roots_preserve_two_buckets_and_kept_totals(string physical, string selector, long phone, long lan, long kept)
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [new SingBoxConnection("1", "youtube.com", "chrome.exe", [physical, selector], 0, 100)]), Attr);
+        var row = Row(counter, D0, "youtube");
+        Assert.Equal(phone, row.Phone.Total);
+        Assert.Equal(lan, row.Lan.Total);
+        Assert.Equal(kept, row.Kept);
+    }
+
+    [Fact]
+    public void Unknown_root_never_becomes_a_phone_row_and_later_recognition_does_not_rebook_history()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(new UsagePoll([new("1", "youtube.com", "chrome.exe", ["mystery", "default"], 0, 100)], null, null, null, true, T0), Attr);
+        Assert.Empty(counter.Snapshot().Days);
+        counter.Update(new UsagePoll([new("1", "youtube.com", "chrome.exe", ["wifi", "only-home"], 0, 150)], null, null, null, true, T0.AddSeconds(1)), Attr);
+        Assert.Equal(50, Row(counter, D0, "youtube").Lan.Total);
+        Assert.Equal(0, Row(counter, D0, "youtube").Phone.Total);
+    }
+
+    [Fact]
+    public void Unknown_chain_growth_is_reconciled_once_with_exact_phone_adapter_share()
+    {
+        var counter = new UsageCounter(null, D0);
+        counter.Update(Poll(T0, [], up: 0, down: 0, adapter: 1000), Attr);
+        counter.Update(Poll(T0.AddSeconds(1),
+            [Conn("phone", 0, 50, process: "phone.exe"), Conn("unknown", 0, 100, exit: "mystery", process: "other.exe")],
+            down: 150, adapter: 1060), Attr);
+        Assert.Equal(50, Row(counter, D0, "app:phone.exe").Phone.Total);
+        Assert.Equal(10, Row(counter, D0, UsageAttribution.UnattributedKey).Phone.Total);
+        Assert.Equal(90, Row(counter, D0, UsageAttribution.UnattributedKey).Lan.Total);
+        counter.Update(Poll(T0.AddSeconds(2),
+            [Conn("phone", 0, 70, process: "phone.exe"), Conn("unknown", 0, 130, exit: "wifi", process: "other.exe")],
+            down: 200, adapter: 1080), Attr);
+        var day = counter.Snapshot().Days[D0];
+        Assert.Equal(80, day.Rows.Values.Sum(row => row.Phone.Total));
+        Assert.Equal(120, day.Rows.Values.Sum(row => row.Lan.Total));
+        Assert.Equal(30, Row(counter, D0, "app:other.exe").Lan.Total);
     }
 
     [Fact]

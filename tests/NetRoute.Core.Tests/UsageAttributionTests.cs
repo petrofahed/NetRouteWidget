@@ -194,4 +194,25 @@ public class UsageAttributionTests
         Assert.Equal("vscode-updates", attribution.Resolve("chrome.exe", "update.code.visualstudio.com"));
         Assert.Equal("app:chrome.exe", attribution.Resolve("chrome.exe", "example.com"));
     }
+
+    [Theory]
+    [InlineData(UserRuleType.App, "chrome.exe", "app:chrome.exe")]
+    [InlineData(UserRuleType.Website, "example.com", "user:website:example.com")]
+    public void All_three_profile_prefixes_share_one_usage_identity(UserRuleType type, string value, string key)
+    {
+        var settings = new SmartRoutingSettings();
+        foreach (var profile in Connections.All) settings = settings.WithUserRule(profile, new(type, value, Exit: ConnectionId.Wifi));
+        Assert.Equal(3, RuleSet.BuildAll([], settings).Entries.Count);
+        var attribution = UsageAttribution.Build([], settings);
+        Assert.Equal(key, attribution.Resolve(type == UserRuleType.App ? value : "browser.exe", type == UserRuleType.Website ? value : null));
+        var wifiOnly = UsageAttribution.Build([], new SmartRoutingSettings().WithUserRule(ConnectionId.Wifi, new(type, value)));
+        Assert.Equal(key, wifiOnly.Resolve(type == UserRuleType.App ? value : "browser.exe", type == UserRuleType.Website ? value : null));
+    }
+
+    [Fact]
+    public void Disabled_wifi_app_rule_does_not_steal_website_attribution()
+    {
+        var settings = new SmartRoutingSettings().WithUserRule(ConnectionId.Wifi, new(UserRuleType.App, "chrome.exe", Enabled: false));
+        Assert.Equal("youtube", UsageAttribution.Build(Catalog, settings).Resolve("chrome.exe", "youtube.com"));
+    }
 }

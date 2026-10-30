@@ -99,9 +99,17 @@ public sealed class UsageCounter
             _lastSeen[c.Id] = (c.Upload, c.Download);
             if (up + down <= 0) continue;
 
-            var exit = c.Chains.Count > 0 && c.Chains[0] == SingBoxConfigBuilder.LanTag ? RouteExit.Lan : RouteExit.Phone;
+            // Advance the baseline even for an unknown chain: later recognition must not book old bytes twice.
+            // Global totals/actual Phone counter can reconcile unknown growth as Unattributed instead.
+            if (c.PhysicalExit is not { } physical) continue;
+            var exit = physical switch
+            {
+                ConnectionId.Phone => RouteExit.Phone,
+                ConnectionId.Lan or ConnectionId.Wifi => RouteExit.Lan, // retain two-bucket history until v6.3
+                _ => throw new ArgumentOutOfRangeException(nameof(physical), physical, null),
+            };
             var key = attribution.Resolve(c.ProcessName, c.Host);
-            var kept = exit == RouteExit.Lan && c.IsLanOnly && poll.PhoneIsDefault ? up + down : 0;
+            var kept = exit == RouteExit.Lan && c.IsNonMeteredException && poll.PhoneIsDefault ? up + down : 0;
             Add(rows, key, exit, new Traffic(up, down), kept);
             AddRate(key, exit, up + down, up, poll.Now);
             seenUp += up;

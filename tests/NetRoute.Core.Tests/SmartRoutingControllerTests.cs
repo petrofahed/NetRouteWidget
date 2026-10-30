@@ -6,8 +6,8 @@ public class SmartRoutingControllerTests
 {
     // One domain-only item: its rule is route.rules index 3 (0 sniff, 1 hijack-dns, 2 private).
     static readonly IReadOnlyList<RuleItem> Catalog = [new("youtube", "video", "Video", "YouTube", [], ["youtube.com"], true)];
-    const string MatchYouTube = "+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[3] domain_suffix=youtube.com => route(lan-only)";
-    const string FailLanOnly = "+0300 2026-10-02 16:50:52 ERROR [42 5.0s] connection: open connection to 1.2.3.4:443 using outbound/selector[lan-only]: dial tcp 1.2.3.4:443: i/o timeout";
+    const string MatchYouTube = "+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[3] domain_suffix=youtube.com => route(only-home)";
+    const string FailLanOnly = "+0300 2026-10-02 16:50:52 ERROR [42 5.0s] connection: open connection to 1.2.3.4:443 using outbound/selector[only-home]: dial tcp 1.2.3.4:443: i/o timeout";
 
     readonly FakeSingBoxHost _host = new();
     readonly FakeSingBoxApi _api = new();
@@ -396,7 +396,7 @@ public class SmartRoutingControllerTests
 
         await c.UseLanRulesOnPhoneAsync();
 
-        Assert.Contains(("lan-only", "phone"), _api.Selects);
+        Assert.Contains(("only-home", "phone"), _api.Selects);
         Assert.True(c.Status.LanRulesOnPhone);
         Assert.Empty(c.Status.WaitingNames);
 
@@ -406,7 +406,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
 
         Assert.False(c.Status.LanRulesOnPhone);
-        Assert.Equal(("lan-only", "lan"), _api.Selects.Last());
+        Assert.Equal(("only-home", "lan"), _api.Selects.Last());
         Assert.Contains("LAN back — LAN-only traffic is back on the LAN", _notes);
     }
 
@@ -415,7 +415,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 10, 990));
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "only-home"], 10, 990));
 
         await c.PollStatsAsync();
 
@@ -805,7 +805,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(), On());
 
         Assert.Single(_notes);
-        Assert.Equal(("lan-only", "lan"), _api.Selects.Last());
+        Assert.Equal(("only-home", "lan"), _api.Selects.Last());
     }
 
     // N4: a LAN without DNS yet must not forget a known one
@@ -935,7 +935,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(RoutingMode.Lan, lanMs: null), On());
         _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
 
-        await c.ProcessLineAsync("+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[3] domain_suffix=update.code.visualstudio.com => route(lan-only)");
+        await c.ProcessLineAsync("+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[3] domain_suffix=update.code.visualstudio.com => route(only-home)");
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Equal(new[] { "VS Code updates" }, Assert.Single(_popups));
@@ -951,7 +951,7 @@ public class SmartRoutingControllerTests
         await c.ApplyAsync(Net(RoutingMode.Lan, lanMs: null), On());
         _time.Advance(SmartRoutingController.LanOfflinePopupDelay);
 
-        await c.ProcessLineAsync("+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[6] domain_suffix=youtube.com => route(lan-only)");
+        await c.ProcessLineAsync("+0300 2026-10-02 16:50:47 DEBUG [42 1ms] router: match[6] domain_suffix=youtube.com => route(only-home)");
         await c.ProcessLineAsync(FailLanOnly);
 
         Assert.Equal(new[] { "YouTube" }, Assert.Single(_popups));
@@ -1147,7 +1147,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 1000));
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "only-home"], 0, 1000));
         _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 200));
 
         await c.PollStatsAsync();
@@ -1162,7 +1162,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 1000));
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "only-home"], 0, 1000));
         _api.Connections.Add(new SingBoxConnection("2", "example.com", "chrome.exe", ["phone", "default"], 0, 200));
 
         await c.PollStatsAsync();
@@ -1297,7 +1297,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 3_000_000));
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "only-home"], 0, 3_000_000));
         _api.Connections.Add(new SingBoxConnection("2", "example.com", "firefox.exe", ["phone", "default"], 0, 6_000_000));
         _api.ClosedDownload = 3_000_000; // short connections that closed between polls: no adapter reading, the phone is the default exit
 
@@ -1385,7 +1385,7 @@ public class SmartRoutingControllerTests
     {
         var c = Create();
         await c.ApplyAsync(Net(), On());
-        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "lan-only"], 0, 1000));
+        _api.Connections.Add(new SingBoxConnection("1", "youtube.com", "chrome.exe", ["lan", "only-home"], 0, 1000));
         await c.PollStatsAsync();
         Assert.Equal(1000, c.Status.Today.Total);
 

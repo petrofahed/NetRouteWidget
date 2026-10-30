@@ -17,6 +17,7 @@ public sealed class UsageAttribution
     public const string UnattributedKey = "unattributed";
     public const string AppPrefix = "app:";
     const string PhonePrefix = "phone-";
+    const string WifiPrefix = "wifi-";
     const string UserAppPrefix = "user:app:";
     const string UserWebsitePrefix = "user:website:";
 
@@ -40,6 +41,7 @@ public sealed class UsageAttribution
             // falls through to them and then to the same "app:x.exe" row, so no history is lost.
             UserRules = [.. settings.UserRules.Where(r => r.Enabled || r.Type != UserRuleType.App)],
             PhoneUserRules = [.. settings.PhoneUserRules.Where(r => r.Enabled || r.Type != UserRuleType.App)],
+            WifiUserRules = [.. settings.WifiUserRules.Where(r => r.Enabled || r.Type != UserRuleType.App)],
         }));
 
     public string Resolve(string? processName, string? host)
@@ -70,9 +72,10 @@ public sealed class UsageAttribution
     public static string RowKeyOf(UserRule rule) =>
         rule.Type == UserRuleType.App ? AppPrefix + rule.Value.ToLowerInvariant() : UserRule.IdOf(rule);
 
-    /// The entry id without the phone-list prefix: the same app or site counts under one row whichever list holds its rule.
+    /// Profile prefixes never split an app/site's usage history.
     static string BareId(RuleEntry entry) =>
-        entry.Id.StartsWith(PhonePrefix, StringComparison.Ordinal) ? entry.Id[PhonePrefix.Length..] : entry.Id;
+        entry.Id.StartsWith(PhonePrefix, StringComparison.Ordinal) ? entry.Id[PhonePrefix.Length..]
+        : entry.Id.StartsWith(WifiPrefix, StringComparison.Ordinal) ? entry.Id[WifiPrefix.Length..] : entry.Id;
 
     /// A user App rule (either list) shares the application row's key, so assigning or unassigning it never splits the history.
     static string KeyOf(RuleEntry entry)

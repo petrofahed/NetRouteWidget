@@ -8,18 +8,51 @@ namespace NetRoute.Core;
 public enum RouteExit { Phone, Lan }
 
 public sealed record SingBoxConfigInput(
-    RuleSet Rules, string PhoneInterface, string LanInterface, string? LanDns,
-    RouteExit DefaultExit, bool LanRulesOnPhone, int ApiPort, string ApiSecret);
+    RuleSet Rules, IReadOnlyDictionary<ConnectionId, string> Interfaces, string? LanDns,
+    ConnectionId DefaultExit, IReadOnlyDictionary<RuleTarget, IReadOnlyList<ConnectionId>> Candidates,
+    IReadOnlyDictionary<RuleTarget, ConnectionId?> Selected, int ApiPort, string ApiSecret)
+{
+    // Transitional constructor for the existing controller; all compilation uses the generic path below.
+    public SingBoxConfigInput(RuleSet rules, string phoneInterface, string lanInterface, string? lanDns,
+        RouteExit defaultExit, bool lanRulesOnPhone, int apiPort, string apiSecret)
+        : this(rules, new Dictionary<ConnectionId, string>
+        {
+            [ConnectionId.Phone] = phoneInterface, [ConnectionId.Lan] = lanInterface,
+        }, lanDns, LegacyExit(defaultExit),
+        new Dictionary<RuleTarget, IReadOnlyList<ConnectionId>>
+        {
+            [RuleTarget.Home] = lanRulesOnPhone ? [ConnectionId.Lan, ConnectionId.Phone] : [ConnectionId.Lan],
+            [RuleTarget.Lan] = lanRulesOnPhone ? [ConnectionId.Lan, ConnectionId.Phone] : [ConnectionId.Lan],
+            [RuleTarget.Wifi] = [ConnectionId.Lan],
+            [RuleTarget.Phone] = [ConnectionId.Phone, LegacyExit(defaultExit)],
+        }, new Dictionary<RuleTarget, ConnectionId?>
+        {
+            [RuleTarget.Home] = lanRulesOnPhone ? ConnectionId.Phone : ConnectionId.Lan,
+            [RuleTarget.Lan] = lanRulesOnPhone ? ConnectionId.Phone : ConnectionId.Lan,
+            [RuleTarget.Wifi] = ConnectionId.Lan, [RuleTarget.Phone] = ConnectionId.Phone,
+        }, apiPort, apiSecret) { }
+
+    static ConnectionId LegacyExit(RouteExit exit) => exit switch
+    {
+        RouteExit.Phone => ConnectionId.Phone,
+        RouteExit.Lan => ConnectionId.Lan,
+        _ => throw new ArgumentOutOfRangeException(nameof(exit), exit, null),
+    };
+}
 
 /// RuleIndexToEntryId maps route.rules indexes (as sing-box logs them in "router: match[N]") to RuleEntry ids.
-public sealed record SingBoxConfig(string Json, IReadOnlyDictionary<int, string> RuleIndexToEntryId);
+public sealed record SingBoxConfig(string Json, IReadOnlyDictionary<int, string> RuleIndexToEntryId,
+    IReadOnlyDictionary<int, RuleTarget> RuleIndexToTarget);
 
 /// Builds the sing-box 1.14 config. Shape verified by the feasibility spike; see docs/superpowers/spikes.
 public static class SingBoxConfigBuilder
 {
     public const string PhoneTag = "phone";
     public const string LanTag = "lan";
-    public const string LanOnlyTag = "lan-only";
+    public const string WifiTag = "wifi";
+    public const string LanOnlyTag = "only-home"; // Transitional controller/parser name; one Home selector, no legacy duplicate.
+    public const string UnavailableTag = "unavailable";
+    public const string UnavailableInterface = "NetRoute-unavailable-5c5ae1de-6830-449e-9c8d-eef065497719";
     public const string DefaultTag = "default";
 
     public static readonly string[] ExcludedRanges =
@@ -37,26 +70,45 @@ public static class SingBoxConfigBuilder
 
     public static SingBoxConfig Build(SingBoxConfigInput input)
     {
+        foreach (var id in input.Interfaces.Keys) _ = SmartRoutingPolicy.Tag(id);
+        var interfaces = input.Interfaces.Where(pair => !string.IsNullOrWhiteSpace(pair.Value)).ToDictionary();
+        var emitted = interfaces.Keys.Select(SmartRoutingPolicy.Tag).ToHashSet();
+        var outbounds = new JsonArray();
+        foreach (var id in Connections.FallbackOrder.Where(interfaces.ContainsKey))
+            outbounds.Add(new JsonObject { ["type"] = "direct", ["tag"] = SmartRoutingPolicy.Tag(id), ["bind_interface"] = interfaces[id] });
+        outbounds.Add(new JsonObject { ["type"] = "direct", ["tag"] = UnavailableTag, ["bind_interface"] = UnavailableInterface });
+        foreach (var target in Enum.GetValues<RuleTarget>())
+        {
+            var members = input.Candidates.GetValueOrDefault(target, []).Select(SmartRoutingPolicy.Tag)
+                .Where(emitted.Contains).Distinct().Append(UnavailableTag).ToList();
+            var selected = input.Selected.GetValueOrDefault(target) is { } id ? SmartRoutingPolicy.Tag(id) : UnavailableTag;
+            outbounds.Add(Selector(SmartRoutingPolicy.SelectorTag(target), members, members.Contains(selected) ? selected : UnavailableTag));
+        }
+        var defaultTag = SmartRoutingPolicy.Tag(input.DefaultExit);
+        outbounds.Add(Selector(DefaultTag, Connections.FallbackOrder.Where(interfaces.ContainsKey).Select(SmartRoutingPolicy.Tag).Append(UnavailableTag),
+            emitted.Contains(defaultTag) ? defaultTag : UnavailableTag));
         var rules = new JsonArray
         {
             new JsonObject { ["action"] = "sniff" },
             new JsonObject { ["protocol"] = "dns", ["action"] = "hijack-dns" },
-            new JsonObject { ["ip_is_private"] = true, ["outbound"] = LanTag },
+            new JsonObject { ["ip_is_private"] = true, ["outbound"] = emitted.Contains(LanTag) ? LanTag : UnavailableTag },
         };
         var ruleMap = new Dictionary<int, string>();
+        var targetMap = new Dictionary<int, RuleTarget>();
         foreach (var entry in input.Rules.Entries)
         {
-            // A LAN entry goes through the LAN-only selector (it can wait for the LAN); a phone entry goes straight to the phone.
-            var outbound = entry.Exit == RouteExit.Phone ? PhoneTag : LanOnlyTag;
+            var outbound = SmartRoutingPolicy.SelectorTag(entry.Target);
             // sing-box ANDs process fields with domain fields inside one rule, so they get separate rules.
             if (entry.Processes.Count > 0)
             {
                 ruleMap[rules.Count] = entry.Id;
+                targetMap[rules.Count] = entry.Target;
                 rules.Add(new JsonObject { ["process_path_regex"] = Strings(entry.Processes.Select(ProcessPathRegex)), ["outbound"] = outbound });
             }
             if (entry.Domains.Count > 0)
             {
                 ruleMap[rules.Count] = entry.Id;
+                targetMap[rules.Count] = entry.Target;
                 rules.Add(new JsonObject { ["domain_suffix"] = Strings(entry.Domains), ["outbound"] = outbound });
             }
         }
@@ -66,7 +118,7 @@ public static class SingBoxConfigBuilder
             new JsonObject { ["type"] = "udp", ["tag"] = "remote", ["server"] = "1.1.1.1", ["detour"] = DefaultTag },
         };
         var dnsRules = new JsonArray();
-        if (UsableLanDns(input.LanDns) is { } lanDns)
+        if (emitted.Contains(LanTag) && UsableLanDns(input.LanDns) is { } lanDns)
         {
             dnsServers.Add(new JsonObject { ["type"] = "udp", ["tag"] = "lan-dns", ["server"] = lanDns, ["detour"] = LanTag });
             dnsRules.Add(new JsonObject { ["domain_suffix"] = Strings(RouterLocalSuffixes), ["server"] = "lan-dns" });
@@ -87,24 +139,7 @@ public static class SingBoxConfigBuilder
                     ["route_exclude_address"] = Strings(ExcludedRanges),
                 },
             },
-            ["outbounds"] = new JsonArray
-            {
-                new JsonObject { ["type"] = "direct", ["tag"] = PhoneTag, ["bind_interface"] = input.PhoneInterface },
-                new JsonObject { ["type"] = "direct", ["tag"] = LanTag, ["bind_interface"] = input.LanInterface },
-                new JsonObject
-                {
-                    ["type"] = "selector", ["tag"] = LanOnlyTag, ["outbounds"] = Strings([LanTag, PhoneTag]),
-                    ["default"] = input.LanRulesOnPhone ? PhoneTag : LanTag,
-                    // Without this a switch only affects new connections; open ones would stay on the old exit.
-                    ["interrupt_exist_connections"] = true,
-                },
-                new JsonObject
-                {
-                    ["type"] = "selector", ["tag"] = DefaultTag, ["outbounds"] = Strings([PhoneTag, LanTag]),
-                    ["default"] = input.DefaultExit == RouteExit.Lan ? LanTag : PhoneTag,
-                    ["interrupt_exist_connections"] = true,
-                },
-            },
+            ["outbounds"] = outbounds,
             ["route"] = new JsonObject
             {
                 ["rules"] = rules, ["final"] = DefaultTag,
@@ -119,8 +154,14 @@ public static class SingBoxConfigBuilder
                 },
             },
         };
-        return new SingBoxConfig(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ruleMap);
+        return new SingBoxConfig(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ruleMap, targetMap);
     }
+
+    static JsonObject Selector(string tag, IEnumerable<string> members, string selected) => new()
+    {
+        ["type"] = "selector", ["tag"] = tag, ["outbounds"] = Strings(members), ["default"] = selected,
+        ["interrupt_exist_connections"] = true,
+    };
 
     /// A loopback or unparsable address is a local stub resolver (or garbage), not the router: treat it as absent.
     static string? UsableLanDns(string? value) =>

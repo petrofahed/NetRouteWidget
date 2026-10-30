@@ -9,7 +9,7 @@ public class SingBoxApiParseTests
     {
         const string json = """
             {"connections":[{"chains":["phone","default"],"download":100777,"id":"749c46b5","metadata":{"destinationIP":"","destinationPort":"443","host":"www.wikipedia.org","network":"tcp","processPath":"C:\\Program Files\\Git\\ucrt64\\bin\\curl.exe","sourceIP":"127.0.0.1","sourcePort":"53649","type":"mixed/mixed-in"},"rule":"final","rulePayload":"","start":"2026-10-02T16:50:47+03:00","upload":485},
-                             {"chains":["lan","lan-only"],"download":5,"id":"b","metadata":{"host":"","destinationIP":"142.250.1.1","processPath":""},"upload":1}],
+                             {"chains":["lan","only-home"],"download":5,"id":"b","metadata":{"host":"","destinationIP":"142.250.1.1","processPath":""},"upload":1}],
              "downloadTotal":100777,"uploadTotal":485}
             """;
 
@@ -20,7 +20,7 @@ public class SingBoxApiParseTests
         Assert.Equal(new[] { "phone", "default" }, conns[0].Chains);
         Assert.Null(conns[1].Host);
         Assert.Null(conns[1].ProcessName);
-        Assert.True(conns[1].IsLanOnly);
+        Assert.True(conns[1].IsNonMeteredException);
     }
 
     [Theory]
@@ -93,7 +93,7 @@ public class SingBoxApiParseTests
     public void A_snapshot_still_lists_the_open_connections()
     {
         const string json = """
-            {"connections":[{"chains":["lan","lan-only"],"download":5,"id":"b","metadata":{"host":"x.com","processPath":"C:\\a\\Chrome.exe"},"upload":1}],
+            {"connections":[{"chains":["lan","only-home"],"download":5,"id":"b","metadata":{"host":"x.com","processPath":"C:\\a\\Chrome.exe"},"upload":1}],
              "downloadTotal":50,"uploadTotal":10}
             """;
 
