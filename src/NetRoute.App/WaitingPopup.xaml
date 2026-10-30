@@ -8,9 +8,9 @@
         <StackPanel>
             <TextBlock Text="NetRoute" Foreground="#FFB0B0B0" FontSize="11" />
             <TextBlock x:Name="Message" Foreground="#FFF3F3F3" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,10" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <StackPanel HorizontalAlignment="Right">
                 <Button x:Name="UseMainButton" Content="Use connection" Padding="10,4" Click="OnUsePhone" />
-                <Button Content="Keep waiting" Padding="10,4" Margin="8,0,0,0" Click="OnKeepWaiting" />
+                <Button Content="Keep waiting" Padding="10,4" Margin="0,8,0,0" Click="OnKeepWaiting" />
             </StackPanel>
             <TextBlock x:Name="WarningText" Foreground="#FFB0B0B0" FontSize="11" Margin="0,6,0,0" HorizontalAlignment="Right" />
         </StackPanel>
