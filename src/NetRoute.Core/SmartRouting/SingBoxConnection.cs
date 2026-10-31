@@ -4,9 +4,17 @@ namespace NetRoute.Core;
 public sealed record SingBoxConnection(
     string Id, string? Host, string? ProcessName, IReadOnlyList<string> Chains, long Upload, long Download)
 {
-    /// Chains are innermost-first, e.g. ["lan", "lan-only"] for traffic a LAN-only rule sent out of the LAN.
-    public bool IsLanOnly =>
-        Chains.Count >= 2 && Chains[0] == SingBoxConfigBuilder.LanTag && Chains[^1] == SingBoxConfigBuilder.LanOnlyTag;
+    /// Chains are innermost-first. Unknown physical roots are never guessed to be mobile data.
+    public ConnectionId? PhysicalExit => Chains.FirstOrDefault() switch
+    {
+        "lan" => ConnectionId.Lan,
+        "wifi" => ConnectionId.Wifi,
+        "phone" => ConnectionId.Phone,
+        _ => null,
+    };
+
+    public bool IsNonMeteredException => PhysicalExit is ConnectionId.Lan or ConnectionId.Wifi
+        && Chains.Count >= 2 && Chains[^1] is "only-home" or "only-lan" or "only-wifi";
 }
 
 /// What one /connections poll returns. The totals are sing-box's running counters since it started and, unlike the list

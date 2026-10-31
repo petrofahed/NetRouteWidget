@@ -34,7 +34,7 @@ public sealed record UsageReportRow(
 public sealed record UsageReportModel(
     int RangeDays, IReadOnlyList<UsageReportRow> Rows, long PhoneTotal, long LanTotal, long KeptOff,
     bool KeptOffIsLowerBound, long PhoneAdapterTotal, DateOnly? RecordingSince, bool Filtered = false,
-    RouteExit Profile = RouteExit.Phone, long PhoneUpTotal = 0, long LanUpTotal = 0);
+    ConnectionId Profile = ConnectionId.Phone, long PhoneUpTotal = 0, long LanUpTotal = 0);
 
 /// Pure model for the Usage tab.
 public static class UsageReport
@@ -60,19 +60,17 @@ public static class UsageReport
 
     /// The tag shown next to a row that is an exception: where its traffic is routed.
     public static string? TagText(ExceptionState state) =>
-        state.InException ? Destination(state.Destination) : null;
+        state.InException ? "→ " + SmartRoutingController.TargetLabel(state.Target) : null;
 
     public static string MenuText(ExceptionState state) =>
         !state.CanChange ? "Can't be an exception here"
             : state.InException ? "Exclude from exception"
-            : $"Send to exception ({Destination(state.Destination)})";
-
-    static string Destination(RouteExit exit) => exit == RouteExit.Lan ? "→ LAN" : "→ phone";
+            : $"Send to exception (→ {SmartRoutingController.TargetLabel(state.Target)})";
 
     public static UsageReportModel Build(
         UsageSnapshot usage, DateOnly today, int rangeDays, IReadOnlyList<RuleItem> catalog,
         SmartRoutingSettings settings, bool canAssign, UsageSort sort, string? filter = null,
-        RouteExit profile = RouteExit.Phone)
+        ConnectionId profile = ConnectionId.Phone)
     {
         var range = NormalizeRange(rangeDays);
         var first = today.AddDays(-(range - 1));

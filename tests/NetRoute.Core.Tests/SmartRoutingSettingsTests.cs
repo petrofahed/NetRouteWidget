@@ -238,4 +238,95 @@ public sealed class SmartRoutingSettingsTests : IDisposable
         Assert.Empty(back.UserRules);
         Assert.Empty(back.PhoneUserRules);
     }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone, "phone.exe", "user:app:example.exe", ConnectionId.Lan)]
+    [InlineData(ConnectionId.Lan, "lan.exe", "phone-user:app:example.exe", ConnectionId.Phone)]
+    [InlineData(ConnectionId.Wifi, "wifi.exe", "wifi-user:app:example.exe", ConnectionId.Phone)]
+    public void Profiles_select_their_own_rules_ids_and_legacy_implied_exit(
+        ConnectionId profile, string expectedApp, string expectedId, ConnectionId expectedExit)
+    {
+        var settings = new SmartRoutingSettings
+        {
+            UserRules = [new(UserRuleType.App, "phone.exe")],
+            PhoneUserRules = [new(UserRuleType.App, "lan.exe")],
+            WifiUserRules = [new(UserRuleType.App, "wifi.exe")],
+        };
+
+        Assert.Equal(expectedApp, Assert.Single(settings.RulesFor(profile)).Value);
+        Assert.Equal(expectedId, UserRule.IdOf(profile, new(UserRuleType.App, "Example.EXE")));
+        Assert.Equal(expectedExit, UserRule.ImpliedExit(profile));
+        Assert.Equal("wifi-user:app:example.exe", UserRule.WifiIdOf(new(UserRuleType.App, "Example.EXE")));
+    }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone)]
+    [InlineData(ConnectionId.Lan)]
+    [InlineData(ConnectionId.Wifi)]
+    public void Profile_rule_replacement_changes_exit_without_duplicating_or_touching_other_lists(ConnectionId profile)
+    {
+        var original = new SmartRoutingSettings
+        {
+            UserRules = [new(UserRuleType.App, "Example.exe")],
+            PhoneUserRules = [new(UserRuleType.App, "Example.exe")],
+            WifiUserRules = [new(UserRuleType.App, "Example.exe")],
+        };
+        var replacement = new UserRule(UserRuleType.App, "EXAMPLE.EXE", Enabled: false, Exit: ConnectionId.Wifi);
+
+        var changed = original.WithUserRule(profile, replacement);
+        Assert.Equal(replacement, Assert.Single(changed.RulesFor(profile)));
+        Assert.NotEqual(original, changed);
+        Assert.Null(Assert.Single(original.RulesFor(profile)).Exit);
+        foreach (var other in Connections.All.Where(id => id != profile))
+            Assert.Same(original.RulesFor(other), changed.RulesFor(other));
+
+        var removed = changed.WithoutUserRule(profile, new(UserRuleType.App, "example.exe", Exit: ConnectionId.Lan));
+        Assert.Empty(removed.RulesFor(profile));
+        foreach (var other in Connections.All.Where(id => id != profile))
+            Assert.Same(original.RulesFor(other), removed.RulesFor(other));
+
+        var added = removed.WithUserRule(profile, new(UserRuleType.Website, "example.com", Exit: ConnectionId.Phone));
+        Assert.Equal(new UserRule(UserRuleType.Website, "example.com", Exit: ConnectionId.Phone), Assert.Single(added.RulesFor(profile)));
+    }
+
+    [Fact]
+    public void Explicit_lan_is_distinct_from_null_home_but_keeps_the_same_rule_identity()
+    {
+        var home = new UserRule(UserRuleType.Website, "example.com");
+        var lan = home with { Exit = ConnectionId.Lan };
+
+        Assert.NotEqual(home, lan);
+        Assert.Equal(UserRule.IdOf(home), UserRule.IdOf(lan));
+        Assert.NotEqual(new SmartRoutingSettings().WithUserRule(home), new SmartRoutingSettings().WithUserRule(lan));
+    }
+
+    [Fact]
+    public void Unknown_profiles_are_rejected_by_every_profile_operation()
+    {
+        var profile = (ConnectionId)999;
+        var rule = new UserRule(UserRuleType.App, "example.exe");
+        var settings = new SmartRoutingSettings();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => settings.RulesFor(profile));
+        Assert.Throws<ArgumentOutOfRangeException>(() => settings.WithUserRule(profile, rule));
+        Assert.Throws<ArgumentOutOfRangeException>(() => settings.WithoutUserRule(profile, rule));
+        Assert.Throws<ArgumentOutOfRangeException>(() => UserRule.IdOf(profile, rule));
+        Assert.Throws<ArgumentOutOfRangeException>(() => UserRule.ImpliedExit(profile));
+    }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone)]
+    [InlineData(ConnectionId.Lan)]
+    [InlineData(ConnectionId.Wifi)]
+    public void Each_profile_accepts_null_and_defined_exits_but_rejects_unknown_exits(ConnectionId profile)
+    {
+        var rule = new UserRule(UserRuleType.App, "example.exe");
+        var settings = new SmartRoutingSettings();
+
+        Assert.True(settings.WithUserRule(profile, rule).IsValid());
+        Assert.True(settings.WithUserRule(profile, rule with { Exit = ConnectionId.Phone }).IsValid());
+        Assert.True(settings.WithUserRule(profile, rule with { Exit = ConnectionId.Lan }).IsValid());
+        Assert.True(settings.WithUserRule(profile, rule with { Exit = ConnectionId.Wifi }).IsValid());
+        Assert.False(settings.WithUserRule(profile, rule with { Exit = (ConnectionId)999 }).IsValid());
+    }
 }

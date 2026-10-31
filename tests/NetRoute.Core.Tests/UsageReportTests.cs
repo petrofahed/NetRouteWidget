@@ -23,7 +23,7 @@ public class UsageReportTests
 
     static UsageReportModel Build(UsageSnapshot usage, int range = 7, SmartRoutingSettings? settings = null,
                                   bool canAssign = true, UsageSort? sort = null, string? filter = null,
-                                  RouteExit profile = RouteExit.Phone) =>
+                                  ConnectionId profile = ConnectionId.Phone) =>
         UsageReport.Build(usage, Today, range, Catalog, settings ?? new SmartRoutingSettings(), canAssign, sort ?? UsageSort.Default, filter, profile);
 
     [Theory]
@@ -52,6 +52,21 @@ public class UsageReportTests
 
         Assert.Equal(7, model.RangeDays);
         Assert.Equal(1, model.PhoneTotal);
+    }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone, ConnectionId.Wifi, "→ Wi-Fi")]
+    [InlineData(ConnectionId.Lan, ConnectionId.Wifi, "→ Wi-Fi")]
+    [InlineData(ConnectionId.Wifi, ConnectionId.Lan, "→ LAN")]
+    public void Every_profile_report_uses_its_explicit_destination_without_changing_byte_buckets(ConnectionId profile, ConnectionId exit, string caption)
+    {
+        var settings = new SmartRoutingSettings().WithUserRule(profile, new UserRule(UserRuleType.App, "editor.exe", Exit: exit));
+        var report = Build(Snap((Today, "app:editor.exe", 10, 20, 0)), settings: settings, profile: profile);
+        var row = Assert.Single(report.Rows);
+        Assert.Equal(profile, report.Profile);
+        Assert.Equal(caption, UsageReport.TagText(row.Exception));
+        Assert.Equal(10, row.PhoneBytes);
+        Assert.Equal(20, row.LanBytes);
     }
 
     [Fact]
@@ -253,8 +268,8 @@ public class UsageReportTests
 
         var rows = Build(usage, settings: settings).Rows.ToDictionary(r => r.Key);
 
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), rows["youtube"].Exception);     // switched off: not an exception now
-        Assert.Equal(new ExceptionState(false, true, RouteExit.Lan), rows["app:chrome.exe"].Exception);
+        Assert.Equal(new ExceptionState(false, true, ConnectionId.Lan, Home: true) { FixedTarget = true }, rows["youtube"].Exception);     // switched off: not an exception now
+        Assert.Equal(new ExceptionState(false, true, ConnectionId.Lan, Home: true), rows["app:chrome.exe"].Exception);
         Assert.False(rows[UsageAttribution.OtherKey].CanChange);
         Assert.False(rows[UsageAttribution.UnattributedKey].CanChange);
     }
@@ -266,22 +281,22 @@ public class UsageReportTests
         var settings = new SmartRoutingSettings().WithPhoneUserRule(new UserRule(UserRuleType.App, "chrome.exe"));
 
         Assert.False(Build(usage, settings: settings).Rows.Single().Exception.InException);
-        Assert.True(Build(usage, settings: settings, profile: RouteExit.Lan).Rows.Single().Exception.InException);
-        Assert.Equal(RouteExit.Phone, Build(usage, settings: settings).Profile);
-        Assert.Equal(RouteExit.Lan, Build(usage, settings: settings, profile: RouteExit.Lan).Profile);
+        Assert.True(Build(usage, settings: settings, profile: ConnectionId.Lan).Rows.Single().Exception.InException);
+        Assert.Equal(ConnectionId.Phone, Build(usage, settings: settings).Profile);
+        Assert.Equal(ConnectionId.Lan, Build(usage, settings: settings, profile: ConnectionId.Lan).Profile);
     }
 
     [Fact]
     public void Tag_and_menu_texts()
     {
-        Assert.Equal("→ LAN", UsageReport.TagText(new ExceptionState(true, true, RouteExit.Lan)));
-        Assert.Equal("→ phone", UsageReport.TagText(new ExceptionState(true, true, RouteExit.Phone)));
-        Assert.Null(UsageReport.TagText(new ExceptionState(false, true, RouteExit.Lan)));
-        Assert.Equal("Exclude from exception", UsageReport.MenuText(new ExceptionState(true, true, RouteExit.Lan)));
-        Assert.Equal("Send to exception (→ LAN)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Lan)));
-        Assert.Equal("Send to exception (→ phone)", UsageReport.MenuText(new ExceptionState(false, true, RouteExit.Phone)));
-        Assert.Equal("Can't be an exception here", UsageReport.MenuText(new ExceptionState(false, false, RouteExit.Lan)));
-        Assert.Equal("Can't be an exception here", UsageReport.MenuText(new ExceptionState(true, false, RouteExit.Lan)));
+        Assert.Equal("→ Home", UsageReport.TagText(new ExceptionState(true, true, ConnectionId.Lan, Home: true)));
+        Assert.Equal("→ Phone", UsageReport.TagText(new ExceptionState(true, true, ConnectionId.Phone)));
+        Assert.Null(UsageReport.TagText(new ExceptionState(false, true, ConnectionId.Lan, Home: true)));
+        Assert.Equal("Exclude from exception", UsageReport.MenuText(new ExceptionState(true, true, ConnectionId.Lan, Home: true)));
+        Assert.Equal("Send to exception (→ Home)", UsageReport.MenuText(new ExceptionState(false, true, ConnectionId.Lan, Home: true)));
+        Assert.Equal("Send to exception (→ Phone)", UsageReport.MenuText(new ExceptionState(false, true, ConnectionId.Phone)));
+        Assert.Equal("Can't be an exception here", UsageReport.MenuText(new ExceptionState(false, false, ConnectionId.Lan, Home: true)));
+        Assert.Equal("Can't be an exception here", UsageReport.MenuText(new ExceptionState(true, false, ConnectionId.Lan, Home: true)));
     }
 
     [Fact]

@@ -16,17 +16,18 @@
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                         <TextBlock Text="Editing:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextSecondary}" />
                         <ToggleButton x:Name="EditPhoneProfile" Content="Phone + exceptions" Padding="10,4" Margin="0,0,4,0" Click="OnEditPhoneProfile" />
+                        <ToggleButton x:Name="EditWifiProfile" Content="Wi-Fi + exceptions" Padding="10,4" Margin="0,0,4,0" Click="OnEditWifiProfile" />
                         <ToggleButton x:Name="EditLanProfile" Content="LAN + exceptions" Padding="10,4" Click="OnEditLanProfile" />
                     </StackPanel>
                     <DockPanel>
                         <CheckBox x:Name="MasterToggle" DockPanel.Dock="Left" VerticalAlignment="Center" Click="OnMaster" />
-                        <TextBlock Text="Smart routing — keep data-hungry traffic off 4G (Phone and LAN modes)" FontSize="15" FontWeight="SemiBold"
+                        <TextBlock Text="Smart routing — choose where each app and website goes" FontSize="15" FontWeight="SemiBold"
                                    Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
                     </DockPanel>
                     <TextBlock x:Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap" />
                     <TextBlock x:Name="TotalText" Margin="0,4,0,0" Foreground="{DynamicResource TextSecondary}" />
-                    <Button x:Name="UsePhoneButton" Content="Use phone until LAN is back (uses mobile data)" Margin="0,8,0,0"
-                            HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" Click="OnUsePhone" />
+                    <Button x:Name="UseMainButton" Content="Use main connection" Margin="0,8,0,0"
+                            HorizontalAlignment="Left" Padding="10,4" Visibility="Collapsed" />
                     <TextBlock x:Name="HintText" Margin="0,8,0,0" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />
                     <TextBlock Text="Changing a rule restarts Smart routing for about a second. Downloads already running may keep their old route until they reconnect."
                                Margin="0,2,0,4" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap" />

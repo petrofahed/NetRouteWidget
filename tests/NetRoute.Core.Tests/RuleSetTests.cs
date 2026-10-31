@@ -89,10 +89,10 @@ public class RuleSetTests
             PhoneUserRules = [new UserRule(UserRuleType.App, "ignored.exe")],
         };
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Phone);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Phone);
 
-        Assert.Equal(new[] { "youtube", "vscode-updates", "user:app:qbittorrent.exe" }, set.Entries.Select(e => e.Id));
-        Assert.All(set.Entries, e => Assert.Equal(RouteExit.Lan, e.Exit));
+        Assert.Equal(new[] { "vscode-updates", "youtube", "user:app:qbittorrent.exe" }, set.Entries.Select(e => e.Id));
+        Assert.All(set.Entries, e => Assert.Equal(RuleTarget.Home, e.Target));
     }
 
     [Fact]
@@ -104,14 +104,14 @@ public class RuleSetTests
             PhoneUserRules = [new UserRule(UserRuleType.Website, "example.com")],
         };
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Lan);
 
         // The update domain (LAN) is matched before the code.exe rule (phone), so a VS Code update never rides the phone.
         // The LAN list stays active after the phone entries: those downloads wait for the LAN instead of healing onto 4G.
         Assert.Equal(new[] { "vscode-updates", "claude", "vscode", "phone-user:website:example.com", "youtube", "user:app:ignored.exe" },
             set.Entries.Select(e => e.Id));
-        Assert.Equal(new[] { RouteExit.Lan, RouteExit.Phone, RouteExit.Phone, RouteExit.Phone, RouteExit.Lan, RouteExit.Lan },
-            set.Entries.Select(e => e.Exit));
+        Assert.Equal(new[] { RuleTarget.Home, RuleTarget.Phone, RuleTarget.Phone, RuleTarget.Phone, RuleTarget.Home, RuleTarget.Home },
+            set.Entries.Select(e => e.Target));
         Assert.True(set.Entries[0].CarveOut);
     }
 
@@ -123,7 +123,7 @@ public class RuleSetTests
             PhoneUserRules = [new UserRule(UserRuleType.App, "x.exe", Enabled: false)],
         }.WithItem("claude", false).WithItem("vscode-updates", false);
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Lan);
 
         Assert.Equal(new[] { "vscode", "youtube" }, set.Entries.Select(e => e.Id));
     }
@@ -136,7 +136,7 @@ public class RuleSetTests
             UserRules = [new UserRule(UserRuleType.App, "off.exe", Enabled: false)],
         }.WithItem("youtube", false);
 
-        var set = RuleSet.Build(V4Catalog, settings, RouteExit.Lan);
+        var set = RuleSet.Build(V4Catalog, settings, ConnectionId.Lan);
 
         Assert.DoesNotContain(set.Entries, e => e.Id == "youtube" || e.Id == "user:app:off.exe");
     }
@@ -147,7 +147,7 @@ public class RuleSetTests
         var settings = new SmartRoutingSettings();
 
         Assert.Equal(
-            RuleSet.Build(V4Catalog, settings, RouteExit.Phone).Fingerprint,
+            RuleSet.Build(V4Catalog, settings, ConnectionId.Phone).Fingerprint,
             RuleSet.Build(V4Catalog, settings).Fingerprint);
     }
 
@@ -173,7 +173,61 @@ public class RuleSetTests
         var settings = new SmartRoutingSettings();
 
         Assert.NotEqual(
-            RuleSet.Build(V4Catalog, settings, RouteExit.Phone).Fingerprint,
-            RuleSet.Build(V4Catalog, settings, RouteExit.Lan).Fingerprint);
+            RuleSet.Build(V4Catalog, settings, ConnectionId.Phone).Fingerprint,
+            RuleSet.Build(V4Catalog, settings, ConnectionId.Lan).Fingerprint);
+    }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone, "user:app:own.exe", RuleTarget.Home)]
+    [InlineData(ConnectionId.Lan, "phone-user:app:own.exe", RuleTarget.Phone)]
+    [InlineData(ConnectionId.Wifi, "wifi-user:app:own.exe", RuleTarget.Phone)]
+    public void Every_profile_keeps_carveouts_first_and_its_own_exception_target(ConnectionId profile, string id, RuleTarget target)
+    {
+        var settings = new SmartRoutingSettings().WithUserRule(profile, new(UserRuleType.App, "own.exe"));
+        var set = RuleSet.Build(V4Catalog, settings, profile);
+
+        Assert.Equal("vscode-updates", set.Entries[0].Id);
+        Assert.Equal(RuleTarget.Home, set.Entries[0].Target);
+        Assert.Equal(target, set.Entries.Single(entry => entry.Id == id).Target);
+        Assert.Equal(RuleTarget.Home, set.Entries.Single(entry => entry.Id == "youtube").Target);
+        Assert.Equal(profile != ConnectionId.Phone, set.Entries.Any(entry => entry.Id == "claude"));
+    }
+
+    [Theory]
+    [InlineData(ConnectionId.Phone)]
+    [InlineData(ConnectionId.Lan)]
+    [InlineData(ConnectionId.Wifi)]
+    public void Explicit_exits_are_literal_and_inactive_nonmetered_rules_are_inherited(ConnectionId profile)
+    {
+        var settings = new SmartRoutingSettings();
+        foreach (var list in Connections.All)
+        {
+            settings = settings.WithUserRule(list, new(UserRuleType.App, "lan.exe", Exit: ConnectionId.Lan))
+                .WithUserRule(list, new(UserRuleType.App, "wifi.exe", Exit: ConnectionId.Wifi))
+                .WithUserRule(list, new(UserRuleType.App, "phone.exe", Exit: ConnectionId.Phone));
+        }
+        var set = RuleSet.Build([], settings, profile);
+        Assert.Equal(7, set.Entries.Count); // three own, two non-metered rules from each other list
+        Assert.Equal(set.Entries.Count, set.Entries.Select(entry => entry.Id).Distinct().Count());
+        Assert.All(set.Entries.Where(entry => entry.Name == "lan.exe"), entry => Assert.Equal(RuleTarget.Lan, entry.Target));
+        Assert.All(set.Entries.Where(entry => entry.Name == "wifi.exe"), entry => Assert.Equal(RuleTarget.Wifi, entry.Target));
+        Assert.Equal(UserRule.IdOf(profile, new(UserRuleType.App, "phone.exe")), Assert.Single(set.Entries, entry => entry.Target == RuleTarget.Phone).Id);
+        Assert.Equal(UserRule.IdOf(profile, new(UserRuleType.App, "lan.exe")), set.FindByProcess("lan.exe")!.Id);
+    }
+
+    [Fact]
+    public void Fingerprint_tracks_only_included_rules_with_target_and_order()
+    {
+        var settings = new SmartRoutingSettings().WithUserRule(ConnectionId.Phone, new(UserRuleType.App, "home.exe"));
+        var before = RuleSet.Build([], settings, ConnectionId.Phone).Fingerprint;
+        var inactive = settings.WithUserRule(ConnectionId.Wifi, new(UserRuleType.App, "phone.exe", Exit: ConnectionId.Phone));
+        Assert.Equal(before, RuleSet.Build([], inactive, ConnectionId.Phone).Fingerprint);
+        var inherited = inactive.WithUserRule(ConnectionId.Wifi, new(UserRuleType.App, "lan.exe", Exit: ConnectionId.Lan));
+        Assert.NotEqual(before, RuleSet.Build([], inherited, ConnectionId.Phone).Fingerprint);
+        var literal = settings.WithUserRule(ConnectionId.Phone, new(UserRuleType.App, "home.exe", Exit: ConnectionId.Lan));
+        Assert.NotEqual(before, RuleSet.Build([], literal, ConnectionId.Phone).Fingerprint);
+        var reordered = settings.WithUserRule(ConnectionId.Phone, new(UserRuleType.App, "second.exe"));
+        var entries = RuleSet.Build([], reordered, ConnectionId.Phone).Entries;
+        Assert.NotEqual(new RuleSet(entries).Fingerprint, new RuleSet(entries.Reverse().ToList()).Fingerprint);
     }
 }

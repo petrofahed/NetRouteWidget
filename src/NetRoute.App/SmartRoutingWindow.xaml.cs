@@ -14,11 +14,11 @@ public partial class SmartRoutingWindow : Window
     readonly HashSet<string> _expanded = new() { "video" };
     readonly Dictionary<string, CheckBox> _groupBoxes = new(), _itemBoxes = new(), _ruleBoxes = new();
     readonly Dictionary<string, TextBlock> _groupBytes = new(), _itemBytes = new(), _ruleBytes = new();
+    readonly Dictionary<string, ComboBox> _ruleDestinations = new();
     readonly Dictionary<string, Control> _controls = new(); // by Tag, to restore keyboard focus after a rebuild
     readonly Dictionary<string, bool?> _groupOn = new(); // the model's state per group (null = mixed)
     readonly List<Button> _addButtons = [];
     string? _structureKey;
-    RouteExit _renderedProfile = RouteExit.Phone; // the profile of the model last rendered: the list the user is looking at
 
     public SmartRoutingWindow()
     {
@@ -27,7 +27,7 @@ public partial class SmartRoutingWindow : Window
         Usage.RangeChanged += days => UsageRangeChanged?.Invoke(days);
         Usage.SortChanged += sort => UsageSortChanged?.Invoke(sort);
         Usage.FilterChanged += text => UsageFilterChanged?.Invoke(text);
-        Usage.ExceptionRequested += (key, profile, on) => UsageExceptionRequested?.Invoke(key, profile, on);
+        Usage.ExceptionRequested += action => UsageExceptionRequested?.Invoke(action);
     }
 
     public event Action<bool>? MasterToggled;
@@ -35,17 +35,20 @@ public partial class SmartRoutingWindow : Window
     public event Action<string, bool>? GroupToggled;
     /// The three user-rule events carry the profile whose list the screen showed when the user clicked (the model last
     /// rendered), so an edit lands in the list the user saw even if the App's editing profile has just changed.
-    public event Action<UserRule, bool, RouteExit>? UserRuleToggled;
-    public event Action<UserRule, RouteExit>? UserRuleRemoved;
-    public event Action<UserRuleType, RouteExit>? AddRuleRequested;
-    public event Action? UsePhoneRequested;
-    public event Action<RouteExit>? EditingProfileChanged;
+    public event Action<UserRule, bool, ConnectionId>? UserRuleToggled;
+    public event Action<UserRule, ConnectionId>? UserRuleRemoved;
+    public event Action<UserRuleType, ConnectionId>? AddRuleRequested;
+    public event Action<WaitingTarget>? UseMainRequested;
+    WaitingTarget? _renderedWaiting;
+    RoutedEventHandler? _useMainClick;
+    public event Action<ConnectionId>? EditingProfileChanged;
     public event Action<int>? UsageRangeChanged;
     public event Action<UsageSort>? UsageSortChanged;
     public event Action<string>? UsageFilterChanged;
     /// Right-click menu on a Usage row: (row key, the profile the row was rendered for, true = send to / false = exclude from
     /// that profile's exception list).
-    public event Action<string, RouteExit, bool>? UsageExceptionRequested;
+    public event Action<UsageExceptionAction>? UsageExceptionRequested;
+    public event Action<UserRule, ConnectionId, ConnectionId>? UserRuleDestinationChanged;
     public event Action? ClearUsageRequested;
     /// "Edit rules file…" link: open the user rules file (rules.user.json) in the default editor.
     public event Action? EditRulesFileRequested;
@@ -67,7 +70,6 @@ public partial class SmartRoutingWindow : Window
     /// so the frequent stats publishes do not steal keyboard focus or swallow an in-flight click.
     public void Render(PageModel model)
     {
-        _renderedProfile = model.EditingProfile;
         var key = StructureKey(model);
         if (key != _structureKey)
         {
@@ -91,7 +93,7 @@ public partial class SmartRoutingWindow : Window
             foreach (var item in group.Items) sb.Append('\u001e').Append(item.Id).Append('\u001f').Append(item.Name);
             sb.Append('\n');
         }
-        foreach (var rule in model.UserRules) sb.Append('U').Append((int)rule.Rule.Type).Append('\u001f').Append(rule.Rule.Value).Append('\n');
+        foreach (var rule in model.UserRules) sb.Append(rule.Rule.Exit?.ToString() ?? "implied").Append('|').Append((int)rule.Target).Append('|').Append('U').Append((int)rule.Rule.Type).Append('\u001f').Append(rule.Rule.Value).Append('\n');
         return sb.ToString();
     }
 
@@ -103,6 +105,7 @@ public partial class SmartRoutingWindow : Window
         _itemBytes.Clear();
         _ruleBoxes.Clear();
         _ruleBytes.Clear();
+        _ruleDestinations.Clear();
         _groupOn.Clear();
         _addButtons.Clear();
         _controls.Clear();
@@ -117,20 +120,25 @@ public partial class SmartRoutingWindow : Window
     void Update(PageModel model)
     {
         MasterToggle.IsChecked = model.Enabled;
-        StatusText.Text = model.Status.Text;
+        StatusText.Text = model.Status.Text + string.Concat(model.Targets.Where(target => target.Names.Count > 0).OrderBy(target => target.Target).Select(target => "\n" + SmartRoutingPresenter.WaitingText(target)));
         // The selector's checked state comes from the model, so a click is undone until the App confirms (like the card's mode buttons).
-        var lanView = model.EditingProfile == RouteExit.Lan;
-        EditPhoneProfile.IsChecked = !lanView;
-        EditLanProfile.IsChecked = lanView;
-        EditPhoneProfile.Content = "Phone + exceptions" + (model.ActiveProfile == RouteExit.Phone ? "  ● active" : "");
-        EditLanProfile.Content = "LAN + exceptions" + (model.ActiveProfile == RouteExit.Lan ? "  ● active" : "");
-        TotalText.Text = lanView
-            ? "Everything else goes through the LAN. These go through the phone."
+        _renderedWaiting = model.Targets.OrderBy(target => target.Target).FirstOrDefault(target => target.CanUseMain);
+        if (_useMainClick is not null) UseMainButton.Click -= _useMainClick;
+        var capturedRequest = _renderedWaiting;
+        _useMainClick = (_, _) => { if (capturedRequest is { } request) UseMainRequested?.Invoke(request); };
+        UseMainButton.Click += _useMainClick;
+        EditPhoneProfile.IsChecked = model.EditingProfile == ConnectionId.Phone;
+        EditLanProfile.IsChecked = model.EditingProfile == ConnectionId.Lan;
+        EditWifiProfile.IsChecked = model.EditingProfile == ConnectionId.Wifi;
+        EditPhoneProfile.Content = "Phone + exceptions" + (model.ActiveProfile == ConnectionId.Phone ? "  ● active" : "");
+        EditLanProfile.Content = "LAN + exceptions" + (model.ActiveProfile == ConnectionId.Lan ? "  ● active" : "");
+        EditWifiProfile.Content = "Wi-Fi + exceptions" + (model.ActiveProfile == ConnectionId.Wifi ? "  ● active" : "");
+        TotalText.Text = model.EditingProfile != ConnectionId.Phone
+            ? $"Everything else goes through {Connections.Label(model.EditingProfile)}. Each rule chooses its destination."
             : $"Kept off 4G today: {ByteFormat.Human(model.TotalToday)}";
-        HintText.Text = lanView
-            ? "Turned-off items go through the LAN like everything else. Your LAN list (the Phone + exceptions view) stays active in this profile too: those downloads wait for the LAN instead of falling onto 4G."
-            : "Turned-off items go through the phone like everything else.";
-        UsePhoneButton.Visibility = model.CanUsePhone ? Visibility.Visible : Visibility.Collapsed;
+        HintText.Text = $"Turned-off items go through {Connections.Label(model.EditingProfile)} like everything else. Home rules wait for a nonmetered connection.";
+        UseMainButton.Visibility = model.CanUseMain ? Visibility.Visible : Visibility.Collapsed;
+        if (_renderedWaiting is { } waiting) UseMainButton.Content = SmartRoutingPresenter.UseMainText(waiting);
 
         foreach (var group in model.Groups)
         {
@@ -148,6 +156,7 @@ public partial class SmartRoutingWindow : Window
             var id = UserRule.IdOf(rule.Rule);
             if (_ruleBoxes.TryGetValue(id, out var box)) { box.IsChecked = rule.Rule.Enabled; box.IsEnabled = model.Enabled; }
             if (_ruleBytes.TryGetValue(id, out var bytes)) bytes.Text = ByteFormat.Human(rule.TodayBytes);
+            if (_ruleDestinations.TryGetValue(id, out var destination)) destination.IsEnabled = model.Enabled;
         }
         foreach (var button in _addButtons) button.IsEnabled = model.Enabled;
     }
@@ -193,12 +202,13 @@ public partial class SmartRoutingWindow : Window
 
     UIElement UserRulesView(PageModel model)
     {
+        var profile = model.EditingProfile; // immutable identity for every control created in this tree
         var panel = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
         var header = new DockPanel();
         var addWebsite = new Button { Content = "+ Website…", Padding = new Thickness(8, 2, 8, 2), Margin = new Thickness(6, 0, 0, 0), Tag = "add:website" };
-        addWebsite.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.Website, _renderedProfile);
+        addWebsite.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.Website, profile);
         var addApp = new Button { Content = "+ App…", Padding = new Thickness(8, 2, 8, 2), Tag = "add:app" };
-        addApp.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.App, _renderedProfile);
+        addApp.Click += (_, _) => AddRuleRequested?.Invoke(UserRuleType.App, profile);
         _addButtons.Add(addWebsite);
         _addButtons.Add(addApp);
         _controls["add:website"] = addWebsite;
@@ -207,7 +217,7 @@ public partial class SmartRoutingWindow : Window
         DockPanel.SetDock(addApp, Dock.Right);
         header.Children.Add(addWebsite);
         header.Children.Add(addApp);
-        header.Children.Add(new TextBlock { Text = model.EditingProfile == RouteExit.Lan ? "My phone rules" : "My rules", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(new TextBlock { Text = "My rules", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
         panel.Children.Add(header);
 
         if (model.UserRules.Count == 0)
@@ -218,18 +228,33 @@ public partial class SmartRoutingWindow : Window
             var id = UserRule.IdOf(rule.Rule);
             var row = new DockPanel { Margin = new Thickness(28, 2, 0, 2) };
             var remove = new Button { Content = "🗑", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(8, 0, 0, 0), ToolTip = "Remove", Tag = "rm:" + id };
-            remove.Click += (_, _) => UserRuleRemoved?.Invoke(rule.Rule, _renderedProfile);
+            remove.Click += (_, _) => UserRuleRemoved?.Invoke(rule.Rule, profile);
             var bytes = Secondary(new TextBlock { VerticalAlignment = VerticalAlignment.Center });
             DockPanel.SetDock(remove, Dock.Right);
             DockPanel.SetDock(bytes, Dock.Right);
             row.Children.Add(remove);
+            var destinations = new ComboBox { MinWidth = 100, Margin = new Thickness(8, 0, 8, 0), ToolTip = "Rule destination" };
+            // Home is a display-only legacy choice. Opening/rendering this selector never materializes a null Exit.
+            var choices = Connections.All.Where(id => id != profile).Select(id => new { Id = (ConnectionId?)id, Label = Connections.Label(id) }).ToList();
+            if (rule.Rule.Exit is null && profile == ConnectionId.Phone) choices.Insert(0, new { Id = (ConnectionId?)null, Label = "Home" });
+            destinations.ItemsSource = choices;
+            destinations.DisplayMemberPath = "Label";
+            destinations.SelectedValuePath = "Id";
+            destinations.SelectedIndex = choices.FindIndex(choice => choice.Id == (rule.Rule.Exit ?? (profile == ConnectionId.Phone ? null : UserRule.ImpliedExit(profile))));
+            destinations.IsEnabled = model.Enabled;
+            destinations.Tag = "dest:" + id;
+            _ruleDestinations[id] = destinations;
+            _controls[(string)destinations.Tag] = destinations;
+            destinations.SelectionChanged += (_, _) => { if (destinations.SelectedItem is not null && destinations.SelectedValue is ConnectionId exit) UserRuleDestinationChanged?.Invoke(rule.Rule, profile, exit); };
+            DockPanel.SetDock(destinations, Dock.Right);
+            row.Children.Add(destinations);
             row.Children.Add(bytes);
             var toggle = new CheckBox
             {
                 Content = $"{(rule.Rule.Type == UserRuleType.App ? "App" : "Website")}: {rule.Rule.Value}",
                 Tag = "r:" + id,
             };
-            toggle.Click += (_, _) => UserRuleToggled?.Invoke(rule.Rule, toggle.IsChecked == true, _renderedProfile);
+            toggle.Click += (_, _) => UserRuleToggled?.Invoke(rule.Rule, toggle.IsChecked == true, profile);
             _ruleBoxes[id] = toggle;
             _ruleBytes[id] = bytes;
             _controls[(string)toggle.Tag] = toggle;
@@ -249,9 +274,10 @@ public partial class SmartRoutingWindow : Window
 
     void OnMaster(object sender, RoutedEventArgs e) => MasterToggled?.Invoke(MasterToggle.IsChecked == true);
 
-    void OnEditPhoneProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(RouteExit.Phone);
+    void OnEditPhoneProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(ConnectionId.Phone);
 
-    void OnEditLanProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(RouteExit.Lan);
+    void OnEditWifiProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(ConnectionId.Wifi);
 
-    void OnUsePhone(object sender, RoutedEventArgs e) => UsePhoneRequested?.Invoke();
+    void OnEditLanProfile(object sender, RoutedEventArgs e) => EditingProfileChanged?.Invoke(ConnectionId.Lan);
+
 }

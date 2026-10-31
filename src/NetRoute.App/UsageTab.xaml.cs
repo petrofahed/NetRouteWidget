@@ -53,14 +53,11 @@ public partial class UsageTab : UserControl
     public event Action<string>? FilterChanged;
     /// A row's context-menu item was clicked: (row key, the profile the menu was rendered for, true = send to the exception
     /// list / false = exclude from it). The state is the one the menu DISPLAYED, never re-read at click time.
-    public event Action<string, RouteExit, bool>? ExceptionRequested;
-
-    RouteExit _renderedProfile = RouteExit.Phone;
+    public event Action<UsageExceptionAction>? ExceptionRequested;
 
     public void Render(UsageReportModel model, UsageSort sort, string statusText, bool recording, bool windowsTracking)
     {
         _sort = sort;
-        _renderedProfile = model.Profile;
         StatusText.Text = statusText;
         StatusText.ToolTip = statusText;
         foreach (var (days, button) in _rangeButtons) button.IsChecked = days == model.RangeDays;
@@ -87,10 +84,10 @@ public partial class UsageTab : UserControl
         {
             if (!_rows.TryGetValue(row.Key, out var view))
             {
-                view = _rows[row.Key] = new RowView(row.Key, (key, on) => ExceptionRequested?.Invoke(key, _renderedProfile, on));
+                view = _rows[row.Key] = new RowView(row.Key, action => ExceptionRequested?.Invoke(action));
                 Rows.Children.Add(view.Root);
             }
-            view.Apply(row);
+            view.Apply(row, model.Profile);
         }
 
         var freeze = !_forceReorder && (RowScroll.IsMouseOver || Rows.IsKeyboardFocusWithin || _rows.Values.Any(r => r.MenuOpen));
@@ -288,13 +285,14 @@ public partial class UsageTab : UserControl
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 1, 6, 1),
             Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed,
         };
-        readonly MenuItem _menuItem = new();
+        readonly ContextMenu _menu = new();
+        IReadOnlyList<UsageExceptionAction> _actions = [];
+        ExceptionState _exception;
         readonly TextBlock[] _bytes = [Number(), Number(), Number(), Number(), Number(), Number()]; // Phone up, down, total, LAN up, down, total
         readonly TextBlock _nowPhone = Number(), _nowLan = Number();
         bool _hovered;
-        bool _sendOn; // what the menu item does: true = send to the exception list, false = exclude (the displayed state)
 
-        public RowView(string key, Action<string, bool> request)
+        public RowView(string key, Action<UsageExceptionAction> request)
         {
             DefineColumns(_grid);
             _root.Child = _grid;
@@ -309,12 +307,24 @@ public partial class UsageTab : UserControl
             nameCell.Children.Add(_tag); // docked first so the long name is trimmed before the tag
             nameCell.Children.Add(_name);
             Place(nameCell, 0);
-            _menuItem.Click += (_, _) => request(key, _sendOn);
-            var menu = new ContextMenu();
-            menu.Items.Add(_menuItem);
-            menu.Opened += (_, _) => { MenuOpen = true; UpdateHover(); };
-            menu.Closed += (_, _) => { MenuOpen = false; UpdateHover(); };
-            _root.ContextMenu = menu;
+            _menu.Opened += (_, _) =>
+            {
+                // Freeze the displayed intents at menu creation. Later renders cannot change an open menu's callbacks.
+                _menu.Items.Clear();
+                foreach (var action in _actions)
+                {
+                    var item = new MenuItem { Header = !action.On ? "Exclude from exception"
+                        : $"Send to { (action.Destination is { } exit ? Connections.Label(exit) : SmartRoutingController.TargetLabel(_exception.Target))}" };
+                    var captured = action;
+                    item.Click += (_, _) => request(captured);
+                    _menu.Items.Add(item);
+                }
+                if (_menu.Items.Count == 0) _menu.Items.Add(new MenuItem { Header = "Can't be an exception here", IsEnabled = false });
+                MenuOpen = true;
+                UpdateHover();
+            };
+            _menu.Closed += (_, _) => { MenuOpen = false; UpdateHover(); };
+            _root.ContextMenu = _menu;
             _root.MouseEnter += (_, _) => UpdateHover();
             _root.MouseLeave += (_, _) => UpdateHover();
             for (var i = 0; i < _bytes.Length; i++) Place(_bytes[i], i + 1);
@@ -332,16 +342,15 @@ public partial class UsageTab : UserControl
         /// The line under a row; the last row of the list has none.
         public void SetLast(bool last) => _separator.Visibility = last ? Visibility.Collapsed : Visibility.Visible;
 
-        public void Apply(UsageReportRow row)
+        public void Apply(UsageReportRow row, ConnectionId profile)
         {
             _name.Text = row.Name;
             _name.ToolTip = row.Name;
             var tag = UsageReport.TagText(row.Exception);
             _tagText.Text = tag ?? "";
             _tag.Visibility = tag is null ? Visibility.Collapsed : Visibility.Visible;
-            _sendOn = !row.Exception.InException;
-            _menuItem.Header = UsageReport.MenuText(row.Exception);
-            _menuItem.IsEnabled = row.CanChange;
+            _exception = row.Exception;
+            _actions = UsageExceptions.Actions(row.Key, profile, row.Exception);
             _bytes[0].Text = ByteFormat.Human(row.PhoneUp);
             _bytes[1].Text = ByteFormat.Human(row.PhoneDown);
             _bytes[2].Text = ByteFormat.Human(row.PhoneBytes);

@@ -11,8 +11,18 @@ public class SingBoxConfigBuilderTests
         new RuleEntry("onedrive", "OneDrive", ["OneDrive.exe"], ["onedrive.live.com"]),
     ]);
 
-    static SingBoxConfigInput Input(RouteExit exit = RouteExit.Phone, bool lanRulesOnPhone = false, string? lanDns = "192.168.86.1") =>
-        new(Rules, "Ethernet 5", "Ethernet", lanDns, exit, lanRulesOnPhone, 41234, "s3cret");
+    static SingBoxConfigInput Input(ConnectionId exit = ConnectionId.Phone, bool lanRulesOnPhone = false, string? lanDns = "192.168.86.1")
+    {
+        var input = GenericInput(exit, new Dictionary<ConnectionId, string>
+        {
+            [ConnectionId.Phone] = "Ethernet 5", [ConnectionId.Lan] = "Ethernet",
+        }) with { Rules = Rules, LanDns = lanDns, ApiSecret = "s3cret" };
+        return !lanRulesOnPhone ? input : input with
+        {
+            Candidates = new Dictionary<RuleTarget, IReadOnlyList<ConnectionId>>(input.Candidates) { [RuleTarget.Home] = [ConnectionId.Lan, ConnectionId.Phone] },
+            Selected = new Dictionary<RuleTarget, ConnectionId?>(input.Selected) { [RuleTarget.Home] = ConnectionId.Phone },
+        };
+    }
 
     static JsonNode Parse(SingBoxConfig c) => JsonNode.Parse(c.Json)!;
 
@@ -20,7 +30,7 @@ public class SingBoxConfigBuilderTests
         root["outbounds"]!.AsArray().Single(o => (string)o!["tag"]! == tag)!;
 
     static SingBoxConfig BuildWith(params RuleEntry[] entries) =>
-        SingBoxConfigBuilder.Build(new SingBoxConfigInput(new RuleSet(entries), "Ethernet 5", "Ethernet", null, RouteExit.Lan, false, 41234, "s3cret"));
+        SingBoxConfigBuilder.Build(Input(ConnectionId.Lan, lanDns: null) with { Rules = new RuleSet(entries) });
 
     static JsonArray RouteRules(SingBoxConfig c) => Parse(c)["route"]!["rules"]!.AsArray();
 
@@ -31,16 +41,16 @@ public class SingBoxConfigBuilderTests
 
         Assert.Equal("Ethernet 5", (string)Outbound(root, "phone")["bind_interface"]!);
         Assert.Equal("Ethernet", (string)Outbound(root, "lan")["bind_interface"]!);
-        Assert.Equal("lan", (string)Outbound(root, "lan-only")["default"]!);
+        Assert.Equal("lan", (string)Outbound(root, "only-home")["default"]!);
         Assert.Equal("phone", (string)Outbound(root, "default")["default"]!);
         Assert.Equal("default", (string)root["route"]!["final"]!);
         Assert.Equal("remote", (string)root["route"]!["default_domain_resolver"]!); // sing-box check requires one
         // A selector switch must move connections already open, or they would stay on the old exit.
-        Assert.True((bool)Outbound(root, "lan-only")["interrupt_exist_connections"]!);
+        Assert.True((bool)Outbound(root, "only-home")["interrupt_exist_connections"]!);
         Assert.True((bool)Outbound(root, "default")["interrupt_exist_connections"]!);
 
-        var healed = Parse(SingBoxConfigBuilder.Build(Input(RouteExit.Lan, lanRulesOnPhone: true)));
-        Assert.Equal("phone", (string)Outbound(healed, "lan-only")["default"]!);
+        var healed = Parse(SingBoxConfigBuilder.Build(Input(ConnectionId.Lan, lanRulesOnPhone: true)));
+        Assert.Equal("phone", (string)Outbound(healed, "only-home")["default"]!);
         Assert.Equal("lan", (string)Outbound(healed, "default")["default"]!);
     }
 
@@ -55,7 +65,7 @@ public class SingBoxConfigBuilderTests
         Assert.True((bool)rules[2]!["ip_is_private"]!);
         // youtube: domains only -> index 3; onedrive: process -> 4, domains -> 5
         Assert.Equal(new Dictionary<int, string> { [3] = "youtube", [4] = "onedrive", [5] = "onedrive" }, config.RuleIndexToEntryId);
-        Assert.Equal("lan-only", (string)rules[4]!["outbound"]!);
+        Assert.Equal("only-home", (string)rules[4]!["outbound"]!);
         Assert.Equal(@"(?i)\\OneDrive\.exe$", (string)rules[4]!["process_path_regex"]![0]!);
         Assert.Null(rules[4]!["process_name"]); // process_name is an exact, case-sensitive match
         Assert.Null(rules[4]!["domain_suffix"]); // never AND a process with domains
@@ -160,30 +170,125 @@ public class SingBoxConfigBuilderTests
     public void A_phone_exit_entry_routes_to_the_phone_outbound_and_a_lan_entry_to_lan_only()
     {
         var config = BuildWith(
-            new RuleEntry("claude", "Claude", ["claude.exe"], ["claude.ai"], RouteExit.Phone),
-            new RuleEntry("youtube", "YouTube", [], ["youtube.com"], RouteExit.Lan));
+            new RuleEntry("claude", "Claude", ["claude.exe"], ["claude.ai"], RuleTarget.Phone),
+            new RuleEntry("youtube", "YouTube", [], ["youtube.com"], RuleTarget.Home));
 
-        var rules = RouteRules(config).Where(r => r!["outbound"] is not null && (string)r["outbound"]! is "phone" or "lan-only").ToList();
+        var rules = RouteRules(config).Where(r => r!["outbound"] is not null && (string)r["outbound"]! is "only-phone" or "only-home").ToList();
 
-        // claude: one process rule + one domain rule (both phone); youtube: one domain rule (lan-only)
-        Assert.Equal(new[] { "phone", "phone", "lan-only" }, rules.Select(r => (string)r!["outbound"]!));
+        // claude: one process rule + one domain rule (both phone); youtube: one domain rule (only-home)
+        Assert.Equal(new[] { "only-phone", "only-phone", "only-home" }, rules.Select(r => (string)r!["outbound"]!));
     }
 
     [Fact]
     public void A_carve_out_rule_precedes_the_phone_rules()
     {
         var config = BuildWith(
-            new RuleEntry("vscode-updates", "VS Code updates", [], ["update.code.visualstudio.com"], RouteExit.Lan, CarveOut: true),
-            new RuleEntry("vscode", "VS Code", ["Code.exe"], [], RouteExit.Phone));
+            new RuleEntry("vscode-updates", "VS Code updates", [], ["update.code.visualstudio.com"], RuleTarget.Home, CarveOut: true),
+            new RuleEntry("vscode", "VS Code", ["Code.exe"], [], RuleTarget.Phone));
 
         var rules = RouteRules(config);
         var update = rules.Select((r, i) => (r, i)).Single(x => x.r!["domain_suffix"]?.AsArray().Any(d => (string)d! == "update.code.visualstudio.com") == true);
         var process = rules.Select((r, i) => (r, i)).Single(x => x.r!["process_path_regex"] is not null);
 
         Assert.True(update.i < process.i);
-        Assert.Equal("lan-only", (string)update.r!["outbound"]!);
-        Assert.Equal("phone", (string)process.r!["outbound"]!);
+        Assert.Equal("only-home", (string)update.r!["outbound"]!);
+        Assert.Equal("only-phone", (string)process.r!["outbound"]!);
         Assert.Equal("vscode-updates", config.RuleIndexToEntryId[update.i]);
         Assert.Equal("vscode", config.RuleIndexToEntryId[process.i]);
+    }
+
+    static SingBoxConfigInput GenericInput(ConnectionId main, IReadOnlyDictionary<ConnectionId, string>? interfaces = null) =>
+        new(new RuleSet(Enum.GetValues<RuleTarget>().Select(target =>
+                new RuleEntry(target.ToString(), target.ToString(), [target + ".exe"], [target + ".example.com"], target)).ToList()),
+            interfaces ?? new Dictionary<ConnectionId, string>
+            {
+                [ConnectionId.Lan] = "Ethernet", [ConnectionId.Wifi] = "Wi-Fi", [ConnectionId.Phone] = "USB",
+            }, "192.168.86.1", main,
+            new Dictionary<RuleTarget, IReadOnlyList<ConnectionId>>
+            {
+                [RuleTarget.Home] = [ConnectionId.Lan, ConnectionId.Wifi],
+                [RuleTarget.Lan] = [ConnectionId.Lan, ConnectionId.Wifi],
+                [RuleTarget.Wifi] = [ConnectionId.Wifi, ConnectionId.Lan],
+                [RuleTarget.Phone] = [ConnectionId.Phone, main],
+            }, new Dictionary<RuleTarget, ConnectionId?>
+            {
+                [RuleTarget.Home] = ConnectionId.Lan, [RuleTarget.Lan] = ConnectionId.Lan,
+                [RuleTarget.Wifi] = ConnectionId.Wifi, [RuleTarget.Phone] = ConnectionId.Phone,
+            }, 41234, "test");
+
+    [Theory]
+    [InlineData(ConnectionId.Lan, "lan", "Ethernet")]
+    [InlineData(ConnectionId.Wifi, "wifi", "Wi-Fi")]
+    [InlineData(ConnectionId.Phone, "phone", "USB")]
+    public void Every_physical_default_and_target_compiles_to_matching_tags_and_index_maps(ConnectionId main, string tag, string name)
+    {
+        var config = SingBoxConfigBuilder.Build(GenericInput(main));
+        var root = Parse(config);
+        Assert.Equal(name, (string)Outbound(root, tag)["bind_interface"]!);
+        Assert.Equal(tag, (string)Outbound(root, "default")["default"]!);
+        foreach (var target in Enum.GetValues<RuleTarget>())
+        {
+            var selector = SmartRoutingPolicy.SelectorTag(target);
+            Assert.Equal(target switch
+            {
+                RuleTarget.Home or RuleTarget.Lan => "lan",
+                RuleTarget.Wifi => "wifi",
+                RuleTarget.Phone => "phone",
+                _ => throw new ArgumentOutOfRangeException(nameof(target)),
+            }, (string)Outbound(root, selector)["default"]!);
+            var indexes = config.RuleIndexToTarget.Where(pair => pair.Value == target).Select(pair => pair.Key).ToArray();
+            Assert.Equal(2, indexes.Length);
+            foreach (var index in indexes)
+            {
+                Assert.Equal(target.ToString(), config.RuleIndexToEntryId[index]);
+                Assert.Equal(selector, (string)root["route"]!["rules"]![index]!["outbound"]!);
+            }
+            Assert.True((bool)Outbound(root, selector)["interrupt_exist_connections"]!);
+        }
+        Assert.Equal(new[] { "lan", "wifi", "unavailable" }, Outbound(root, "only-home")["outbounds"]!.AsArray().Select(n => (string)n!));
+    }
+
+    [Fact]
+    public void Missing_lan_and_phone_produce_bound_waiting_targets_and_no_dangling_routes_or_dns()
+    {
+        var input = GenericInput(ConnectionId.Wifi, new Dictionary<ConnectionId, string> { [ConnectionId.Wifi] = "Wi-Fi" }) with
+        {
+            Selected = new Dictionary<RuleTarget, ConnectionId?>(),
+        };
+        var root = Parse(SingBoxConfigBuilder.Build(input));
+        var outbounds = root["outbounds"]!.AsArray();
+        var tags = outbounds.Select(outbound => (string)outbound!["tag"]!).ToHashSet();
+        Assert.DoesNotContain("lan", tags);
+        Assert.DoesNotContain("phone", tags);
+        Assert.Equal("unavailable", (string)root["route"]!["rules"]![2]!["outbound"]!);
+        Assert.DoesNotContain(root["dns"]!["servers"]!.AsArray(), server => (string?)server!["tag"] == "lan-dns");
+        foreach (var outbound in outbounds)
+        {
+            if ((string)outbound!["type"]! == "direct") Assert.False(string.IsNullOrWhiteSpace((string?)outbound["bind_interface"]));
+            else
+            {
+                var members = outbound["outbounds"]!.AsArray().Select(n => (string)n!).ToList();
+                Assert.All(members, member => Assert.Contains(member, tags));
+                Assert.Contains((string)outbound["default"]!, members);
+            }
+        }
+        Assert.Equal("unavailable", (string)Outbound(root, "only-lan")["default"]!);
+        Assert.Equal("unavailable", (string)Outbound(root, "only-phone")["default"]!);
+        Assert.NotEqual("Wi-Fi", (string)Outbound(root, "unavailable")["bind_interface"]!);
+    }
+
+    [Fact]
+    public void Selector_cannot_select_a_chosen_phone_without_explicit_membership()
+    {
+        var input = GenericInput(ConnectionId.Phone) with
+        {
+            Selected = new Dictionary<RuleTarget, ConnectionId?> { [RuleTarget.Home] = ConnectionId.Phone },
+        };
+        var root = Parse(SingBoxConfigBuilder.Build(input));
+        Assert.Equal("unavailable", (string)Outbound(root, "only-home")["default"]!);
+        Assert.DoesNotContain(Outbound(root, "only-home")["outbounds"]!.AsArray(), n => (string)n! == "phone");
+        var candidates = new Dictionary<RuleTarget, IReadOnlyList<ConnectionId>>(input.Candidates) { [RuleTarget.Home] = [ConnectionId.Lan, ConnectionId.Wifi, ConnectionId.Phone] };
+        root = Parse(SingBoxConfigBuilder.Build(input with { Candidates = candidates }));
+        Assert.Equal("phone", (string)Outbound(root, "only-home")["default"]!);
     }
 }

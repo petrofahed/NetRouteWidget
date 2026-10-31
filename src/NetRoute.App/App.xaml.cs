@@ -25,7 +25,7 @@ public partial class App : Application
     bool _usagePolling;
     UsageSort _usageSort = UsageSort.Default;
     string _usageFilter = ""; // the Usage tab's filter box; per session, a new window starts empty
-    RouteExit? _editingProfile; // the Config tab's view; null = follow the active profile
+    ConnectionId? _editingProfile; // the Config tab's view; null = follow the active profile
     int _renderSeq;
     bool _renderRunning, _renderAgain;
     FileLog? _log;
@@ -385,8 +385,7 @@ public partial class App : Application
             controller.ExternalPathResolver = index =>
             {
                 var status = smart.Status;
-                return status.IsActive && index == TunIndex() // TUN looked up by name on every call: its index changes on each sing-box start
-                    ? (status.DefaultExit == RouteExit.Lan ? InternetPath.Lan : InternetPath.Phone) : null;
+                return SmartRoutingPathResolver.Resolve(status.IsActive, status.DefaultExit, index, TunIndex());
             };
             controller.StatusChanged += status =>
             {
@@ -458,35 +457,34 @@ public partial class App : Application
         RenderSmartCard(status);
         if (!LiveSpeedDisplay.IsShown(status.State, _smart?.IsMeasuring == true)) _card?.RenderSpeeds("", "");
         RenderSmartWindow();
-        if (_waitingPopup is not null && (status.LanOnline || status.LanRulesOnPhone
-            || status.State is SmartState.Off or SmartState.Unavailable or SmartState.Faulted)) // Starting is a transient restart: keep the popup
-            _waitingPopup.Close();
+        if (_waitingPopup is { } popup && (!status.Targets.Any(target => target.Target == popup.Target.Target
+            && target.Main == popup.Target.Main && target.Generation == popup.Target.Generation && target.CanUseMain)
+            || status.State is SmartState.Off or SmartState.Unavailable or SmartState.Faulted)) popup.Close();
     }
 
-    void ShowWaitingPopup(IReadOnlyList<string> names)
+    void ShowWaitingPopup(WaitingTarget waiting)
     {
-        // The event was queued on the dispatcher: the outage may be over by now.
-        if (_smart is not { } smart) return;
-        var current = smart.Status;
-        if (current.LanOnline || current.LanRulesOnPhone
-            || current.State is not (SmartState.Running or SmartState.Starting)) return;
-        var text = SmartRoutingPresenter.WaitingText(names);
-        if (_waitingPopup is not null)
+        // Capture the event's target/main; a queued or stale popup must not act on a different outage.
+        if (_smart is not { } smart || smart.Status.State != SmartState.Running
+            || !smart.Status.Targets.Any(target => target.Target == waiting.Target && target.Main == waiting.Main && target.Generation == waiting.Generation && target.CanUseMain)) return;
+        if (_waitingPopup is { } existing)
         {
-            _waitingPopup.SetText(text);
-            return;
+            if (existing.Target.Target == waiting.Target && existing.Target.Main == waiting.Main && existing.Target.Generation == waiting.Generation)
+            {
+                existing.SetText(SmartRoutingPresenter.WaitingText(waiting));
+                return;
+            }
+            existing.Close();
         }
-        Bounds? cardBounds = _card is { IsVisible: true } card
-            ? new Bounds(card.Left, card.Top, card.ActualWidth, card.ActualHeight)
-            : null;
-        var popup = _waitingPopup = new WaitingPopup(text, cardBounds);
-        popup.UsePhoneClicked += () => _ = _smart?.UseLanRulesOnPhoneAsync();
-        popup.KeepWaitingClicked += () => _ = _smart?.KeepWaitingAsync();
-        popup.Closed += (_, _) => _waitingPopup = null;
+        Bounds? cardBounds = _card is { IsVisible: true } card ? new Bounds(card.Left, card.Top, card.ActualWidth, card.ActualHeight) : null;
+        var popup = _waitingPopup = new WaitingPopup(waiting, cardBounds);
+        popup.UseMainClicked += () => _ = _smart?.UseMainAsync(waiting);
+        popup.KeepWaitingClicked += () => _ = _smart?.KeepWaitingAsync(waiting);
+        popup.Closed += (_, _) => { if (ReferenceEquals(_waitingPopup, popup)) _waitingPopup = null; };
         popup.Show();
     }
 
-    RouteExit EditingProfile => _editingProfile ?? (_smart?.Status.Profile ?? RouteExit.Phone);
+    ConnectionId EditingProfile => _editingProfile ?? (_smart?.Status.Profile ?? ConnectionId.Phone);
 
     /// Renders both tabs. The Config tab is synchronous; the Usage tab needs a copy of the usage taken under the
     /// controller's gate, so it arrives a moment later. A render that is already running is not stacked: one more is queued.
@@ -648,18 +646,15 @@ public partial class App : Application
         };
         // The window passes the profile of the list it was showing when the user clicked (captured before the add dialog
         // opens), so a rule always lands in the list on screen, not in whatever EditingProfile says by now.
-        window.UserRuleToggled += (rule, on, shown) => ChangeSmart(s => shown == RouteExit.Lan
-            ? s.WithPhoneUserRule(rule with { Enabled = on })
-            : s.WithUserRule(rule with { Enabled = on }));
-        window.UserRuleRemoved += (rule, shown) => ChangeSmart(s => shown == RouteExit.Lan
-            ? s.WithoutPhoneUserRule(rule)
-            : s.WithoutUserRule(rule));
+        window.UserRuleToggled += (rule, on, shown) => ChangeSmart(s => SmartRoutingPage.ChangeUserRule(s, shown, rule, enabled: on));
+        window.UserRuleDestinationChanged += (rule, shown, exit) => ChangeSmart(s => SmartRoutingPage.ChangeUserRule(s, shown, rule, destination: exit));
+        window.UserRuleRemoved += (rule, shown) => ChangeSmart(s => s.WithoutUserRule(shown, rule));
         window.AddRuleRequested += (type, shown) =>
         {
-            var dialog = new AddRuleWindow(type) { Owner = window };
-            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => shown == RouteExit.Lan ? s.WithPhoneUserRule(rule) : s.WithUserRule(rule));
+            var dialog = new AddRuleWindow(type, shown) { Owner = window };
+            if (dialog.ShowDialog() == true && dialog.Result is { } rule) ChangeSmart(s => s.WithUserRule(shown, rule));
         };
-        window.UsePhoneRequested += () => _ = _smart?.UseLanRulesOnPhoneAsync();
+        window.UseMainRequested += waiting => _ = _smart?.UseMainAsync(waiting);
         window.UsageRangeChanged += days =>
         {
             _controller!.UpdateSettings(s => s with { SmartRouting = s.SmartRouting with { UsageRangeDays = UsageReport.NormalizeRange(days) } });
@@ -675,8 +670,8 @@ public partial class App : Application
             _usageFilter = text;
             RenderSmartWindow(); // no ApplyAsync: a filter change must never touch sing-box
         };
-        window.UsageExceptionRequested += (key, renderedProfile, on) =>
-            ChangeSmart(s => UsageExceptions.Set(_catalog, s, renderedProfile, key, on)); // what the menu showed, not the live status
+        window.UsageExceptionRequested += action =>
+            ChangeSmart(s => UsageExceptions.Set(_catalog, s, action.Profile, action.Key, action.On, action.Destination)); // what the menu showed, not the live status
         window.EditRulesFileRequested += () => OpenRulesFile();
         window.ClearUsageRequested += async () =>
         {

@@ -26,37 +26,39 @@ public static partial class SingBoxLogParser
     [GeneratedRegex(@"ERROR \[(?<id>\d+) [^\]]*\] connection: open connection to \S+ using outbound/\w+\[(?<out>[^\]]+)\]")] private static partial Regex FailLine();
 }
 
-/// Remembers which entry each LAN-only connection matched, and reports entries whose LAN-only dials failed.
-/// Not thread-safe: callers must serialize all calls (the SmartRoutingController does this under its gate).
-public sealed class LanWaitTracker(IReadOnlyDictionary<int, string> ruleIndexToEntryId, TimeProvider? time = null)
+/// Correlates only-target matches with dial failures; each target has independent recent failures.
+public sealed class RuleWaitTracker(IReadOnlyDictionary<int, string> ruleIndexToEntryId,
+    IReadOnlyDictionary<int, RuleTarget> ruleIndexToTarget, TimeProvider? time = null)
 {
     const int MaxTrackedConnections = 4096;
     readonly TimeProvider _time = time ?? TimeProvider.System;
-    readonly Dictionary<string, string> _entryByConnection = new();
-    readonly Dictionary<string, DateTimeOffset> _lastFailure = new();
+    readonly Dictionary<string, (string Entry, RuleTarget Target, string Outbound)> _matches = new();
+    readonly Dictionary<(RuleTarget Target, string Entry), DateTimeOffset> _failures = new();
 
     public string? Observe(SingBoxLogEvent e)
     {
         switch (e)
         {
-            case RuleMatched m when m.Outbound == SingBoxConfigBuilder.LanOnlyTag
-                                    && ruleIndexToEntryId.TryGetValue(m.RuleIndex, out var entry):
-                if (_entryByConnection.Count >= MaxTrackedConnections) _entryByConnection.Clear();
-                _entryByConnection[m.ConnectionId] = entry;
+            case RuleMatched match when ruleIndexToEntryId.TryGetValue(match.RuleIndex, out var entry)
+                && ruleIndexToTarget.TryGetValue(match.RuleIndex, out var target)
+                && match.Outbound == SmartRoutingPolicy.SelectorTag(target):
+                if (_matches.Count >= MaxTrackedConnections) _matches.Clear();
+                _matches[match.ConnectionId] = (entry, target, match.Outbound);
                 return null;
-            case DialFailed f when _entryByConnection.Remove(f.ConnectionId, out var failed):
-                _lastFailure[failed] = _time.GetUtcNow();
-                return failed;
-            default:
-                return null;
+            case DialFailed failure when _matches.Remove(failure.ConnectionId, out var matched) && failure.Outbound == matched.Outbound:
+                _failures[(matched.Target, matched.Entry)] = _time.GetUtcNow();
+                return matched.Entry;
+            default: return null;
         }
     }
 
-    public IReadOnlyList<string> RecentFailures(TimeSpan window)
-    {
-        var cutoff = _time.GetUtcNow() - window;
-        return _lastFailure.Where(kv => kv.Value >= cutoff).Select(kv => kv.Key).Order().ToList();
-    }
+    public IReadOnlyList<string> RecentFailures(RuleTarget target, TimeSpan window) => _failures
+        .Where(pair => pair.Key.Target == target && pair.Value >= _time.GetUtcNow() - window)
+        .Select(pair => pair.Key.Entry).Order().ToList();
 
-    public void Clear() => _lastFailure.Clear();
+    public void Clear(RuleTarget target)
+    {
+        foreach (var key in _failures.Keys.Where(key => key.Target == target).ToList()) _failures.Remove(key);
+        foreach (var key in _matches.Where(pair => pair.Value.Target == target).Select(pair => pair.Key).ToList()) _matches.Remove(key);
+    }
 }

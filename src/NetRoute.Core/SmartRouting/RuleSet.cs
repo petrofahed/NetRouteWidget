@@ -1,57 +1,63 @@
 namespace NetRoute.Core;
 
-/// Exit: where a connection that matches this entry goes. CarveOut: a LAN entry that stays active in the LAN profile and
-/// is matched before the phone entries (an app's update download).
+/// Target distinguishes logical Home from explicit physical connections. Carve-outs match before app exceptions.
 public sealed record RuleEntry(
     string Id, string Name, IReadOnlyList<string> Processes, IReadOnlyList<string> Domains,
-    RouteExit Exit = RouteExit.Lan, bool CarveOut = false);
+    RuleTarget Target = RuleTarget.Home, bool CarveOut = false);
 
-/// The rules active right now. In the Phone profile: the LAN items switched on plus the enabled LAN user rules (traffic
-/// that must stay off 4G). In the LAN profile: the carve-outs (update items, LAN), then the phone items switched on and
-/// the enabled phone user rules (traffic that must use the phone), then the LAN list too (LAN items and LAN user rules) so
-/// those downloads wait for the LAN (lan-only) instead of healing onto 4G when the LAN is unplugged.
+/// Ordered active exceptions followed by inherited non-metered protection. Off rules are kept only in BuildAll for usage.
 public sealed record RuleSet(IReadOnlyList<RuleEntry> Entries)
 {
     /// The Phone profile ("Phone + exceptions"), which is what Smart routing was before profiles existed.
     public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings) =>
-        Build(catalog, settings, RouteExit.Phone);
+        Build(catalog, settings, ConnectionId.Phone);
 
-    /// profileDefault is the profile's default exit: Phone = "Phone + exceptions", Lan = "LAN + exceptions".
-    public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, RouteExit profileDefault)
+    public static RuleSet Build(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, ConnectionId profile)
     {
+        _ = SmartRoutingPolicy.TargetOf(profile);
         var on = catalog.Where(settings.IsItemOn).ToList();
-        if (profileDefault == RouteExit.Phone)
-            return Create(on.Where(i => i.Exit == RouteExit.Lan), settings.UserRules.Where(r => r.Enabled), []);
-
-        // Explicit phone entries come first and win over the LAN list for the same connection.
-        var phoneFirst = on.Where(i => i.CarveOut).Concat(on.Where(i => i.Exit == RouteExit.Phone && !i.CarveOut));
-        var entries = Create(phoneFirst, [], settings.PhoneUserRules.Where(r => r.Enabled)).Entries.ToList();
-        var lan = Create(on.Where(i => i.Exit == RouteExit.Lan && !i.CarveOut), settings.UserRules.Where(r => r.Enabled), []);
-        entries.AddRange(lan.Entries);
-        return new RuleSet(entries);
+        var entries = on.Where(item => item.CarveOut).Select(CatalogEntry).ToList();
+        var activeCatalogExit = profile == ConnectionId.Phone ? RouteExit.Lan : RouteExit.Phone;
+        entries.AddRange(on.Where(item => !item.CarveOut && item.Exit == activeCatalogExit).Select(CatalogEntry));
+        entries.AddRange(settings.RulesFor(profile).Where(rule => rule.Enabled).Select(rule => UserEntry(profile, rule)));
+        if (profile != ConnectionId.Phone)
+            entries.AddRange(on.Where(item => !item.CarveOut && item.Exit == RouteExit.Lan).Select(CatalogEntry));
+        foreach (var other in Connections.CardOrder.Where(id => id != profile))
+            entries.AddRange(settings.RulesFor(other).Where(rule => rule.Enabled).Select(rule => UserEntry(other, rule))
+                .Where(entry => entry.Target != RuleTarget.Phone));
+        return new RuleSet(entries.DistinctBy(entry => entry.Id).ToList());
     }
 
-    /// Every built-in item and every user rule of both lists, switched on or off. Usage uses it so that traffic of a
+    /// Every built-in item and every user rule of all three lists, switched on or off. Usage uses it so that traffic of a
     /// switched-off item still lands in that item's row (it just goes through the default exit).
-    public static RuleSet BuildAll(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings) =>
-        Create(catalog, settings.UserRules, settings.PhoneUserRules);
-
-    static RuleSet Create(IEnumerable<RuleItem> items, IEnumerable<UserRule> lanRules, IEnumerable<UserRule> phoneRules)
+    public static RuleSet BuildAll(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings)
     {
-        var entries = items.Select(i => new RuleEntry(i.Id, i.Name, i.Processes, i.Domains, i.Exit, i.CarveOut)).ToList();
-        foreach (var rule in lanRules) entries.Add(UserEntry(UserRule.IdOf(rule), rule, RouteExit.Lan));
-        foreach (var rule in phoneRules) entries.Add(UserEntry(UserRule.PhoneIdOf(rule), rule, RouteExit.Phone));
-        return new RuleSet(entries);
+        var entries = catalog.Select(CatalogEntry).ToList();
+        foreach (var profile in Connections.CardOrder)
+            entries.AddRange(settings.RulesFor(profile).Select(rule => UserEntry(profile, rule)));
+        return new RuleSet(entries.DistinctBy(entry => entry.Id).ToList());
     }
 
-    static RuleEntry UserEntry(string id, UserRule rule, RouteExit exit) =>
-        rule.Type == UserRuleType.App
-            ? new RuleEntry(id, rule.Value, [rule.Value], [], exit)
-            : new RuleEntry(id, rule.Value, [], [rule.Value], exit);
+    static RuleEntry CatalogEntry(RuleItem item) => new(item.Id, item.Name, item.Processes, item.Domains,
+        item.Exit switch
+        {
+            RouteExit.Lan => RuleTarget.Home,
+            RouteExit.Phone => RuleTarget.Phone,
+            _ => throw new ArgumentOutOfRangeException(nameof(item), item.Exit, null),
+        }, item.CarveOut);
+
+    static RuleEntry UserEntry(ConnectionId profile, UserRule rule)
+    {
+        var target = rule.Exit is { } exit ? SmartRoutingPolicy.TargetOf(exit)
+            : profile == ConnectionId.Phone ? RuleTarget.Home : RuleTarget.Phone;
+        var id = UserRule.IdOf(profile, rule);
+        return rule.Type == UserRuleType.App
+            ? new RuleEntry(id, rule.Value, [rule.Value], [], target)
+            : new RuleEntry(id, rule.Value, [], [rule.Value], target);
+    }
 
     public string Fingerprint =>
-        string.Join("|", Entries.Select(e =>
-            $"{e.Id}:{e.Exit}:{e.CarveOut}:{string.Join(",", e.Processes)}:{string.Join(",", e.Domains)}"));
+        System.Text.Json.JsonSerializer.Serialize(Entries.Select(e => new { e.Id, e.Target, e.CarveOut, e.Processes, e.Domains }));
 
     public RuleEntry? FindByProcess(string? processName) =>
         processName is null ? null

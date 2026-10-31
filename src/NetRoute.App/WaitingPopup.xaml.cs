@@ -7,10 +7,13 @@ namespace NetRoute.App;
 /// Sits above the card when it is visible so it never covers it; otherwise bottom-right of the work area.
 public partial class WaitingPopup : Window
 {
-    public WaitingPopup(string text, Bounds? cardBounds = null)
+    public WaitingPopup(WaitingTarget target, Bounds? cardBounds = null)
     {
         InitializeComponent();
-        Message.Text = text;
+        Target = target;
+        Message.Text = SmartRoutingPresenter.WaitingText(target);
+        UseMainButton.Content = SmartRoutingPresenter.UseMainText(target);
+        WarningText.Text = Connections.IsMetered(target.Main) ? "Uses mobile data." : "";
         Loaded += (_, _) =>
         {
             var work = SystemParameters.WorkArea;
@@ -19,12 +22,13 @@ public partial class WaitingPopup : Window
         };
     }
 
-    public event Action? UsePhoneClicked;
+    public WaitingTarget Target { get; }
+    public event Action? UseMainClicked;
     public event Action? KeepWaitingClicked;
 
     public void SetText(string text) => Message.Text = text;
 
-    void OnUsePhone(object sender, RoutedEventArgs e) { UsePhoneClicked?.Invoke(); Close(); }
+    void OnUsePhone(object sender, RoutedEventArgs e) { UseMainClicked?.Invoke(); Close(); }
 
     void OnKeepWaiting(object sender, RoutedEventArgs e) { KeepWaitingClicked?.Invoke(); Close(); }
 }
