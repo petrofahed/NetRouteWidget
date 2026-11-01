@@ -43,6 +43,42 @@ public class SmartRoutingControllerTests
     static AppSettings On(bool enabled = true) => new() { SmartRouting = new SmartRoutingSettings { Enabled = enabled } };
 
     [Fact]
+    public async Task Local_unknown_breaks_target_recovery_without_announcing_success()
+    {
+        var c = Create();
+        await c.ApplyAsync(Net(lanMs: null), On());
+        await c.UseMainAsync(Request(c, RuleTarget.Home));
+        await c.ApplyAsync(Net(), On()); await c.ApplyAsync(Net(), On());
+        var unknown = Net() with { ProbeOutcomes = new Dictionary<ConnectionId, PathMap.ProbeOutcome>
+            { [ConnectionId.Phone] = PathMap.ProbeOutcome.Reply, [ConnectionId.Lan] = PathMap.ProbeOutcome.Unavailable } };
+        await c.ApplyAsync(unknown, On());
+        await c.ApplyAsync(Net(), On()); await c.ApplyAsync(Net(), On());
+        Assert.True(c.Status.Targets.Single(t => t.Target == RuleTarget.Home).UsingMain);
+        Assert.Empty(_notes);
+        await c.ApplyAsync(Net(), On());
+        Assert.False(c.Status.Targets.Single(t => t.Target == RuleTarget.Home).UsingMain);
+        Assert.Single(_notes);
+    }
+
+    [Fact]
+    public async Task Raw_HTTPS_failure_cannot_use_smoothed_green_and_local_unknown_cannot_start_an_outage()
+    {
+        var c = Create();
+        var staleGreen = Net() with { ProbeOutcomes = new Dictionary<ConnectionId, PathMap.ProbeOutcome>
+            { [ConnectionId.Phone] = PathMap.ProbeOutcome.Reply, [ConnectionId.Lan] = PathMap.ProbeOutcome.NoReply } };
+        await c.ApplyAsync(staleGreen, On());
+        Assert.True(c.Status.Targets.Single(t => t.Target == RuleTarget.Home).CanUseMain);
+        var unknown = staleGreen with { ProbeOutcomes = new Dictionary<ConnectionId, PathMap.ProbeOutcome>
+            { [ConnectionId.Phone] = PathMap.ProbeOutcome.Reply, [ConnectionId.Lan] = PathMap.ProbeOutcome.Unavailable } };
+        await c.ApplyAsync(unknown, On());
+        Assert.False(c.Status.Targets.Single(t => t.Target == RuleTarget.Home).CanUseMain);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await c.ProcessLineAsync(MatchYouTube);
+        await c.ProcessLineAsync(FailLanOnly);
+        Assert.Empty(_popups);
+    }
+
+    [Fact]
     public async Task Use_main_rebuilds_actual_membership_before_acknowledging_phone_permission()
     {
         var c = Create();

@@ -63,6 +63,7 @@ public class PathMonitorTests
         Assert.NotEmpty(rig.Hops.Sources);
         Assert.All(rig.Hops.Sources, s => Assert.Equal(Ip("192.168.1.4"), s));
         Assert.Equal([Ip("192.168.1.4")], rig.Endpoint.Sources);
+        Assert.Equal(wifi.Index, Assert.Single(rig.Endpoint.Bindings).InterfaceIndex);
         Assert.Same(wifi, snapshot.Lanes[ConnectionId.Wifi].Adapter);
         Assert.Equal("Wi-Fi", snapshot.Lanes[ConnectionId.Wifi].Name);
         Assert.Equal(TraceStatus.Complete, snapshot.Lanes[ConnectionId.Wifi].Trace!.Status);

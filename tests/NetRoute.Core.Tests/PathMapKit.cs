@@ -81,19 +81,21 @@ sealed class FakePathProbe : IPathProbe
     public static EchoResult Target(int ms = 20) => new(ProbeOutcome.Reply, IPAddress.Parse("1.1.1.1"), ms, TargetReached: true);
 }
 
-sealed class FakeEndpointProbe : IEndpointProbe
+sealed class FakeEndpointProbe : IInternetProbe
 {
     public EndpointResult Result { get; set; } = new(ProbeOutcome.Reply, 20);
     /// The local address every check was sent from.
     public List<IPAddress> Sources { get; } = new();
+    public List<InternetProbeBinding> Bindings { get; } = [];
     public Exception? Throw { get; set; }
 
     /// When set, every check waits for it: holds a check in flight.
     public TaskCompletionSource? Gate { get; set; }
 
-    public async Task<EndpointResult> CheckAsync(IPAddress source, CancellationToken ct)
+    public async Task<EndpointResult> CheckAsync(InternetProbeBinding binding, CancellationToken ct)
     {
-        lock (Sources) Sources.Add(source);
+        lock (Sources) Sources.Add(binding.Source);
+        Bindings.Add(binding);
         if (Gate is { } gate) await gate.Task;
         return Throw is { } ex ? throw ex : Result;
     }

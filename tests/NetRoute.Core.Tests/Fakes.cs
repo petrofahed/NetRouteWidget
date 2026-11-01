@@ -46,9 +46,19 @@ sealed class FakeRouteQuery : IRouteQuery
         destination.AddressFamily == AddressFamily.InterNetworkV6 ? BestV6 : BestV4;
 }
 
-sealed class FakeLatencyProbe : ILatencyProbe
+sealed class FakeLatencyProbe : IInternetProbe
 {
     public Dictionary<string, int?> BySource { get; } = new();
+    public Dictionary<string, PathMap.ProbeOutcome> Outcomes { get; } = new();
+    public List<InternetProbeBinding> Bindings { get; } = [];
+    public async Task<PathMap.EndpointResult> CheckAsync(InternetProbeBinding binding, CancellationToken ct)
+    {
+        lock (Bindings) Bindings.Add(binding);
+        var ms = await MeasureAsync(binding.Source, ct);
+        var outcome = Outcomes.GetValueOrDefault(binding.Source.ToString(), ms is null ? PathMap.ProbeOutcome.NoReply : PathMap.ProbeOutcome.Reply);
+        return new(outcome, outcome == PathMap.ProbeOutcome.Reply ? ms : null);
+    }
+
     /// Every address a latency check was sent from.
     public List<string> Calls { get; } = new();
 
@@ -97,10 +107,16 @@ sealed class FakeNetworkNameSource : INetworkNameSource
     }
 }
 
-sealed class BlockingLatencyProbe : ILatencyProbe
+sealed class BlockingLatencyProbe : IInternetProbe
 {
     readonly TaskCompletionSource _gate = new();
     readonly Dictionary<string, int?> _bySource = new();
+
+    public async Task<PathMap.EndpointResult> CheckAsync(InternetProbeBinding binding, CancellationToken ct)
+    {
+        var ms = await MeasureAsync(binding.Source, ct);
+        return new(ms is null ? PathMap.ProbeOutcome.NoReply : PathMap.ProbeOutcome.Reply, ms);
+    }
 
     public void SetLatency(string source, int? ms) => _bySource[source] = ms;
     public void Unblock() => _gate.TrySetResult();

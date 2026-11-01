@@ -40,6 +40,43 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task Unknown_breaks_recovery_streak_and_preserves_existing_heal()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        _probe.BySource["192.168.86.42"] = null;
+        for (var i = 0; i < HealChecks; i++) { _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true); }
+        Assert.True(controller.Status.IsHealing);
+        _probe.BySource["192.168.86.42"] = 12;
+        await controller.RefreshAsync(true); await controller.RefreshAsync(true);
+        _probe.Outcomes["192.168.86.42"] = PathMap.ProbeOutcome.Unavailable;
+        await controller.RefreshAsync(true);
+        Assert.True(controller.Status.IsHealing);
+        _probe.Outcomes.Remove("192.168.86.42");
+        await controller.RefreshAsync(true); await controller.RefreshAsync(true);
+        Assert.True(controller.Status.IsHealing);
+        await controller.RefreshAsync(true);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task Unknown_health_clears_stale_green_and_breaks_failure_window_without_healing()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        await controller.RefreshAsync(true);
+        _probe.Outcomes["192.168.86.42"] = PathMap.ProbeOutcome.Unavailable;
+        for (var i = 0; i < HealChecks; i++) { _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true); }
+        Assert.Null(controller.Status.LanLatencyMs);
+        Assert.False(controller.Status.IsHealing);
+        Assert.Equal(PathMap.ProbeOutcome.Unavailable, controller.Status.ProbeOutcomes[ConnectionId.Lan]);
+        Assert.Contains(_probe.Bindings, b => b.InterfaceIndex == 10 && b.Source.ToString() == "192.168.86.42");
+        _probe.Outcomes["192.168.86.42"] = PathMap.ProbeOutcome.NoReply;
+        for (var i = 0; i < HealChecks - 1; i++) { _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true); }
+        Assert.False(controller.Status.IsHealing);
+        _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true);
+        Assert.True(controller.Status.IsHealing);
+    }
+
+    [Fact]
     public async Task First_refresh_applies_mode_and_reports_status_without_toast()
     {
         var controller = Create();

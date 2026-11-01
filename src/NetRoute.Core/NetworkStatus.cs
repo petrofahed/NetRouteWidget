@@ -1,3 +1,5 @@
+using NetRoute.Core.PathMap;
+
 namespace NetRoute.Core;
 
 public sealed record NetworkStatus(
@@ -11,6 +13,10 @@ public sealed record NetworkStatus(
     bool IsHealing = false,
     bool IsHealSticky = false)
 {
+    /// Raw internet-check outcomes; display hysteresis must never supply routing health.
+    public IReadOnlyDictionary<ConnectionId, ProbeOutcome> ProbeOutcomes { get; init; } =
+        LatencyMs.ToDictionary(pair => pair.Key, pair => pair.Value is null ? ProbeOutcome.NoReply : ProbeOutcome.Reply);
+
     /// The connection healing currently targets as the backup; null when not healing.
     public ConnectionId? HealTarget { get; init; }
     public ConnectionId? Carrier { get; init; }
@@ -21,7 +27,8 @@ public sealed record NetworkStatus(
     public int? WifiLatencyMs => LatencyMs.TryGetValue(ConnectionId.Wifi, out var ms) ? ms : null;
 
     public NetworkStatus WithLatency(ConnectionId id, int? ms) =>
-        this with { LatencyMs = new Dictionary<ConnectionId, int?>(LatencyMs) { [id] = ms } };
+        this with { LatencyMs = new Dictionary<ConnectionId, int?>(LatencyMs) { [id] = ms },
+            ProbeOutcomes = new Dictionary<ConnectionId, ProbeOutcome>(ProbeOutcomes) { [id] = ms is null ? ProbeOutcome.NoReply : ProbeOutcome.Reply } };
 
     /// The preferred adapter is not the one carrying internet.
     public bool IsFallback =>

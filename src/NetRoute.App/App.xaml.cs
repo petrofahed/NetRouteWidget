@@ -29,6 +29,7 @@ public partial class App : Application
     int _renderSeq;
     bool _renderRunning, _renderAgain;
     FileLog? _log;
+    readonly HttpsInternetProbe _internetProbe = HttpsInternetProbe.Default();
     RouteController? _controller;
     TrayIcon? _tray;
     CardWindow? _card;
@@ -96,7 +97,7 @@ public partial class App : Application
             log.Info($"Starting: elevated={elevated}, mode={settings.Mode}, startWithWindows={_startupEnabled}");
 
             var controller = _controller = new RouteController(
-                new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), TcpLatencyProbe.Default(),
+                new WindowsAdapterSource(), new WindowsInterfaceMetrics(), new WindowsRouteQuery(), _internetProbe,
                 settings, elevated, loaded.Unreadable ? _ => { } : store.Save, log.Info,
                 subnetRoutes: new WindowsSubnetRoutes(), names: new WindowsNetworkNames());
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
@@ -210,6 +211,8 @@ public partial class App : Application
         _usageSave.Stop();
         _debouncer?.Dispose();
         StopSmartRouting();
+        _pathWindow?.Close(); // cancels map callers before retiring the shared physical pools
+        _internetProbe.Dispose();
         _tray?.Dispose();
         _log?.Info("Exiting; routing left as-is");
         _instance.Dispose();
@@ -545,7 +548,7 @@ public partial class App : Application
             return;
         }
 
-        var monitor = new PathMonitor(new IcmpPathProbe(), TcpEndpointProbe.Default(), TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
+        var monitor = new PathMonitor(new IcmpPathProbe(), _internetProbe, TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
         var cts = new CancellationTokenSource();
         var localMonitor = new LocalNetworkMonitor(new IcmpPathProbe(), HostResolver.ResolveIPv4Async, TimeProvider.System, PathThresholds.Default, message => _log?.Info(message));
         var netInfo = new CachingNetworkInfo(new WindowsNetworkInfo(), TimeProvider.System); // the tab asks several times a second; each real read lists every adapter

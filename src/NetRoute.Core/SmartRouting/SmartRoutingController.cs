@@ -1,3 +1,4 @@
+using NetRoute.Core.PathMap;
 using System.Text.RegularExpressions;
 
 namespace NetRoute.Core;
@@ -212,7 +213,7 @@ public sealed class SmartRoutingController
         {
             if (_shutdown || _net is null || Desired().State != SmartState.Running
                 || !_host.IsRunning || _runningKey != KeyFor(_net)
-                || SmartRoutingPolicy.WantedExit(_net) != main || NormalSelection(target) is not null
+                || SmartRoutingPolicy.WantedExit(_net) != main || NormalSelection(target) is not null || Indeterminate(target)
                 || !_rules.Entries.Any(entry => entry.Target == target)
                 || request.Generation != _targets[target].ActionGeneration) return;
             var state = _targets[target];
@@ -237,7 +238,7 @@ public sealed class SmartRoutingController
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (!_shutdown && Desired().State == SmartState.Running && NormalSelection(target) is null
+            if (!_shutdown && Desired().State == SmartState.Running && NormalSelection(target) is null && !Indeterminate(target)
                 && _net is not null && SmartRoutingPolicy.WantedExit(_net) == request.Main
                 && _host.IsRunning && _runningKey == KeyFor(_net)
                 && _rules.Entries.Any(entry => entry.Target == target)
@@ -586,7 +587,10 @@ public sealed class SmartRoutingController
     string? LanDns() => _interfaces.ContainsKey(ConnectionId.Lan) ? _lastLanDns : null;
     HashSet<ConnectionId> Answering() => _net is null ? [] : Connections.All.Where(id => _net.Adapters.IsUsed(id)
         && _net.Adapters.Adapter(id) is { HasGateway: true, IPv4: not null }
-        && _net.LatencyMs.GetValueOrDefault(id) is not null).ToHashSet();
+        && _net.ProbeOutcomes.GetValueOrDefault(id, ProbeOutcome.Unavailable) == ProbeOutcome.Reply).ToHashSet();
+    bool Indeterminate(RuleTarget target) => _net is not null && NormalSelection(target) is null
+        && SmartRoutingPolicy.Candidates(target, SmartRoutingPolicy.ProfileOf(_net), _wantedExit, _net.Adapters, false)
+            .Any(id => _net.Adapters.Adapter(id) is not null && _net.ProbeOutcomes.GetValueOrDefault(id, ProbeOutcome.Unavailable) == ProbeOutcome.Unavailable);
     ConnectionId? NormalSelection(RuleTarget target) => _net is null ? null : SmartRoutingPolicy.Select(
         target, SmartRoutingPolicy.ProfileOf(_net), _wantedExit, _net.Adapters, Answering(), false);
     bool UsingMain(RuleTarget target) => _targets[target].PermittedMain == _wantedExit;
@@ -722,6 +726,12 @@ public sealed class SmartRoutingController
         var answering = Answering();
         foreach (var (target, state) in _targets)
         {
+            if (Indeterminate(target))
+            {
+                state.HealthyChecks = 0;
+                state.OfflineSince = null;
+                continue; // a local measurement fault alone cannot establish a new outage
+            }
             var blocked = NormalSelection(target) is null;
             if (blocked && !state.Blocked)
             {
@@ -810,7 +820,7 @@ public sealed class SmartRoutingController
             var pending = _targets[target];
             var usingMain = state == SmartState.Running && pending.AppliedUseMain
                 && _appliedTargets.GetValueOrDefault(target) == _wantedExit;
-            var waiting = NormalSelection(target) is null;
+            var waiting = NormalSelection(target) is null && !Indeterminate(target);
             IReadOnlyList<string> names = state == SmartState.Running && waiting && !usingMain && _tracker is not null
                 ? _tracker.RecentFailures(target, WaitWindow).Select(id => _rules.Entries.FirstOrDefault(entry => entry.Id == id)?.Name ?? id).ToList() : [];
             targets.Add(new WaitingTarget(target, _wantedExit, names, usingMain,

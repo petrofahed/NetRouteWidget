@@ -1,3 +1,4 @@
+using NetRoute.Core.PathMap;
 using System.Net;
 
 namespace NetRoute.Core;
@@ -12,7 +13,7 @@ public sealed class RouteController
 
     readonly IAdapterSource _adapters;
     readonly IRouteQuery _routes;
-    readonly ILatencyProbe _probe;
+    readonly IInternetProbe _probe;
     readonly RoutingEngine _engine;
     readonly Action<AppSettings> _persist;
     readonly Action<string> _log;
@@ -74,7 +75,7 @@ public sealed class RouteController
     internal int RecoverThreshold => _recoverThreshold;
 
     public RouteController(
-        IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, ILatencyProbe probe,
+        IAdapterSource adapters, IInterfaceMetrics metrics, IRouteQuery routes, IInternetProbe probe,
         AppSettings settings, bool canModify, Action<AppSettings> persist, Action<string> log, TimeProvider? time = null,
         ISubnetRoutes? subnetRoutes = null, INetworkNameSource? names = null)
     {
@@ -132,19 +133,22 @@ public sealed class RouteController
             var mode = Settings.Mode;
             UpdateWifiNetworkName(detection);
 
-            var rawLatencies = measureLatency
-                ? await MeasureAsync(detection, ct)
-                : Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null ? (int?)null : before.LatencyMs.GetValueOrDefault(id));
+            var checks = measureLatency ? await MeasureAsync(detection, ct) : null;
+            ct.ThrowIfCancellationRequested();
+            var outcomes = Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null ? ProbeOutcome.NoReply
+                : checks is not null ? checks.GetValueOrDefault(id, new(ProbeOutcome.Unavailable)).Outcome
+                : before.ProbeOutcomes.GetValueOrDefault(id, ProbeOutcome.Unavailable));
+            var rawLatencies = Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null ? (int?)null
+                : checks is not null ? checks.GetValueOrDefault(id)?.RttMs : before.LatencyMs.GetValueOrDefault(id));
+            var stickyHealStarted = UpdateHealing(mode, detection, rawLatencies, before.CanModify, measureLatency, outcomes);
 
-            var stickyHealStarted = UpdateHealing(mode, detection, rawLatencies, before.CanModify, measureLatency);
-
-            // Healing above used the raw results; the card only reports "no reply" once a miss repeats.
-            var shown = measureLatency
-                // An adapter that left its slot (unplugged, Not used, turned off) has no latency to keep.
-                ? Connections.All.ToDictionary(id => id, id => detection.Adapter(id) is null
-                    ? null
-                    : Smooth(id, rawLatencies.GetValueOrDefault(id), before.LatencyMs.GetValueOrDefault(id)))
-                : rawLatencies;
+            // Preserve the existing two-miss remote-loss display; a local unknown must never remain green.
+            var shown = Connections.All.ToDictionary(id => id, id =>
+            {
+                if (detection.Adapter(id) is null || outcomes[id] == ProbeOutcome.Unavailable)
+                { _misses[id] = 0; return (int?)null; }
+                return measureLatency ? Smooth(id, rawLatencies[id], before.LatencyMs.GetValueOrDefault(id)) : rawLatencies[id];
+            });
 
             var carrier = NetworkStatus.CarrierFor(mode, _healTarget, detection);
 
@@ -175,6 +179,7 @@ public sealed class RouteController
                 ActivePath = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV4), detection),
                 Ipv6Path = PathFor(_routes.GetBestInterfaceIndex(ProbeTargetV6), detection),
                 LatencyMs = shown,
+                ProbeOutcomes = outcomes,
                 Error = error,
                 HealTarget = _healTarget,
                 Carrier = carrier,
@@ -467,7 +472,7 @@ public sealed class RouteController
     }
 
     /// Returns true when this check started a sticky heal.
-    bool UpdateHealing(RoutingMode mode, DetectionResult adapters, Dictionary<ConnectionId, int?> latencies, bool canModify, bool measured)
+    bool UpdateHealing(RoutingMode mode, DetectionResult adapters, Dictionary<ConnectionId, int?> latencies, bool canModify, bool measured, IReadOnlyDictionary<ConnectionId, ProbeOutcome> outcomes)
     {
         var main = Connections.Of(mode);
         if (!canModify || !Settings.AutoHeal || main is null)
@@ -486,6 +491,14 @@ public sealed class RouteController
         // No IPv4 yet on the main adapter (e.g. DHCP pending after a replug): nothing was measured for it,
         // so this check is no evidence either way. An absent main adapter is simply "not answering" below.
         if (!measured || adapters.Adapter(main.Value) is { IPv4: null }) return false;
+
+        bool Unknown(ConnectionId id) => adapters.Adapter(id) is not null && outcomes.GetValueOrDefault(id) == ProbeOutcome.Unavailable;
+        var carrier = NetworkStatus.CarrierFor(mode, _healTarget, adapters);
+        if (Unknown(main.Value) || (carrier is { } current && Unknown(current)))
+        {
+            _healCount = 0; _failingSince = null; _lastCheckAt = null; _stepUpCounts.Clear();
+            return false; // unknown breaks consecutive evidence but cannot move an existing heal
+        }
 
         var checkedAt = _time.GetUtcNow();
         var afterPause = _lastCheckAt is { } previous && checkedAt - previous > MaxGapBetweenChecks;
@@ -640,16 +653,17 @@ public sealed class RouteController
         return misses >= NoReplyAfterMissedChecks ? null : previous;
     }
 
-    async Task<Dictionary<ConnectionId, int?>> MeasureAsync(DetectionResult adapters, CancellationToken ct)
+    async Task<Dictionary<ConnectionId, EndpointResult>> MeasureAsync(DetectionResult adapters, CancellationToken ct)
     {
         var pending = adapters.Present.Select(p => (p.Id, Task: Probe(p.Adapter, ct))).ToList();
-        var result = new Dictionary<ConnectionId, int?>();
+        var result = new Dictionary<ConnectionId, EndpointResult>();
         foreach (var (id, task) in pending) result[id] = await task;
         return result;
     }
 
-    Task<int?> Probe(AdapterInfo? adapter, CancellationToken ct) =>
-        adapter?.IPv4 is { } ip ? _probe.MeasureAsync(IPAddress.Parse(ip), ct) : Task.FromResult<int?>(null);
+    Task<EndpointResult> Probe(AdapterInfo? adapter, CancellationToken ct) =>
+        adapter?.IPv4 is { } ip ? _probe.CheckAsync(new(IPAddress.Parse(ip), adapter.Index), ct)
+            : Task.FromResult(new EndpointResult(ProbeOutcome.Unavailable));
 
     void Publish(NetworkStatus status, string? toast)
     {

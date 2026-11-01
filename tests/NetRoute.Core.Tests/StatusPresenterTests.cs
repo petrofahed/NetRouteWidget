@@ -24,6 +24,16 @@ public class StatusPresenterTests
             CanModify: true, null);
 
     [Fact]
+    public void Unknown_HTTPS_measurement_is_neither_stale_green_nor_a_remote_no_reply()
+    {
+        var status = StatusWith3(RoutingMode.Lan) with { ProbeOutcomes = new Dictionary<ConnectionId, PathMap.ProbeOutcome>
+            { [ConnectionId.Lan] = PathMap.ProbeOutcome.Unavailable } };
+        var row = StatusPresenter.Present(status).Rows.Single(row => row.Id == ConnectionId.Lan).Row;
+        Assert.Equal("check unavailable", row.Latency);
+        Assert.Equal(Dot.Gray, row.Dot);
+    }
+
+    [Fact]
     public void Normal_phone_mode()
     {
         var view = StatusPresenter.Present(Status());

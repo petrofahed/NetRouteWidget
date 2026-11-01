@@ -1,14 +1,15 @@
 # NetRoute Widget
 
-**v6.2 local source package:** implementation and internal phase checks are complete; final exact-commit checks/review are recorded in the [implementation plan](docs/superpowers/plans/2026-10-30-netroute-v6-2-three-connection-smart-routing.md). This is not a release or deployment. Real WPF interaction, TUN/network routing and the owner runtime matrix remain unverified. Prior PR #5 G1/G2 runtime results remain unreported; its merge did not establish a pass.
+**v6.2.1 local patch:** internet health now requires a valid expected HTTPS response rather than a TCP handshake. Offline checks and review apply to the patch commit; real LAN improvement remains unverified, and this work has not changed the running widget. The preceding three-connection feature is described in the [v6.2 implementation plan](docs/superpowers/plans/2026-10-30-netroute-v6-2-three-connection-smart-routing.md). Prior PR #5 G1/G2 runtime results remain separate; its merge did not establish a pass.
 
 A small Windows tray widget for PCs that are connected to **multiple networks at once**, such as a wired LAN, a phone's USB tethering, and (from v6.0) Wi-Fi as a third path.
 
 - Sends **internet traffic through the phone**, through the LAN, through Wi-Fi, or lets Windows decide, with one click.
 - Keeps **local devices (printer, NAS, TV, other PCs) on the LAN** in Phone, LAN and Wi-Fi mode, even when Wi-Fi joins the same home network as the LAN cable (Windows default hands routing back to Windows entirely, so this does not apply there).
-- Shows which connection is carrying internet right now, and the latency through each. The latency has two amber states:
+- Shows which connection is carrying internet right now, and HTTPS-check latency through each (DNS, TCP, TLS and expected HTTP response, not just ping time). The latency has two amber states:
   - **"1250 ms" in amber:** the connection answers, but slowly (500 ms or more, for example a congested line). Traffic still flows.
-  - **"no reply" in amber:** two checks in a row got no answer within 4 seconds. This is also what Smart routing treats as the LAN being offline. A slow answer never counts as a failure, for Smart routing or for auto-heal.
+  - **"no reply" in amber:** two checks in a row failed the bounded HTTPS check. Auto-heal and Smart routing use the raw HTTPS outcome rather than a smoothed old green figure. A slow but valid response is still healthy.
+  - **"check unavailable" in gray:** a local binding/resource problem prevented a measurement; it is not evidence that the internet is down, and cannot trigger healing or count toward recovery.
 - When the preferred connection **disconnects**, internet falls back to the next one automatically, in order **LAN → Wi-Fi → Phone**, and you get a notification.
 - **Auto-heal:** if the preferred connection is up but has **no internet** (for example, phone mobile data off, or the carrier blocking tethering), the widget switches to the next connection in that same order until it recovers, and steps back up as higher-priority connections come back. It waits until the connection has failed for a full minute, so short blips never move your traffic onto a worse (maybe metered) connection. Turn it off entirely in the card's ⋮ menu or the tray menu.
   - Repeated failures make it wait longer before switching back.
@@ -85,7 +86,7 @@ Click the card's status line (it has a dotted underline) or the network icon nex
 - **What it shows:** each device on the way (your router, the box behind it, your provider's gateway, and so on) with its latency and packet loss, and the internet at the end. Healthy links flow green; a link with loss turns amber; a located break is red with a ✕.
 - **What it will and will not claim:** the connection's own internet check decides whether it is failing. A device is blamed only if its route probes **and** a direct ping to it were both lost in the same moments as the failed internet checks; missing route probes alone name nobody. A device that ignores probes while traffic still gets through is shown as "Ignores probes", never as broken, and a device that answers a direct ping is shown as reachable (that is not proof it passes traffic on). When the evidence is partial the window says the fault is "at or beyond" a device without naming one, and when it conflicts or is missing it says the "location is uncertain". The headline is the **routing** (which connection Windows uses); the lines under "Reachability" say whether each connection can reach the internet on its own. A route seen before a worse trace replaced it is kept and labelled "last known route (stale …)".
 - **Calm states:** "Measuring…" for the first ten seconds, "Measurement unavailable" when this PC could not run a check (this is never counted as packet loss), and "Trace incomplete" when the route is longer than 12 hops or ICMP to the target is filtered (this is never a fault by itself).
-- **How it measures:** ICMP echo with a chosen TTL (and a direct ping to the device's own address), sent from each connection's own address, once a second per device; a TCP connection to `1.1.1.1` (then `8.8.8.8`) every two seconds as the internet check. It runs only while the window is open and needs no administrator rights. IPv4 only.
+- **How it measures:** ICMP echo with a chosen TTL (and a direct ping to the device's own address), sent from each connection's own address, once a second per device; the same authenticated HTTPS check used by auto-heal and Smart routing every two seconds as the internet check. It runs only while the window is open and needs no administrator rights. IPv4 only.
 - **Details:** click any device for its latency, loss, a 30-second sparkline and a plain-language note. See [the v5 spec](docs/superpowers/specs/2026-10-13-netroute-v5-path-map-design.md).
 - **Local network tab:** a second tab tests your own wired network apart from the internet path. It pings your router and any devices you add (a NAS, a printer, anything with an address or name; **Scan network…** lists what is on your subnet) once a second, shows this PC's network card (link speed, errors) and says in plain words whether the local network is healthy or whether the fault is beyond your router. Devices are saved in `settings.json`. See [the v5.2 spec](docs/superpowers/specs/2026-10-14-netroute-v5-2-local-network-design.md).
 
@@ -149,6 +150,14 @@ Get-NetRoute -PolicyStore ActiveStore -AddressFamily IPv4 | Where-Object { $_.Ne
 schtasks /Delete /TN NetRouteWidget /F
 Remove-Item -Recurse "$env:APPDATA\NetRouteWidget"
 ```
+
+## HTTPS internet health (v6.2.1 local patch)
+
+A TCP port accepting a connection is no longer enough for green status. Two dedicated providers race: `https://www.google.com/generate_204` and `https://connectivitycheck.grapheneos.network/generate_204`. A reply requires normal certificate and hostname validation, HTTP 204 and no declared/streamed body. Redirects, captive pages, TLS resets, invalid certificates and unexpected HTTP responses do not pass. One four-second deadline covers DNS, connection attempts, TLS, headers and content; losing requests are cancelled and observed.
+
+Each connection is bound to the chosen physical IPv4 source and Windows interface index, with no system proxy or default-route/TUN fallback. DNS uses the OS IPv4 resolver under that deadline; it is **not per-adapter DNS**, and passing these endpoints does not prove every website works. Local measurement faults stay distinct from remote non-replies. The normal healing delay, two-miss card display and three-good-check recovery thresholds remain.
+
+The App shares one probe between card/auto-heal and the open map. Every observation gets a fresh response; no health result is cached. Connections may be reused only within an exact source/index/provider pool, with a 30-second lifetime, 10-second idle limit, two connections per provider and at most three retained bindings. Busy old entries are not evicted; a check can use a temporary owned entry instead. This avoids needless TLS handshakes where providers permit reuse; it does not reduce requests or guarantee reuse. With the visible card and map open, each used adapter can make 42 checks/minute (84 provider requests/minute); closing the map leaves 12 checks/minute (24 provider requests/minute), with tiny empty responses and transport overhead. No live LAN fix is claimed until the owner checks the installed patch.
 
 ## Build and test
 

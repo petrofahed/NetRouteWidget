@@ -17,7 +17,7 @@ public sealed class PathMonitor
     const int MaxLoggedMessages = 20;
 
     readonly IPathProbe _hopProbe;
-    readonly IEndpointProbe _endpointProbe;
+    readonly IInternetProbe _endpointProbe;
     readonly PathTracer _tracer;
     readonly TimeProvider _time;
     readonly PathThresholds _t;
@@ -28,7 +28,7 @@ public sealed class PathMonitor
     DateTimeOffset? _lastSampleAt;
     readonly HashSet<string> _logged = [];
 
-    public PathMonitor(IPathProbe hopProbe, IEndpointProbe endpointProbe, TimeProvider time, PathThresholds thresholds, Action<string> log)
+    public PathMonitor(IPathProbe hopProbe, IInternetProbe endpointProbe, TimeProvider time, PathThresholds thresholds, Action<string> log)
     {
         _hopProbe = hopProbe;
         _endpointProbe = endpointProbe;
@@ -245,17 +245,17 @@ public sealed class PathMonitor
                 if (lane.Source is not { } source) continue;
                 var generation = lane.Generation;
                 var store = lane.Endpoint;
-                work.Add(CheckEndpoint(lane, generation, source, store, ct));
+                work.Add(CheckEndpoint(lane, generation, new(source, lane.Adapter!.Index), store, ct));
             }
         }
         await Task.WhenAll(work);
     }
 
-    async Task CheckEndpoint(Lane lane, int generation, IPAddress source, PathSamples store, CancellationToken ct)
+    async Task CheckEndpoint(Lane lane, int generation, InternetProbeBinding binding, PathSamples store, CancellationToken ct)
     {
-        // Stamped when sent: a failed TCP check can take up to 4 s, and must still land in the 2 s bucket it belongs to.
+        // Stamped when sent: a failed HTTPS check can take up to 4 s, and must still land in the 2 s bucket it belongs to.
         var sentAt = _time.GetUtcNow();
-        var result = await Guard(() => _endpointProbe.CheckAsync(source, ct), new EndpointResult(ProbeOutcome.Unavailable));
+        var result = await Guard(() => _endpointProbe.CheckAsync(binding, ct), new EndpointResult(ProbeOutcome.Unavailable));
         if (ct.IsCancellationRequested) return;
         lock (_gate)
         {

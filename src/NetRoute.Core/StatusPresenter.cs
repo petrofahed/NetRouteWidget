@@ -122,6 +122,8 @@ public static class StatusPresenter
     {
         var label = id == ConnectionId.Wifi ? s.WifiNetwork ?? "Wi-Fi" : Connections.Label(id);
         if (s.Adapters.IsTurnedOff(id)) return new(label, "off", "", Dot.Gray, false, IsOff: true);
+        if (s.Adapters.Adapter(id) is { } unknown && s.ProbeOutcomes.GetValueOrDefault(id) == PathMap.ProbeOutcome.Unavailable)
+            return new(label, unknown.IPv4 ?? "no IPv4", "check unavailable", Dot.Gray, s.ActivePath == Connections.PathOf(id));
         var latencyMs = s.LatencyMs.TryGetValue(id, out var ms) ? ms : null;
         return Row(label, s.Adapters.Adapter(id), s.Adapters.Issue(id), latencyMs, s.ActivePath == Connections.PathOf(id));
     }
