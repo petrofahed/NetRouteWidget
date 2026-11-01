@@ -40,6 +40,50 @@ public class RouteControllerTests
     }
 
     [Fact]
+    public async Task DHCP_unknown_breaks_recovery_evidence_before_the_IPv4_null_guard()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        _probe.BySource["192.168.86.42"] = null;
+        for (var i = 0; i < HealChecks; i++) { _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true); }
+        Assert.True(controller.Status.IsHealing);
+        _probe.BySource["192.168.86.42"] = 12;
+        await controller.RefreshAsync(true); await controller.RefreshAsync(true);
+        var position = _adapters.Adapters.FindIndex(adapter => adapter.Index == 10);
+        var original = _adapters.Adapters[position];
+        _adapters.Adapters[position] = original with { IPv4 = null };
+        await controller.RefreshAsync(true);
+        Assert.Equal(PathMap.ProbeOutcome.Unavailable, controller.Status.ProbeOutcomes[ConnectionId.Lan]);
+        Assert.True(controller.Status.IsHealing);
+        _adapters.Adapters[position] = original;
+        await controller.RefreshAsync(true); await controller.RefreshAsync(true);
+        Assert.True(controller.Status.IsHealing); // two new replies cannot complete the old recovery streak
+        await controller.RefreshAsync(true);
+        Assert.False(controller.Status.IsHealing);
+    }
+
+    [Fact]
+    public async Task DHCP_unknown_restarts_the_failure_count_and_elapsed_failure_window()
+    {
+        var controller = Create(new AppSettings { Mode = RoutingMode.Lan });
+        _probe.BySource["192.168.86.42"] = null;
+        for (var i = 0; i < HealChecks - 1; i++) { _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true); }
+        Assert.False(controller.Status.IsHealing); // 55 seconds since first failed measurement
+        var position = _adapters.Adapters.FindIndex(adapter => adapter.Index == 10);
+        var original = _adapters.Adapters[position];
+        _adapters.Adapters[position] = original with { IPv4 = null };
+        _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true);
+        Assert.Equal(PathMap.ProbeOutcome.Unavailable, controller.Status.ProbeOutcomes[ConnectionId.Lan]);
+        _adapters.Adapters[position] = original;
+        for (var i = 0; i < HealChecks - 1; i++)
+        {
+            _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true);
+            Assert.False(controller.Status.IsHealing); // the old pre-DHCP failure window cannot trigger a heal
+        }
+        _clock.Advance(TimeSpan.FromSeconds(5)); await controller.RefreshAsync(true);
+        Assert.True(controller.Status.IsHealing);
+    }
+
+    [Fact]
     public async Task Unknown_breaks_recovery_streak_and_preserves_existing_heal()
     {
         var controller = Create(new AppSettings { Mode = RoutingMode.Lan });

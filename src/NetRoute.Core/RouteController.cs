@@ -488,9 +488,7 @@ public sealed class RouteController
 
         var candidates = Connections.FallbackOrder.Where(id => id != main.Value && adapters.Adapter(id) is { IPv4: not null }).ToList();
 
-        // No IPv4 yet on the main adapter (e.g. DHCP pending after a replug): nothing was measured for it,
-        // so this check is no evidence either way. An absent main adapter is simply "not answering" below.
-        if (!measured || adapters.Adapter(main.Value) is { IPv4: null }) return false;
+        if (!measured) return false;
 
         bool Unknown(ConnectionId id) => adapters.Adapter(id) is not null && outcomes.GetValueOrDefault(id) == ProbeOutcome.Unavailable;
         var carrier = NetworkStatus.CarrierFor(mode, _healTarget, adapters);
@@ -499,6 +497,10 @@ public sealed class RouteController
             _healCount = 0; _failingSince = null; _lastCheckAt = null; _stepUpCounts.Clear();
             return false; // unknown breaks consecutive evidence but cannot move an existing heal
         }
+
+        // A present adapter awaiting DHCP is unknown too: reset its evidence above before returning.
+        // An absent main adapter is simply "not answering" below.
+        if (adapters.Adapter(main.Value) is { IPv4: null }) return false;
 
         var checkedAt = _time.GetUtcNow();
         var afterPause = _lastCheckAt is { } previous && checkedAt - previous > MaxGapBetweenChecks;
