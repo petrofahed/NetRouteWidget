@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-03 (Asia/Beirut)
 
-**Status:** Proposed design; implementation and live network validation have not started.
+**Status:** Accepted as the basis for implementation planning by the owner on 2026-11-03; implementation and live network validation have not started. See the [implementation plan](../plans/2026-11-03-netroute-mcp.md).
 
 **Repository baseline:** `fdd076b`, NetRoute Widget 6.0.0, .NET 10 / Windows.
 
@@ -26,7 +26,7 @@ The promise is **automatic reconnection and recoverable command results**, not u
 
 ### Required versus proposed choices
 
-The requested capabilities and communication-only fallback are owner requirements. The relay architecture, .NET implementation, failover timings, tool names, collection policy, retention, and initial limits below are engineering proposals. They have not been individually approved by the owner.
+The requested capabilities and communication-only fallback are owner requirements. The relay architecture, .NET implementation, failover timings, tool names, collection policy, retention, and initial limits below are engineering choices used by the implementation plan. The owner's instruction to prepare that plan does not mean hosting, account access, live failure tests, or deployment have already been arranged.
 
 ## 2. Scope and boundaries
 
