@@ -126,4 +126,12 @@ sealed class FakeAdapterCounters : IAdapterCounters
         if (Throws is { } ex) throw ex;
         return Bytes;
     }
+
+    public Dictionary<string, Traffic> All { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyDictionary<string, Traffic> ReadAll()
+    {
+        if (Throws is { } ex) throw ex;
+        return All;
+    }
 }
