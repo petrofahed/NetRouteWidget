@@ -550,6 +550,8 @@ public partial class App : Application
 
                 var usage = await smart.GetUsageAsync(); // continues on the UI thread
                 if (seq != _renderSeq || _smartWindow != window) continue;
+                // Smart's snapshot carries no ledger: add the ledger's days here (the ledger is read on the UI thread only).
+                if (_ledger is { } ledger) usage = usage.WithLedger(ledger.Snapshot());
                 var canAssign = settings.Enabled && (status.State is SmartState.Running or SmartState.Starting);
                 var report = UsageReport.Build(
                     usage, DateOnly.FromDateTime(DateTime.Now), settings.UsageRangeDays, _catalog, settings, canAssign, _usageSort, _usageFilter, status.Profile);

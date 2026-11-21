@@ -15,6 +15,8 @@ public sealed class UsageAttribution
 {
     public const string OtherKey = "other";
     public const string UnattributedKey = "unattributed";
+    /// The derived row for adapter bytes no per-app row accounts for (see UsageReport.Build). Never stored.
+    public const string NotCountedKey = "notcounted";
     public const string AppPrefix = "app:";
     const string PhonePrefix = "phone-";
     const string WifiPrefix = "wifi-";
@@ -58,6 +60,7 @@ public sealed class UsageAttribution
     {
         if (key == OtherKey) return "Other";
         if (key == UnattributedKey) return "Unattributed (short connections)";
+        if (key == NotCountedKey) return "Not counted per app";
         if (_names.TryGetValue(key, out var name)) return name;
         if (key.StartsWith(AppPrefix, StringComparison.Ordinal))
         {

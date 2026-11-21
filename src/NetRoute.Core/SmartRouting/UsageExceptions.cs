@@ -18,6 +18,7 @@ public static class UsageExceptions
     public static ExceptionState Describe(IReadOnlyList<RuleItem> catalog, SmartRoutingSettings settings, ConnectionId profile, string key)
     {
         var destination = UserRule.ImpliedExit(profile);
+        if (key == UsageAttribution.NotCountedKey) return new(false, false, destination); // derived, not an application
         ExceptionState UserState(UserRule? rule) => new(rule?.Enabled == true, true, rule?.Exit ?? destination, rule?.Exit is null && profile == ConnectionId.Phone);
         if (catalog.FirstOrDefault(i => i.Id == key) is { } item)
         {

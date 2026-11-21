@@ -67,6 +67,7 @@ public partial class UsageTab : UserControl
         if (UsageBanner.Text(recording, windowsTracking) is { } bannerText) banner.Add(bannerText);
         if (model.RecordingSince is { } since)
             banner.Add($"Recording since {since.ToString("d MMM yyyy", CultureInfo.CurrentCulture)}.");
+        banner.Add(UsageReport.CountingNote);
         Banner.Text = string.Join("\n", banner);
         Banner.Visibility = banner.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyText.Text = model.Filtered
@@ -115,8 +116,7 @@ public partial class UsageTab : UserControl
         KeptText.ToolTip = model.KeptOffIsLowerBound
             ? "Smart routing was stopped or restarted during this period; the bytes just before each stop were not recorded."
             : null;
-        AdapterText.Text = "Phone adapter total in this period (exact, from Windows): "
-            + (model.PhoneAdapterTotal > 0 ? ByteFormat.Human(model.PhoneAdapterTotal) : "not measured yet");
+        AdapterText.Text = UsageReport.AdapterFooter(model);
     }
 
     /// The header and the totals take the same width as the rows, whatever the scroll bar's width (or visibility) is in the current theme.
@@ -296,8 +296,8 @@ public partial class UsageTab : UserControl
         {
             DefineColumns(_grid);
             _root.Child = _grid;
-            // The two catch-all rows are not applications: dim their names.
-            _name.SetResourceReference(TextBlock.ForegroundProperty, key is UsageAttribution.OtherKey or UsageAttribution.UnattributedKey ? "TextSecondary" : "TextPrimary");
+            // The catch-all rows and the derived "not counted" one are not applications: dim their names.
+            _name.SetResourceReference(TextBlock.ForegroundProperty, key is UsageAttribution.OtherKey or UsageAttribution.UnattributedKey or UsageAttribution.NotCountedKey ? "TextSecondary" : "TextPrimary");
             _separator.SetResourceReference(Border.BackgroundProperty, "CardBorder");
             _tagText.SetResourceReference(TextBlock.ForegroundProperty, "Accent");
             _tag.SetResourceReference(Border.BorderBrushProperty, "Accent");

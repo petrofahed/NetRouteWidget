@@ -426,6 +426,184 @@ public class UsageReportTests
         Assert.DoesNotContain(Build(usage, filter: "steam").Rows, r => r.Key == "app:vlc.exe");
     }
 
+    // ---- exact adapter ledger: remainder row, totals, footer ----
+
+    static LedgerDay Led(Traffic? phone = null, Traffic? lan = null, Traffic? wifi = null, TimeOnly? since = null)
+    {
+        var totals = new Dictionary<ConnectionId, Traffic>();
+        if (phone is { } p) totals[ConnectionId.Phone] = p;
+        if (lan is { } l) totals[ConnectionId.Lan] = l;
+        if (wifi is { } w) totals[ConnectionId.Wifi] = w;
+        return new LedgerDay(totals, since);
+    }
+
+    static UsageSnapshot WithLedgers(UsageSnapshot s, params (DateOnly Day, LedgerDay Ledger)[] days) =>
+        s.WithLedger(days.ToDictionary(d => d.Day, d => d.Ledger));
+
+    static UsageReportRow? Remainder(UsageReportModel model) =>
+        model.Rows.SingleOrDefault(r => r.Key == UsageAttribution.NotCountedKey);
+
+    [Fact]
+    public void Remainder_is_ledger_minus_rows_per_exit_and_direction()
+    {
+        var usage = WithLedgers(Snap((Today, "app:a.exe", 60, 0, 0)), (Today, Led(phone: new Traffic(10, 100))));
+
+        var row = Remainder(Build(usage))!;
+
+        Assert.Equal("Not counted per app", row.Name);
+        Assert.Equal((10, 40, 50), (row.PhoneUp, row.PhoneDown, row.PhoneBytes));
+        Assert.Equal(0, row.LanBytes);
+    }
+
+    [Fact]
+    public void Lan_remainder_uses_lan_plus_wifi()
+    {
+        var usage = WithLedgers(Snap((Today, "app:a.exe", 0, 120, 0)),
+            (Today, Led(lan: new Traffic(0, 100), wifi: new Traffic(0, 50))));
+
+        var row = Remainder(Build(usage))!;
+
+        Assert.Equal(30, row.LanBytes);
+        Assert.Equal(0, row.PhoneBytes);
+    }
+
+    [Fact]
+    public void Rows_larger_than_the_ledger_give_no_negative_remainder()
+    {
+        // Each direction clamps on its own: up has 10 spare, down is over by 5, and the LAN is over too.
+        var rows = new Dictionary<string, UsageRow> { ["app:a.exe"] = new(new Traffic(0, 15), new Traffic(0, 7), 0) };
+        var usage = new UsageSnapshot(new Dictionary<DateOnly, UsageDay> { [Today] = new(rows, 0) }, new Dictionary<string, UsageRate>());
+
+        var onlyUp = Remainder(Build(WithLedgers(usage, (Today, Led(phone: new Traffic(10, 10), lan: new Traffic(0, 7))))))!;
+        Assert.Equal((10, 0, 10), (onlyUp.PhoneUp, onlyUp.PhoneDown, onlyUp.PhoneBytes));
+        Assert.Equal(0, onlyUp.LanBytes);
+
+        var model = Build(WithLedgers(usage, (Today, Led(phone: new Traffic(0, 5), lan: new Traffic(0, 3)))));
+        Assert.Null(Remainder(model));
+        Assert.Equal(15, model.PhoneTotal);
+        Assert.Equal(7, model.LanTotal);
+    }
+
+    [Fact]
+    public void A_day_without_a_ledger_adds_no_remainder_and_does_not_distort_the_next_day()
+    {
+        var usage = WithLedgers(
+            Snap((Today.AddDays(-2), "app:a.exe", 100, 0, 0), (Today.AddDays(-1), "app:a.exe", 50, 0, 0), (Today, "app:a.exe", 40, 0, 0)),
+            (Today.AddDays(-1), Led(phone: new Traffic(0, 10))),   // rows exceed it: this day's remainder is 0, not -40
+            (Today, Led(phone: new Traffic(0, 100))));             // 100 - 40 = 60, whatever the earlier days did
+
+        var model = Build(usage, 3);
+
+        Assert.Equal(60, Remainder(model)!.PhoneBytes);
+        Assert.Equal(190 + 60, model.PhoneTotal);
+    }
+
+    [Fact]
+    public void The_remainder_row_is_subject_to_the_name_filter()
+    {
+        var usage = WithLedgers(Snap((Today, "app:chrome.exe", 10, 0, 0)), (Today, Led(phone: new Traffic(0, 100))));
+
+        Assert.Null(Remainder(Build(usage, filter: "chrome")));
+        Assert.NotNull(Remainder(Build(usage, filter: "counted")));
+        Assert.NotNull(Remainder(Build(usage, filter: "Not COUNTED per")));
+        var all = Build(usage);
+        Assert.Equal(2, all.Rows.Count);
+        var chrome = Build(usage, filter: "chrome");
+        Assert.Equal(10, chrome.PhoneTotal); // hidden remainder is not in a filtered total
+    }
+
+    [Fact]
+    public void The_remainder_row_cannot_become_an_exception()
+    {
+        var usage = WithLedgers(Snap((Today, "app:a.exe", 1, 0, 0)), (Today, Led(phone: new Traffic(0, 100))));
+
+        var row = Remainder(Build(usage, canAssign: true))!;
+
+        Assert.False(row.Exception.CanChange);
+        Assert.False(row.CanChange);
+        Assert.Null(row.Now);
+        Assert.False(UsageExceptions.Describe(Catalog, new SmartRoutingSettings(), ConnectionId.Phone, UsageAttribution.NotCountedKey).CanChange);
+        Assert.Empty(UsageExceptions.Actions(row.Key, ConnectionId.Phone, row.Exception));
+    }
+
+    [Fact]
+    public void The_totals_include_the_remainder()
+    {
+        var usage = WithLedgers(Snap((Today, "app:a.exe", 60, 20, 0)),
+            (Today, Led(phone: new Traffic(10, 100), lan: new Traffic(5, 45))));
+
+        var model = Build(usage);
+
+        Assert.Equal(60 + 50, model.PhoneTotal);
+        Assert.Equal(10, model.PhoneUpTotal);
+        Assert.Equal(20 + 30, model.LanTotal);
+        Assert.Equal(5, model.LanUpTotal);
+    }
+
+    [Fact]
+    public void LedgerTotals_cover_only_days_with_a_ledger_in_the_range()
+    {
+        var usage = WithLedgers(
+            Snap(adapterPerDay: 0, (Today.AddDays(-2), "app:a.exe", 500, 0, 0), (Today.AddDays(-1), "app:a.exe", 7, 0, 0)),
+            (Today.AddDays(-1), Led(phone: new Traffic(1, 2), lan: new Traffic(3, 4))),
+            (Today, Led(phone: new Traffic(10, 20), wifi: new Traffic(0, 9))),
+            (Today.AddDays(-20), Led(phone: new Traffic(1000, 1000)))); // outside the range
+
+        var totals = Build(usage, 3).LedgerTotals;
+
+        Assert.Equal(new Traffic(11, 22), totals[ConnectionId.Phone]);
+        Assert.Equal(new Traffic(3, 4), totals[ConnectionId.Lan]);
+        Assert.Equal(new Traffic(0, 9), totals.GetValueOrDefault(ConnectionId.Wifi));
+        Assert.Empty(Build(Snap((Today, "app:a.exe", 5, 0, 0)), 3).LedgerTotals); // no ledger anywhere: nothing summed
+    }
+
+    [Fact]
+    public void LedgerSince_is_set_only_when_the_first_ledger_day_is_in_the_range()
+    {
+        var since = new TimeOnly(7, 5);
+        var first = Today.AddDays(-3);
+        var usage = WithLedgers(Snap(), (first, Led(phone: new Traffic(0, 1), since: since)), (Today, Led(since: new TimeOnly(0, 1))));
+
+        Assert.Equal(first.ToDateTime(since), Build(usage, 7).LedgerSince);
+        Assert.Null(Build(usage, 3).LedgerSince); // the first ledger day is before this range, later days do not count
+        Assert.Null(Build(WithLedgers(Snap(), (first, Led(phone: new Traffic(0, 1)))), 7).LedgerSince); // after a Clear: no Since
+        Assert.Null(Build(Snap(), 7).LedgerSince);
+    }
+
+    [Fact]
+    public void The_footer_lists_exact_totals_and_since_when_known()
+    {
+        var saved = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+        try
+        {
+            var day = Today.AddDays(-3);
+            var ledger = Led(phone: new Traffic(0, 98L * 1024 * 1024), lan: new Traffic(0, (long)(3.2 * 1024 * 1024 * 1024)), since: new TimeOnly(7, 5));
+
+            var withSince = UsageReport.AdapterFooter(Build(WithLedgers(Snap(), (day, ledger)), 7));
+            var withoutSince = UsageReport.AdapterFooter(Build(WithLedgers(Snap(), (Today, ledger with { Since = null })), 7));
+
+            Assert.Equal("Exact adapter totals in this period (from Windows): Phone 98 MB · LAN 3.2 GB · Wi-Fi 0 B (counted since 07:05 on 7 Oct)", withSince);
+            Assert.Equal("Exact adapter totals in this period (from Windows): Phone 98 MB · LAN 3.2 GB · Wi-Fi 0 B", withoutSince);
+            Assert.Equal(
+                "Adapter totals are exact while the widget runs. Per-app rows are counted only while Smart routing runs or this tab is open. The Now columns are per app and can differ from the card's speed.",
+                UsageReport.CountingNote);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = saved;
+        }
+    }
+
+    [Fact]
+    public void The_footer_falls_back_to_the_phone_adapter_text_without_a_ledger()
+    {
+        Assert.Equal("Phone adapter total in this period (exact, from Windows): 1 MB",
+            UsageReport.AdapterFooter(Build(Snap(1024 * 1024, (Today, "app:a.exe", 1, 0, 0)))));
+        Assert.Equal("Phone adapter total in this period (exact, from Windows): not measured yet",
+            UsageReport.AdapterFooter(Build(Snap((Today, "app:a.exe", 1, 0, 0)))));
+    }
+
     // ---- row order ----
 
     [Fact]
