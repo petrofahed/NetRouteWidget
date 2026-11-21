@@ -151,7 +151,7 @@ public partial class App : Application
             };
 
             Render(controller.Status);
-            RenderTotals(_smart); // restored history shows before the first poll
+            RenderTotals(); // restored history shows before the first poll
             if (settings.CardVisible) ShowCard();
             UpdatePollInterval();
             _poll.Start();
@@ -163,6 +163,7 @@ public partial class App : Application
                 try
                 {
                     ledger.Update(sampler.Sample(), DateTimeOffset.Now);
+                    RenderTotals();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -280,7 +281,7 @@ public partial class App : Application
         var settings = _controller!.Settings;
         _card!.ShowAndPlace(settings.CardLeft, settings.CardTop);
         if (!settings.CardVisible) _controller.UpdateSettings(s => s with { CardVisible = true });
-        RenderTotals(_smart);
+        RenderTotals();
         UpdatePollInterval();
     }
 
@@ -468,7 +469,6 @@ public partial class App : Application
     void RenderLiveSpeeds(SmartRoutingController smart)
     {
         if (_card is not { } card) return;
-        RenderTotals(smart);
         if (!LiveSpeedDisplay.IsShown(smart.Status.State, smart.IsMeasuring))
         {
             card.RenderSpeeds("", "");
@@ -478,15 +478,12 @@ public partial class App : Application
         card.RenderSpeeds(SpeedLabel(live.PhoneBytesPerSecond), SpeedLabel(live.LanBytesPerSecond));
     }
 
-    /// Today's total data through each exit, from the usage history: it stays visible when Smart routing is off or idle.
-    void RenderTotals(SmartRoutingController? smart)
+    /// Today's total data through each adapter, from the ledger: it does not depend on Smart routing existing or running.
+    void RenderTotals()
     {
-        if (_card is not { } card || smart is null) return;
-        var totals = smart.TodayTotals;
-        card.RenderTotals(TotalLabel(totals.PhoneBytes), TotalLabel(totals.LanBytes));
+        if (_card is not { } card || _ledger is not { } ledger) return;
+        card.RenderTotals(CardTotalsPresenter.Labels(ledger.Today));
     }
-
-    static string TotalLabel(long bytes) => bytes > 0 ? ByteFormat.Human(bytes) : "";
 
     static string SpeedLabel(long bytesPerSecond) => bytesPerSecond <= 0 ? "" : UsageReport.NowText(bytesPerSecond);
 

@@ -156,14 +156,13 @@ public partial class CardWindow : Window
     }
 
     /// Today's total data through each exit, right of its latency. An empty text hides the figure (the row looks as before).
-    /// Wi-Fi has no totals source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
-    public void RenderTotals(string phone, string lan)
+    /// A connection's label shows only while its row is shown; a missing or empty label hides the figure.
+    public void RenderTotals(IReadOnlyDictionary<ConnectionId, string> labels)
     {
-        phone = _shown.Contains(ConnectionId.Phone) ? phone : "";
-        lan = _shown.Contains(ConnectionId.Lan) ? lan : "";
-        SetSpeed(PhoneTotal, phone);
-        SetSpeed(LanTotal, lan);
-        SetSpeed(WifiTotal, WifiPlaceholder(phone, lan));
+        string Label(ConnectionId id) => _shown.Contains(id) && labels.TryGetValue(id, out var label) ? label : "";
+        SetSpeed(PhoneTotal, Label(ConnectionId.Phone));
+        SetSpeed(LanTotal, Label(ConnectionId.Lan));
+        SetSpeed(WifiTotal, Label(ConnectionId.Wifi));
     }
 
     /// "—" once Wi-Fi is a shown row and either sibling has a real figure; empty otherwise (Wi-Fi row hidden,
