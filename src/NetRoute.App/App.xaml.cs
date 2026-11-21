@@ -41,6 +41,7 @@ public partial class App : Application
     SmartRoutingController? _smart;
     IReadOnlyList<RuleItem> _catalog = [];
     bool _usageUnreadable;
+    UsageSnapshot? _loadedUsage; // what usage.json held at start; null until loaded. The save base when Smart routing is absent; null means nothing may be written
     bool _usageSaveFailed;
     bool _speedTestRunning;
     bool _smartStopped;
@@ -106,6 +107,7 @@ public partial class App : Application
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 
             var usage = LoadUsage(log); // once, before Smart routing: both it and the adapter ledger start from this
+            _loadedUsage = usage.Usage;
             // The ledger belongs to the app, not to Smart routing: it exists even if Smart's setup below throws or is never enabled.
             var ledger = _ledger = new AdapterLedger(usage.Usage.LedgerDays(), DateOnly.FromDateTime(DateTime.Now));
             var sampler = _sampler = new AdapterLedgerSampler(
@@ -715,6 +717,7 @@ public partial class App : Application
             {
                 _ledger?.Clear(); // UI thread, before the first await; also when Smart routing is absent
                 if (_smart is { } smart) await smart.ClearUsageAsync();
+                else _loadedUsage = UsageSnapshot.Empty; // without Smart the loaded rows are the save base: Clear must clear them too
                 await SaveUsageAsync(force: true);
                 RenderSmartWindow();
             }
@@ -765,6 +768,9 @@ public partial class App : Application
         RenderSmartWindow(); // immediate feedback; the controller's StatusChanged re-renders again once applied
     }
 
+    /// usage.json may be written only once it was loaded and the ledger exists, and never over an unreadable file.
+    bool CanSaveUsage => !_usageUnreadable && _loadedUsage is not null && _ledger is not null;
+
     /// The ledger as the save needs it: an immutable copy, and whether it changed since the last save.
     readonly record struct LedgerTake(IReadOnlyDictionary<DateOnly, LedgerDay> Days, bool Changed);
 
@@ -782,19 +788,19 @@ public partial class App : Application
     /// (SaveUsageBlocking) read it on the UI thread first.
     async Task SaveUsageAsync(bool force = false, LedgerTake? ledgerTaken = null)
     {
-        if (_usageUnreadable) return;
+        if (!CanSaveUsage) return;
         var ledger = ledgerTaken ?? TakeLedger(force);
         try
         {
             var everything = force || _usageSaveFailed;
             var smart = _smart;
             var usage = smart is null
-                ? (everything ? UsageSnapshot.Empty : null)
+                ? (everything ? _loadedUsage : null)
                 : everything ? await smart.GetUsageAsync() : await smart.TakeUsageIfChangedAsync();
             if (usage is null)
             {
                 if (!ledger.Changed) return;
-                usage = smart is null ? UsageSnapshot.Empty : await smart.GetUsageAsync(); // only the ledger changed: the file still carries Smart's usage
+                usage = smart is null ? _loadedUsage! : await smart.GetUsageAsync(); // only the ledger changed: the file still carries Smart's usage
             }
             usage = usage.WithLedger(ledger.Days);
             if (usage.Days.Count == 0 && !File.Exists(AppPaths.UsageFile)) return; // nothing recorded yet: no file for someone who never used it
@@ -849,6 +855,7 @@ public partial class App : Application
     /// before the pool runs the save; the UI thread is then blocked, so the ledger tick cannot run alongside it.
     void SaveUsageBlocking()
     {
+        if (!CanSaveUsage) return; // a second instance or an early startup failure exits through here with nothing loaded
         var ledger = TakeLedger(force: true);
         Task.Run(() => SaveUsageAsync(force: true, ledger)).Wait(TimeSpan.FromSeconds(3));
     }
