@@ -6,7 +6,7 @@ public interface IAdapterCounters
     /// Bytes sent plus received since the adapter came up; null when no adapter has that name.
     long? TotalBytes(string adapterName);
 
-    /// Every adapter's own up and down byte counters, keyed by adapter name (case-insensitive), from one
-    /// enumeration. Throws NetworkInformationException when Windows cannot enumerate the adapters.
-    IReadOnlyDictionary<string, Traffic> ReadAll();
+    /// One interface's own up (sent) and down (received) byte counters, by interface index (AdapterInfo.Index);
+    /// null when no interface has that index or Windows cannot read it.
+    Traffic? Read(int interfaceIndex);
 }

@@ -95,4 +95,47 @@ public class IpHelperLayoutTests
             },
             offsets);
     }
+
+    [Fact]
+    public void If_row2_matches_native_size_on_x64()
+    {
+        Assert.True(Environment.Is64BitProcess, "Layout check assumes x64");
+        Assert.Equal(1352, Marshal.SizeOf<IpHelperNative.MIB_IF_ROW2>());
+    }
+
+    [Fact]
+    public void If_row2_fields_sit_at_the_native_offsets_on_x64()
+    {
+        // Offsets per netioapi.h: 8-byte LUID, 4-byte index, GUID (align 4), 2 x 257 WCHAR, ..., the one-byte flags
+        // bitfield padded to 4, OperStatus/AdminStatus/MediaConnectState, NetworkGuid, ConnectionType padded to 8, ULONG64s.
+        Assert.True(Environment.Is64BitProcess, "Layout check assumes x64");
+        var offsets = new[]
+        {
+            nameof(IpHelperNative.MIB_IF_ROW2.InterfaceLuid),
+            nameof(IpHelperNative.MIB_IF_ROW2.InterfaceIndex),
+            nameof(IpHelperNative.MIB_IF_ROW2.InterfaceGuid),
+            nameof(IpHelperNative.MIB_IF_ROW2.Alias),
+            nameof(IpHelperNative.MIB_IF_ROW2.Description),
+            nameof(IpHelperNative.MIB_IF_ROW2.PhysicalAddressLength),
+            nameof(IpHelperNative.MIB_IF_ROW2.InterfaceAndOperStatusFlags),
+            nameof(IpHelperNative.MIB_IF_ROW2.OperStatus),
+            nameof(IpHelperNative.MIB_IF_ROW2.AdminStatus),
+            nameof(IpHelperNative.MIB_IF_ROW2.NetworkGuid),
+            nameof(IpHelperNative.MIB_IF_ROW2.ConnectionType),
+            nameof(IpHelperNative.MIB_IF_ROW2.TransmitLinkSpeed),
+            nameof(IpHelperNative.MIB_IF_ROW2.InOctets),
+            nameof(IpHelperNative.MIB_IF_ROW2.OutOctets),
+            nameof(IpHelperNative.MIB_IF_ROW2.OutQLen),
+        }.Select(f => $"{f}={(int)Marshal.OffsetOf<IpHelperNative.MIB_IF_ROW2>(f)}");
+
+        Assert.Equal(
+            new[]
+            {
+                "InterfaceLuid=0", "InterfaceIndex=8", "InterfaceGuid=12", "Alias=28", "Description=542",
+                "PhysicalAddressLength=1056", "InterfaceAndOperStatusFlags=1152", "OperStatus=1156", "AdminStatus=1160",
+                "NetworkGuid=1168", "ConnectionType=1184", "TransmitLinkSpeed=1192", "InOctets=1208", "OutOctets=1280",
+                "OutQLen=1344",
+            },
+            offsets);
+    }
 }

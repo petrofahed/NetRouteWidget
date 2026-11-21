@@ -121,4 +121,62 @@ internal static class IpHelperNative
     /// the real route table.
     [DllImport("iphlpapi.dll")]
     public static extern int SetIpForwardEntry2(ref MIB_IPFORWARD_ROW2 row);
+
+    /// MIB_IF_ROW2 (netioapi.h), x64 layout, 1352 bytes: read-only use (GetIfEntry2), for the byte counters.
+    /// The two strings are WCHAR[257], hence CharSet.Unicode. InterfaceAndOperStatusFlags is a one-byte bitfield
+    /// struct, padded to 4 before OperStatus. IpHelperLayoutTests guards the size and the offsets.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MIB_IF_ROW2
+    {
+        public ulong InterfaceLuid;
+        public uint InterfaceIndex;
+        public Guid InterfaceGuid;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 257)]
+        public string Alias;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 257)]
+        public string Description;
+        public uint PhysicalAddressLength;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] PhysicalAddress;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] PermanentPhysicalAddress;
+        public uint Mtu;
+        public uint Type;
+        public uint TunnelType;
+        public uint MediaType;
+        public uint PhysicalMediumType;
+        public uint AccessType;
+        public uint DirectionType;
+        public byte InterfaceAndOperStatusFlags;
+        public int OperStatus;
+        public int AdminStatus;
+        public int MediaConnectState;
+        public Guid NetworkGuid;
+        public int ConnectionType;
+        public ulong TransmitLinkSpeed;
+        public ulong ReceiveLinkSpeed;
+        public ulong InOctets;
+        public ulong InUcastPkts;
+        public ulong InNUcastPkts;
+        public ulong InDiscards;
+        public ulong InErrors;
+        public ulong InUnknownProtos;
+        public ulong InUcastOctets;
+        public ulong InMulticastOctets;
+        public ulong InBroadcastOctets;
+        public ulong OutOctets;
+        public ulong OutUcastPkts;
+        public ulong OutNUcastPkts;
+        public ulong OutDiscards;
+        public ulong OutErrors;
+        public ulong OutUcastOctets;
+        public ulong OutMulticastOctets;
+        public ulong OutBroadcastOctets;
+        public ulong OutQLen;
+    }
+
+    /// Fills ONE interface's row: set InterfaceIndex (leave InterfaceLuid zero) or InterfaceLuid on input.
+    /// NO_ERROR on success; ERROR_FILE_NOT_FOUND when no such interface exists.
+    [DllImport("iphlpapi.dll")]
+    public static extern int GetIfEntry2(ref MIB_IF_ROW2 row);
 }

@@ -1,16 +1,20 @@
 namespace NetRoute.Core;
 
-/// Turns the slot-to-adapter mapping plus one counters enumeration into the readings AdapterLedger.Update wants.
+/// Turns the slot-to-adapter mapping plus one counters read per mapped slot into the readings AdapterLedger.Update wants.
 /// Always on and independent of Smart routing: every slot is sampled, including one the user turned off on the card.
-///   - The mapping is re-detected at most every MappingRefresh, or after InvalidateMapping (a network change).
-///   - A slot's adapter name is remembered whenever detection finds its adapter, and used only while the adapter is
-///     NotFound (unplugged, or down but still counting). Not used and Ambiguous forget it.
-///   - Two slots that resolve to one adapter name are counted once: the first in Connections.All order.
-///   - A slot is in the result only when it has a name AND a counters row.
+///   - The mapping (each slot's adapter name and interface index) is re-detected at most every MappingRefresh, or after
+///     InvalidateMapping (a network change). Each tick then reads only the mapped interfaces, by index (at most three).
+///   - A slot's adapter name and index are remembered whenever detection finds its adapter, and used only while the
+///     adapter is NotFound (unplugged, or down but still counting). Not used and Ambiguous forget them.
+///   - Two slots that resolve to one adapter (same name or same index) are counted once: slots whose adapter was detected
+///     live claim theirs first, remembered ones only what is left, each in Connections.All order.
+///   - A slot is in the result only when it has a mapping AND its read returned counters this tick.
 /// Not thread-safe: callers must serialize all calls.
 public sealed class AdapterLedgerSampler
 {
     public static readonly TimeSpan MappingRefresh = TimeSpan.FromSeconds(10);
+
+    readonly record struct Slot(ConnectionId Id, string Name, int Index);
 
     readonly IAdapterSource _adapters;
     readonly IAdapterCounters _counters;
@@ -18,8 +22,8 @@ public sealed class AdapterLedgerSampler
     readonly Action<string> _log;
     readonly Func<DateTimeOffset> _now;
 
-    readonly Dictionary<ConnectionId, string> _remembered = new();
-    IReadOnlyList<(ConnectionId Id, string Name)> _mapping = [];
+    readonly Dictionary<ConnectionId, Slot> _remembered = new();
+    IReadOnlyList<Slot> _mapping = [];
     DateTimeOffset? _mappedAt;
     bool _invalidated;
     bool _detectFailed;
@@ -38,29 +42,30 @@ public sealed class AdapterLedgerSampler
     /// The next Sample re-detects the mapping (the app calls this on network-change events).
     public void InvalidateMapping() => _invalidated = true;
 
-    /// A reading for every slot that has an adapter name and a counters row. Empty when Windows cannot enumerate the counters.
+    /// A reading for every mapped slot whose counters could be read. A slot whose read fails (throws) or finds no
+    /// interface (null) is left out of this tick only.
     public IReadOnlyDictionary<ConnectionId, AdapterReading> Sample()
     {
         RefreshMappingIfDue();
 
-        IReadOnlyDictionary<string, Traffic> all;
-        try
-        {
-            all = _counters.ReadAll();
-            _readFailed = false;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            if (!_readFailed) _log($"Adapter ledger: reading the adapters' byte counters failed: {ex.Message}");
-            _readFailed = true; // logged once per failure streak: this runs every second
-            return new Dictionary<ConnectionId, AdapterReading>();
-        }
-
         var readings = new Dictionary<ConnectionId, AdapterReading>();
-        foreach (var (id, name) in _mapping)
+        var failed = false;
+        foreach (var slot in _mapping)
         {
-            if (all.TryGetValue(name, out var bytes)) readings[id] = new AdapterReading(name, bytes);
+            Traffic? bytes;
+            try
+            {
+                bytes = _counters.Read(slot.Index);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (!_readFailed && !failed) _log($"Adapter ledger: reading the adapters' byte counters failed: {ex.Message}");
+                failed = true;
+                continue;
+            }
+            if (bytes is { } b) readings[slot.Id] = new AdapterReading(slot.Name, b);
         }
+        _readFailed = failed; // logged once per failure streak: this runs every second
         return readings;
     }
 
@@ -85,25 +90,39 @@ public sealed class AdapterLedgerSampler
             return;
         }
 
-        var mapping = new List<(ConnectionId, string)>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var id in Connections.All)
+        var resolved = Connections.All
+            .Select(id => (Slot: SlotFor(id, detected, out var live), Live: live))
+            .Where(r => r.Slot is not null)
+            .ToList();
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var indices = new HashSet<int>();
+        var mapping = new List<Slot>();
+        foreach (var live in new[] { true, false }) // live adapters claim first: a stale remembered name never wins
         {
-            var name = NameFor(id, detected);
-            if (name is not null && seen.Add(name)) mapping.Add((id, name));
+            foreach (var (slot, isLive) in resolved)
+            {
+                if (isLive != live) continue;
+                var s = slot!.Value;
+                if (names.Contains(s.Name) || indices.Contains(s.Index)) continue;
+                names.Add(s.Name);
+                indices.Add(s.Index);
+                mapping.Add(s);
+            }
         }
         _mapping = mapping;
     }
 
-    string? NameFor(ConnectionId id, DetectionResult detected)
+    Slot? SlotFor(ConnectionId id, DetectionResult detected, out bool live)
     {
+        live = false;
         if (detected.Adapter(id) is { } adapter)
         {
-            _remembered[id] = adapter.Name;
-            return adapter.Name;
+            live = true;
+            return _remembered[id] = new Slot(id, adapter.Name, adapter.Index);
         }
 
-        if (detected.Issue(id) == DetectionIssue.NotFound) return _remembered.GetValueOrDefault(id);
+        if (detected.Issue(id) == DetectionIssue.NotFound) return _remembered.TryGetValue(id, out var kept) ? kept : null;
 
         _remembered.Remove(id); // Not used or Ambiguous
         return null;

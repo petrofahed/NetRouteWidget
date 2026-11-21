@@ -22,21 +22,13 @@ public sealed class WindowsAdapterCounters : IAdapterCounters
         }
     }
 
-    public IReadOnlyDictionary<string, Traffic> ReadAll()
+    /// One GetIfEntry2 call: the same counters GetIPStatistics reports, without enumerating every interface.
+    public Traffic? Read(int interfaceIndex)
     {
-        var all = new Dictionary<string, Traffic>(StringComparer.OrdinalIgnoreCase);
-        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            try
-            {
-                var stats = nic.GetIPStatistics();
-                all[nic.Name] = new Traffic(stats.BytesSent, stats.BytesReceived);
-            }
-            catch (NetworkInformationException)
-            {
-                // this adapter vanished or has no statistics: the others are still good
-            }
-        }
-        return all;
+        var row = new IpHelperNative.MIB_IF_ROW2 { InterfaceIndex = unchecked((uint)interfaceIndex) };
+        if (IpHelperNative.GetIfEntry2(ref row) != IpHelperNative.NO_ERROR) return null;
+        return new Traffic(ToLong(row.OutOctets), ToLong(row.InOctets));
     }
+
+    static long ToLong(ulong value) => value > long.MaxValue ? long.MaxValue : (long)value;
 }

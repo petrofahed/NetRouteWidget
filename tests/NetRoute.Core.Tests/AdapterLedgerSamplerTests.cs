@@ -37,8 +37,8 @@ public class AdapterLedgerSamplerTests
     {
         var rig = new Rig();
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 5)); // named "Ethernet 5"
-        rig.Counters.All["Ethernet 5"] = new Traffic(100, 2000);
-        rig.Counters.All["Ethernet"] = new Traffic(1, 2); // some other adapter's row
+        rig.Counters.ByIndex[5] = new Traffic(100, 2000);
+        rig.Counters.ByIndex[10] = new Traffic(1, 2); // some other adapter's row
 
         var readings = rig.Sampler.Sample();
 
@@ -53,16 +53,48 @@ public class AdapterLedgerSamplerTests
         // The sampler never tells Detect what the user turned off, so every connection that has an adapter is read.
         var rig = new Rig { Overrides = new AdapterOverrides(null, null, WifiMac: "AA-BB-CC-00-00-18") };
         rig.Source.Adapters.AddRange([TestAdapters.Lan(), TestAdapters.Wifi(), TestAdapters.Phone(index: 5)]);
-        rig.Counters.All["Ethernet"] = new Traffic(1, 2);
-        rig.Counters.All["Wi-Fi"] = new Traffic(3, 4);
-        rig.Counters.All["Ethernet 5"] = new Traffic(5, 6);
+        rig.Counters.ByIndex[10] = new Traffic(1, 2);
+        rig.Counters.ByIndex[18] = new Traffic(3, 4);
+        rig.Counters.ByIndex[5] = new Traffic(5, 6);
 
         var readings = rig.Sampler.Sample();
 
         Assert.Equal(3, readings.Count);
-        Assert.Equal(new Traffic(1, 2), readings[ConnectionId.Lan].Bytes);
-        Assert.Equal(new Traffic(3, 4), readings[ConnectionId.Wifi].Bytes);
-        Assert.Equal(new Traffic(5, 6), readings[ConnectionId.Phone].Bytes);
+        Assert.Equal(new AdapterReading("Ethernet", new Traffic(1, 2)), readings[ConnectionId.Lan]);
+        Assert.Equal(new AdapterReading("Wi-Fi", new Traffic(3, 4)), readings[ConnectionId.Wifi]);
+        Assert.Equal(new AdapterReading("Ethernet 5", new Traffic(5, 6)), readings[ConnectionId.Phone]);
+    }
+
+    [Fact]
+    public void Each_tick_reads_only_the_mapped_slots_interfaces()
+    {
+        var rig = new Rig { Overrides = new AdapterOverrides(null, null, WifiMac: "AA-BB-CC-00-00-18") };
+        rig.Source.Adapters.AddRange([TestAdapters.Lan(), TestAdapters.Wifi(), TestAdapters.Phone(index: 5), TestAdapters.VmNet(1)]);
+        rig.Counters.ByIndex[10] = new Traffic(1, 2);
+        rig.Counters.ByIndex[18] = new Traffic(3, 4);
+        rig.Counters.ByIndex[5] = new Traffic(5, 6);
+        rig.Counters.ByIndex[1] = new Traffic(7, 8); // VMware: never a slot, never read
+
+        rig.Sampler.Sample();
+        Assert.Equal([10, 18, 5], rig.Counters.Reads);
+
+        rig.Counters.Reads.Clear();
+        rig.Sampler.Sample(); // a tick inside MappingRefresh: still exactly one read per mapped slot
+        Assert.Equal([10, 18, 5], rig.Counters.Reads);
+    }
+
+    [Fact]
+    public void A_slot_whose_read_returns_nothing_is_the_only_one_dropped()
+    {
+        var rig = new Rig();
+        rig.Source.Adapters.AddRange([TestAdapters.Lan(), TestAdapters.Phone(index: 5)]);
+        rig.Counters.ByIndex[10] = new Traffic(1, 2); // no row for index 5
+
+        var readings = rig.Sampler.Sample();
+
+        var reading = Assert.Single(readings);
+        Assert.Equal(ConnectionId.Lan, reading.Key);
+        Assert.Empty(rig.Log); // null is "no such interface", not a failure
     }
 
     [Fact]
@@ -70,7 +102,7 @@ public class AdapterLedgerSamplerTests
     {
         var rig = new Rig();
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 5));
-        rig.Counters.All["Ethernet 5"] = new Traffic(1, 1);
+        rig.Counters.ByIndex[5] = new Traffic(1, 1);
 
         rig.Sampler.Sample();
         Assert.Equal(1, rig.Source.Calls);
@@ -95,31 +127,33 @@ public class AdapterLedgerSamplerTests
     }
 
     [Fact]
-    public void A_vanished_adapter_keeps_its_last_name_until_it_is_replaced()
+    public void A_vanished_adapter_keeps_its_last_name_and_index_until_it_is_replaced()
     {
         var rig = new Rig();
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 5));
-        rig.Counters.All["Ethernet 5"] = new Traffic(10, 20);
+        rig.Counters.ByIndex[5] = new Traffic(10, 20);
         Assert.Equal("Ethernet 5", rig.Sampler.Sample()[ConnectionId.Phone].Name);
 
         // The phone adapter drops out of the list (NotFound) but Windows still reports its counter row.
         rig.Source.Adapters.Clear();
-        rig.Counters.All["Ethernet 5"] = new Traffic(30, 40);
+        rig.Counters.ByIndex[5] = new Traffic(30, 40);
         rig.Sampler.InvalidateMapping();
         var kept = rig.Sampler.Sample();
         Assert.Equal(new AdapterReading("Ethernet 5", new Traffic(30, 40)), kept[ConnectionId.Phone]);
 
         // Its counter row goes too: nothing to read.
-        rig.Counters.All.Remove("Ethernet 5");
+        rig.Counters.ByIndex.Remove(5);
         Assert.Empty(rig.Sampler.Sample());
 
-        // A replacement under another name takes over.
+        // A replacement under another name and index takes over.
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 7));
-        rig.Counters.All["Ethernet 7"] = new Traffic(1, 2);
-        rig.Counters.All["Ethernet 5"] = new Traffic(30, 40);
+        rig.Counters.ByIndex[7] = new Traffic(1, 2);
+        rig.Counters.ByIndex[5] = new Traffic(30, 40);
         rig.Sampler.InvalidateMapping();
+        rig.Counters.Reads.Clear();
         var replaced = rig.Sampler.Sample();
         Assert.Equal(new AdapterReading("Ethernet 7", new Traffic(1, 2)), replaced[ConnectionId.Phone]);
+        Assert.Equal([7], rig.Counters.Reads);
     }
 
     [Fact]
@@ -127,7 +161,7 @@ public class AdapterLedgerSamplerTests
     {
         var rig = new Rig { Overrides = new AdapterOverrides(null, null, WifiMac: "AA-BB-CC-00-00-18") };
         rig.Source.Adapters.Add(TestAdapters.Wifi());
-        rig.Counters.All["Wi-Fi"] = new Traffic(7, 8);
+        rig.Counters.ByIndex[18] = new Traffic(7, 8);
         Assert.Equal("Wi-Fi", rig.Sampler.Sample()[ConnectionId.Wifi].Name);
 
         // The user marks Wi-Fi Not used: no reading, though the adapter and its counter row are still there.
@@ -147,21 +181,58 @@ public class AdapterLedgerSamplerTests
     {
         var rig = new Rig();
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 5));
-        rig.Counters.All["Ethernet 5"] = new Traffic(1, 2);
+        rig.Counters.ByIndex[5] = new Traffic(1, 2);
         Assert.Equal("Ethernet 5", rig.Sampler.Sample()[ConnectionId.Phone].Name);
 
         // The phone vanishes (its slot falls back to the remembered "Ethernet 5") while the LAN is now an adapter
         // that Windows calls "ethernet 5" too.
         rig.Source.Adapters.Clear();
         rig.Source.Adapters.Add(TestAdapters.Lan() with { Name = "ethernet 5" });
+        rig.Counters.ByIndex[10] = new Traffic(3, 4);
         rig.Sampler.InvalidateMapping();
 
         var readings = rig.Sampler.Sample();
 
-        // Lan comes before Phone in Connections.All, so it keeps the name.
+        // The live LAN keeps the name; the phone's remembered one loses it.
         var reading = Assert.Single(readings);
         Assert.Equal(ConnectionId.Lan, reading.Key);
-        Assert.Equal(new Traffic(1, 2), reading.Value.Bytes);
+        Assert.Equal(new AdapterReading("ethernet 5", new Traffic(3, 4)), reading.Value);
+    }
+
+    [Fact]
+    public void Two_slots_that_resolve_to_one_interface_index_are_counted_once()
+    {
+        var rig = new Rig();
+        rig.Source.Adapters.Add(TestAdapters.Phone(index: 5));
+        rig.Counters.ByIndex[5] = new Traffic(1, 2);
+        rig.Sampler.Sample();
+
+        // The phone vanishes; the LAN is now a live adapter under another name but with the phone's old index.
+        rig.Source.Adapters.Clear();
+        rig.Source.Adapters.Add(TestAdapters.Lan(index: 5));
+        rig.Sampler.InvalidateMapping();
+
+        var reading = Assert.Single(rig.Sampler.Sample());
+        Assert.Equal(new AdapterReading("Ethernet", new Traffic(1, 2)), reading.Value);
+        Assert.Equal(ConnectionId.Lan, reading.Key);
+    }
+
+    [Fact]
+    public void A_live_slot_beats_a_remembered_name_for_the_same_adapter()
+    {
+        // The user re-points the LAN's adapter to the Phone slot: the LAN goes NotFound and remembers "Ethernet",
+        // while the Phone now detects that same adapter live. Its bytes are the Phone's, not the LAN's.
+        var rig = new Rig();
+        rig.Source.Adapters.Add(TestAdapters.Lan());
+        rig.Counters.ByIndex[10] = new Traffic(1, 2);
+        Assert.Equal(ConnectionId.Lan, Assert.Single(rig.Sampler.Sample()).Key);
+
+        rig.Overrides = new AdapterOverrides(PhoneDescription: "Realtek Gaming 2.5GbE Family Controller", LanMac: null);
+        rig.Sampler.InvalidateMapping();
+
+        var reading = Assert.Single(rig.Sampler.Sample());
+        Assert.Equal(ConnectionId.Phone, reading.Key);
+        Assert.Equal(new AdapterReading("Ethernet", new Traffic(1, 2)), reading.Value);
     }
 
     [Fact]
@@ -169,7 +240,7 @@ public class AdapterLedgerSamplerTests
     {
         var rig = new Rig();
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 5));
-        rig.Counters.All["Ethernet 5"] = new Traffic(1, 2);
+        rig.Counters.ByIndex[5] = new Traffic(1, 2);
         rig.Counters.Throws = new NetworkInformationException(5);
 
         Assert.Empty(rig.Sampler.Sample());
@@ -190,12 +261,12 @@ public class AdapterLedgerSamplerTests
     {
         var rig = new Rig();
         rig.Source.Adapters.Add(TestAdapters.Phone(index: 5));
-        rig.Counters.All["Ethernet 5"] = new Traffic(1, 2);
+        rig.Counters.ByIndex[5] = new Traffic(1, 2);
         Assert.Single(rig.Sampler.Sample());
 
         rig.Source.Throw = new InvalidOperationException("adapter list unavailable");
         rig.Now += AdapterLedgerSampler.MappingRefresh;
-        rig.Counters.All["Ethernet 5"] = new Traffic(3, 4);
+        rig.Counters.ByIndex[5] = new Traffic(3, 4);
 
         var readings = rig.Sampler.Sample();
 

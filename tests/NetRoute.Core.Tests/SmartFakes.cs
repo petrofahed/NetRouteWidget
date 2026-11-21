@@ -127,11 +127,15 @@ sealed class FakeAdapterCounters : IAdapterCounters
         return Bytes;
     }
 
-    public Dictionary<string, Traffic> All { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// Counter rows by interface index; an index without a row reads as null.
+    public Dictionary<int, Traffic> ByIndex { get; } = new();
+    /// Every index Read was asked for, in call order.
+    public List<int> Reads { get; } = new();
 
-    public IReadOnlyDictionary<string, Traffic> ReadAll()
+    public Traffic? Read(int interfaceIndex)
     {
+        Reads.Add(interfaceIndex);
         if (Throws is { } ex) throw ex;
-        return All;
+        return ByIndex.TryGetValue(interfaceIndex, out var traffic) ? traffic : null;
     }
 }
