@@ -1,7 +1,7 @@
 # NetRoute Widget: Adapter ledger (exact totals on the card) — Design
 
 **Date:** 2026-11-21
-**Status:** Draft for the owner's approval. Nothing is built.
+**Status:** Approved; implemented by `docs/superpowers/plans/2026-11-21-netroute-adapter-ledger.md`. Real-machine comparison with BitMeter still to be run by the owner.
 **Builds on:** `2026-10-14-netroute-v5-1-usage-while-smart-off-design.md` (per-app tracing, gated by the Usage tab) and the v6.2 three-connection work (`ConnectionId { Lan, Wifi, Phone }`, branch `codex/v6-2-smart-routing`, not yet merged to `main`). This design assumes the v6.2 types exist; build it on top of v6.2 or after its merge.
 
 ## Why
@@ -100,7 +100,7 @@ Saving follows the existing rule (save when dirty, plus periodically), not once 
 ## Open points
 
 - **Restarts lose bytes** between the last reading and the next start (the counter is since-boot, not since-last-reading). The widget starts with Windows, so the loss is small, but BitMeter does not have it. A follow-up could recover the delta when the saved reading is clearly the same boot and ≤ the current counter. Not in scope here.
-- **Unexplained observation, not part of this design:** at 17:32:33 on 2026-11-21 the card showed 5.6 MB phone / 7.4 MB LAN while `usage.json` held 28.66 MB / 22.5 MB, although both come from the same `UsageCounter` in the v6.2 source. The running build (`v6.2.0`) could not be identified (process path unreadable without elevation). Reading the card from the ledger removes the dependency, but whoever builds this should check that the old card path was not hiding a real bug.
+- **Unexplained observation, not part of this design:** at 17:32:33 on 2026-11-21 the card showed 5.6 MB phone / 7.4 MB LAN while `usage.json` held 28.66 MB / 22.5 MB, although both come from the same `UsageCounter` in the v6.2 source.
   - **Result of plan Task 0 (2026-11-21): no bug found, mismatch not reproduced.**
     - *Running build:* the startup task `NetRouteWidget` points at `C:\Program Files\NetRouteWidget\NetRouteWidget.exe`, whose `ProductVersion` is `6.2.0+eec7ab4021dd6f533378c025102675c01cf804f4` (built 2026-10-31). The process path itself is unreadable without elevation, so the match is by the installed exe (the one the task launches), not by the process. `git diff eec7ab4 HEAD -- src tests` is empty: the running build has the same source as the branch tip this work starts from, so the v6.2 source read here is the code that ran.
     - *Card path:* the card total is `SmartRoutingController._todayTotals`. It is set in the constructor and after `UsageCounter.Update`, `AddMeasured` and `Clear`, i.e. after every code path that changes the cells, and `App.RenderLiveSpeeds` re-reads it every second. `TodayTotals` and `Snapshot` sum the same `Cell` rows. No path was found where the card can diverge from the file.
