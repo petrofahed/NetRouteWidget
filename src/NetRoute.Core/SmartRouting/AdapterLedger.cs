@@ -15,6 +15,9 @@ public sealed record LedgerDay(IReadOnlyDictionary<ConnectionId, Traffic> Totals
 ///     and the NEW readings are counted as growth, like UsageCounter.Grow. Judged on the pair so a reset is never
 ///     half-counted.
 ///   - A slot absent from a tick keeps its baseline and counts nothing.
+///   - Rates (the card's live speed): the bytes counted in the last UsageCounter.RateWindow (same in-window rule and jitter
+///     margin as UsageCounter), per connection, up + down, divided by the window seconds; a connection below
+///     UsageCounter.ActiveBytesPerSecond reads 0. Refreshed by every Update (an empty tick lets them fade), never persisted.
 /// Not thread-safe: callers must serialize all calls.
 public sealed class AdapterLedger
 {
@@ -26,8 +29,12 @@ public sealed class AdapterLedger
 
     readonly SortedDictionary<DateOnly, DayData> _days = new();
     readonly Dictionary<ConnectionId, AdapterReading> _baselines = new();
+    readonly Dictionary<ConnectionId, Queue<(DateTimeOffset At, long Bytes)>> _recent = new();
     DateOnly _today;
     bool _dirty;
+
+    /// Bytes per second per connection right now, over the rate window. Every connection has a key (0 when idle).
+    public IReadOnlyDictionary<ConnectionId, long> Rates { get; private set; } = IdleRates();
 
     public AdapterLedger(IReadOnlyDictionary<DateOnly, LedgerDay>? restored, DateOnly today)
     {
@@ -53,7 +60,11 @@ public sealed class AdapterLedger
             _today = day;
             Prune();
         }
-        if (readings.Count == 0) return;
+        if (readings.Count == 0)
+        {
+            RebuildRates(now);
+            return;
+        }
 
         var dayData = DayFor(day);
         if (dayData.Since is null)
@@ -71,9 +82,12 @@ public sealed class AdapterLedger
                 : default;
             _baselines[id] = current;
             if (grown.Total <= 0) continue;
+            if (!_recent.TryGetValue(id, out var queue)) _recent[id] = queue = new();
+            queue.Enqueue((now, grown.Total));
             dayData.Totals[id] = dayData.Totals.GetValueOrDefault(id) + grown;
             _dirty = true;
         }
+        RebuildRates(now);
     }
 
     /// Today's total for a connection (today = the day of the last Update, else the constructor's day).
@@ -112,6 +126,31 @@ public sealed class AdapterLedger
     /// readings count as growth.
     static Traffic Grow(Traffic now, Traffic last) =>
         now.Up < last.Up || now.Down < last.Down ? now : new Traffic(now.Up - last.Up, now.Down - last.Down);
+
+    static Dictionary<ConnectionId, long> IdleRates() => Connections.All.ToDictionary(id => id, _ => 0L);
+
+    void RebuildRates(DateTimeOffset now)
+    {
+        var rates = IdleRates();
+        var seconds = (long)UsageCounter.RateWindow.TotalSeconds;
+        foreach (var (id, queue) in _recent.ToList())
+        {
+            if (queue.Any(e => !UsageCounter.InWindow(e.At, now)))
+            {
+                var fresh = queue.Where(e => UsageCounter.InWindow(e.At, now)).ToList();
+                queue.Clear();
+                foreach (var e in fresh) queue.Enqueue(e);
+            }
+            if (queue.Count == 0)
+            {
+                _recent.Remove(id);
+                continue;
+            }
+            var rate = queue.Sum(e => e.Bytes) / seconds;
+            rates[id] = rate < UsageCounter.ActiveBytesPerSecond ? 0 : rate;
+        }
+        Rates = rates;
+    }
 
     DayData DayFor(DateOnly day)
     {

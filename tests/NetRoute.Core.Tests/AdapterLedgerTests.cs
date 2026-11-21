@@ -204,4 +204,72 @@ public class AdapterLedgerTests
         Assert.True(l.TakeDirty());
         Assert.False(l.TakeDirty());
     }
+
+    // Feeds one reading per second, each perTick bytes of download above the last; returns the counter's new value.
+    static long Feed(AdapterLedger l, ConnectionId id, long counter, int fromSecond, int toSecond, long perTick)
+    {
+        for (var s = fromSecond; s <= toSecond; s++)
+        {
+            counter += perTick;
+            l.Update(Map((id, R("Ethernet 5", 0, counter))), At(D1, 8, 0, s));
+        }
+        return counter;
+    }
+
+    [Fact]
+    public void Rates_are_the_bytes_over_the_last_three_seconds_per_connection()
+    {
+        var l = new AdapterLedger(null, D1);
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 0, 0)), (ConnectionId.Lan, R("Ethernet", 0, 0))), At(D1, 8, 0, 0));
+        // Phone +3000 down per tick; LAN +1800 down and +900 up per tick.
+        for (var s = 1; s <= 4; s++)
+            l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 0, s * 3000)), (ConnectionId.Lan, R("Ethernet", s * 900, s * 1800))), At(D1, 8, 0, s));
+
+        var seconds = (long)UsageCounter.RateWindow.TotalSeconds;
+        var inWindow = 3; // ticks at 2, 3, 4 s are younger than RateWindow - RateWindowMargin; the tick at 1 s has aged out
+        Assert.Equal(inWindow * 3000 / seconds, l.Rates[ConnectionId.Phone]);
+        Assert.Equal(inWindow * 2700 / seconds, l.Rates[ConnectionId.Lan]);
+        Assert.Equal(0, l.Rates[ConnectionId.Wifi]);
+    }
+
+    [Fact]
+    public void A_connection_below_the_active_threshold_reads_zero()
+    {
+        var l = new AdapterLedger(null, D1);
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 0, 0))), At(D1, 8, 0, 0));
+        var counter = Feed(l, ConnectionId.Phone, 0, 1, 3, UsageCounter.ActiveBytesPerSecond - 1); // x3 ticks / 3 s = just under
+        Assert.Equal(0, l.Rates[ConnectionId.Phone]);
+
+        Feed(l, ConnectionId.Phone, counter, 4, 6, UsageCounter.ActiveBytesPerSecond); // at the threshold it reads its rate
+        Assert.Equal(UsageCounter.ActiveBytesPerSecond, l.Rates[ConnectionId.Phone]);
+    }
+
+    [Fact]
+    public void Rates_fade_to_zero_when_ticks_stop_carrying_bytes()
+    {
+        var l = new AdapterLedger(null, D1);
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 0, 0))), At(D1, 8, 0, 0));
+        var counter = Feed(l, ConnectionId.Phone, 0, 1, 3, 5000);
+        Assert.Equal(5000, l.Rates[ConnectionId.Phone]);
+
+        counter = Feed(l, ConnectionId.Phone, counter, 4, 6, 0); // the counter stands still
+        Assert.Equal(0, l.Rates[ConnectionId.Phone]);
+
+        Feed(l, ConnectionId.Phone, counter, 7, 9, 5000);
+        Assert.Equal(5000, l.Rates[ConnectionId.Phone]);
+        l.Update(Map(), At(D1, 8, 0, 12)); // an empty tick (no adapters at all) also lets the window age out
+        Assert.Equal(0, l.Rates[ConnectionId.Phone]);
+    }
+
+    [Fact]
+    public void A_baseline_tick_adds_no_rate()
+    {
+        var l = new AdapterLedger(null, D1);
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 9_000_000, 90_000_000))), At(D1, 8, 0, 0)); // the since-boot counter
+        Assert.Equal(0, l.Rates[ConnectionId.Phone]);
+
+        // A renamed adapter is a new baseline too.
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 7", 9_000_000, 90_000_000))), At(D1, 8, 0, 1));
+        Assert.Equal(0, l.Rates[ConnectionId.Phone]);
+    }
 }

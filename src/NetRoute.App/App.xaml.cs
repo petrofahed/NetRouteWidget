@@ -164,6 +164,7 @@ public partial class App : Application
                 {
                     ledger.Update(sampler.Sample(), DateTimeOffset.Now);
                     RenderTotals();
+                    RenderSpeeds();
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -191,13 +192,9 @@ public partial class App : Application
                     var owner = false; // only the tick that took the guard may release it
                     try
                     {
-                        // Before the guard: while the gate is held (a restart or stop can take seconds) polls are skipped, and the
-                        // controller has already zeroed the speed or Smart routing has left Running, so a stale figure clears now.
-                        RenderLiveSpeeds(smartForUsage);
                         if (_usagePolling) return; // the previous poll is still waiting for the API
                         _usagePolling = owner = true;
                         await smartForUsage.PollStatsAsync();
-                        RenderLiveSpeeds(smartForUsage);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -464,20 +461,6 @@ public partial class App : Application
         if (_smart is { } smart) _ = smart.ApplyAsync(controller.Status, controller.Settings);
     }
 
-    /// The card's live speed next to each latency: the total through that exit right now. Blank whenever neither Smart
-    /// routing nor Windows tracing is counting, so a stale figure never lingers.
-    void RenderLiveSpeeds(SmartRoutingController smart)
-    {
-        if (_card is not { } card) return;
-        if (!LiveSpeedDisplay.IsShown(smart.Status.State, smart.IsMeasuring))
-        {
-            card.RenderSpeeds("", "");
-            return;
-        }
-        var live = smart.LiveSpeed;
-        card.RenderSpeeds(SpeedLabel(live.PhoneBytesPerSecond), SpeedLabel(live.LanBytesPerSecond));
-    }
-
     /// Today's total data through each adapter, from the ledger: it does not depend on Smart routing existing or running.
     void RenderTotals()
     {
@@ -485,12 +468,16 @@ public partial class App : Application
         card.RenderTotals(CardTotalsPresenter.Labels(ledger.Today));
     }
 
-    static string SpeedLabel(long bytesPerSecond) => bytesPerSecond <= 0 ? "" : UsageReport.NowText(bytesPerSecond);
+    /// Live speed through each adapter, from the ledger's rates: it does not depend on Smart routing existing or running.
+    void RenderSpeeds()
+    {
+        if (_card is not { } card || _ledger is not { } ledger) return;
+        card.RenderSpeeds(CardSpeedPresenter.Labels(ledger.Rates));
+    }
 
     void RenderSmart(SmartRoutingStatus status)
     {
         RenderSmartCard(status);
-        if (!LiveSpeedDisplay.IsShown(status.State, _smart?.IsMeasuring == true)) _card?.RenderSpeeds("", "");
         RenderSmartWindow();
         if (_waitingPopup is { } popup && (!status.Targets.Any(target => target.Target == popup.Target.Target
             && target.Main == popup.Target.Main && target.Generation == popup.Target.Generation && target.CanUseMain)
