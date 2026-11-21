@@ -14,6 +14,10 @@
   within 5 % (the widget saves usage.json every 30 s, so the file can trail the live counters by up to that long; use a
   longer -Seconds if a run is borderline). A connection whose adapter grew by less than 100 KB is skipped: too little to compare.
   BitMeter's day total is printed for context only, without a verdict: its adapter selection may differ from NetRoute's.
+
+  Exit codes: 0 = no FAIL and at least one PASS; 1 = at least one FAIL, or an error (for example a wrong adapter name, which
+  stops the script before measuring); 2 = no PASS verdict at all (nothing comparable: no ledger data yet, adapters under
+  100 KB, or a run that crossed midnight).
 .PARAMETER PhoneAdapter
   Name of the phone adapter as in Get-NetAdapter (for example 'Ethernet 5').
 .PARAMETER LanAdapter
@@ -106,6 +110,15 @@ if ($ledgerAfter.present) {
 }
 Write-Host ''
 
+# The ledger is per day and the file is saved every 30 s: a run across midnight, or a ledger that only appeared during the
+# run, would compare the counters with the wrong baseline and give a false result.
+$noLedgerComparison = $null
+if ($ledgerBefore.day -ne $ledgerAfter.day) {
+    $noLedgerComparison = 'the run crossed midnight (the ledger day changed), so the ledger growth is not comparable. Run it again.'
+} elseif ($ledgerAfter.present -and -not $ledgerBefore.present) {
+    $noLedgerComparison = 'the ledger for today first appeared during the run, so there is no starting reading to compare against. Run it again.'
+}
+
 $failed = 0; $passed = 0; $skipped = 0
 foreach ($c in $connections) {
     $b = $countersBefore[$c.Key]; $a = $countersAfter[$c.Key]
@@ -133,6 +146,10 @@ foreach ($c in $connections) {
     }
     if (-not $ledgerAfter.present) {
         Write-Host '  NO VERDICT: no ledger data to compare.' -ForegroundColor Yellow
+        $skipped++; continue
+    }
+    if ($noLedgerComparison) {
+        Write-Host ("  NO VERDICT: {0}" -f $noLedgerComparison) -ForegroundColor Yellow
         $skipped++; continue
     }
     $ratio = $ledgerGrew / $grew
