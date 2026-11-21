@@ -17,8 +17,10 @@ public sealed record UsageRow(Traffic Phone, Traffic Lan, long Kept)
 }
 
 /// One local day: its rows by row key, the bytes Windows counted on the phone adapter while Smart routing was recording,
-/// and how many times sing-box stopped or restarted (the bytes just before each stop were not recorded).
-public sealed record UsageDay(IReadOnlyDictionary<string, UsageRow> Rows, long PhoneAdapterBytes, int Gaps = 0);
+/// and how many times sing-box stopped or restarted (the bytes just before each stop were not recorded). Ledger is the
+/// day's exact bytes per adapter from the always-on adapter ledger (null when the day has none, e.g. an older file).
+public sealed record UsageDay(
+    IReadOnlyDictionary<string, UsageRow> Rows, long PhoneAdapterBytes, int Gaps = 0, LedgerDay? Ledger = null);
 
 /// Bytes through each exit for one day, all rows together (the Usage tab's "Today" Total row). A class, not a struct, so the
 /// controller can hold it in a volatile field and hand it to the UI thread without a lock.
@@ -47,6 +49,21 @@ public sealed record UsageSnapshot(
 
     public static UsageSnapshot Empty { get; } =
         new(new Dictionary<DateOnly, UsageDay>(), new Dictionary<string, UsageRate>());
+
+    /// Each listed day carries that ledger; a day this snapshot does not have is added with no rows. Other days are untouched.
+    public UsageSnapshot WithLedger(IReadOnlyDictionary<DateOnly, LedgerDay> ledger)
+    {
+        var days = new Dictionary<DateOnly, UsageDay>(Days);
+        foreach (var (day, ledgerDay) in ledger)
+            days[day] = days.TryGetValue(day, out var existing)
+                ? existing with { Ledger = ledgerDay }
+                : new UsageDay(new Dictionary<string, UsageRow>(), 0, 0, ledgerDay);
+        return this with { Days = days };
+    }
+
+    /// The days that carry a ledger: the seed for the AdapterLedger on start.
+    public IReadOnlyDictionary<DateOnly, LedgerDay> LedgerDays() =>
+        Days.Where(d => d.Value.Ledger is not null).ToDictionary(d => d.Key, d => d.Value.Ledger!);
 }
 
 /// Kept-off-4G bytes for one local day, per row key (the card's "kept off 4G today" and the per-item numbers on the Config tab).

@@ -897,4 +897,73 @@ public class UsageCounterTests
 
         Assert.Equal(new ExitTotals(0, 0), counter.TodayTotals(D0));
     }
+
+    static void AssertTotalsEqualSnapshotRows(UsageCounter counter, DateOnly day)
+    {
+        var rows = counter.Snapshot().Days.TryGetValue(day, out var snapshotDay) ? snapshotDay.Rows.Values : [];
+        var totals = counter.TodayTotals(day);
+        Assert.Equal(rows.Sum(r => r.Phone.Total), totals.PhoneBytes);
+        Assert.Equal(rows.Sum(r => r.Lan.Total), totals.LanBytes);
+    }
+
+    /// The card shows TodayTotals and usage.json is written from Snapshot: they must never differ (task 0 of the adapter ledger plan).
+    [Fact]
+    public void Today_totals_equal_the_sum_of_the_snapshot_rows()
+    {
+        const long mib = 1024 * 1024;
+        var counter = new UsageCounter(null, D0);
+        AssertTotalsEqualSnapshotRows(counter, D0);
+
+        // Phone adapter baseline, then phone and LAN connections.
+        counter.Update(Poll(T0, [], up: 0, down: 0, adapter: 10 * mib), Attr);
+        AssertTotalsEqualSnapshotRows(counter, D0);
+        counter.Update(Poll(T0.AddSeconds(1),
+            [Conn("p", 0, 2 * mib, process: "a.exe"), Conn("l", 0, 3 * mib, exit: "lan", process: "b.exe")],
+            adapter: 12 * mib), Attr);
+        AssertTotalsEqualSnapshotRows(counter, D0);
+
+        // Closed connections the poll missed: unattributed rows for phone and LAN.
+        counter.Update(Poll(T0.AddSeconds(2),
+            [Conn("p", 0, 2 * mib, process: "a.exe"), Conn("l", 0, 3 * mib, exit: "lan", process: "b.exe")],
+            up: 0, down: 9 * mib, adapter: 15 * mib), Attr);
+        Assert.True(counter.Snapshot().Days[D0].Rows.ContainsKey(UsageAttribution.UnattributedKey));
+        AssertTotalsEqualSnapshotRows(counter, D0);
+
+        // A take-back: the connections now show more phone bytes than the adapter counted, so unattributed phone shrinks.
+        var before = counter.TodayTotals(D0).PhoneBytes;
+        counter.Update(Poll(T0.AddSeconds(3),
+            [Conn("p", 0, 4 * mib, process: "a.exe"), Conn("l", 0, 3 * mib, exit: "lan", process: "b.exe")],
+            up: 0, down: 11 * mib, adapter: 15 * mib), Attr);
+        Assert.True(counter.TodayTotals(D0).PhoneBytes < before + 2 * mib); // the 2 MB growth was partly taken back
+        AssertTotalsEqualSnapshotRows(counter, D0);
+
+        // Tracing while sing-box is off, and a gap.
+        counter.ResetBaselines();
+        counter.AddMeasured(
+            [new MeasuredTraffic("c.exe", RouteExit.Phone, new Traffic(1000, 5000)), new MeasuredTraffic("d.exe", RouteExit.Lan, new Traffic(20, 300))],
+            Attr, 15 * mib + 6000, T0.AddSeconds(4));
+        AssertTotalsEqualSnapshotRows(counter, D0);
+        counter.NoteGap(D0);
+        AssertTotalsEqualSnapshotRows(counter, D0);
+
+        // Sing-box restarts (new ids, totals back to zero).
+        counter.ResetBaselines();
+        counter.Update(Poll(T0.AddSeconds(5), [Conn("n", 100, 900, process: "a.exe")], adapter: 15 * mib + 7000), Attr);
+        AssertTotalsEqualSnapshotRows(counter, D0);
+
+        // Day rollover: both days still agree.
+        var next = D0.AddDays(1);
+        counter.Update(Poll(new DateTimeOffset(2026, 10, 3, 0, 0, 1, TimeSpan.Zero), [Conn("n", 200, 1900, process: "a.exe")], adapter: 15 * mib + 9000), Attr);
+        AssertTotalsEqualSnapshotRows(counter, D0);
+        AssertTotalsEqualSnapshotRows(counter, next);
+
+        // A save and restore (what usage.json does) keeps the equality.
+        var restored = new UsageCounter(counter.Snapshot(), next);
+        AssertTotalsEqualSnapshotRows(restored, D0);
+        AssertTotalsEqualSnapshotRows(restored, next);
+
+        counter.Clear();
+        AssertTotalsEqualSnapshotRows(counter, D0);
+        AssertTotalsEqualSnapshotRows(counter, next);
+    }
 }

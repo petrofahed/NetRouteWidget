@@ -126,4 +126,16 @@ sealed class FakeAdapterCounters : IAdapterCounters
         if (Throws is { } ex) throw ex;
         return Bytes;
     }
+
+    /// Counter rows by interface index; an index without a row reads as null.
+    public Dictionary<int, Traffic> ByIndex { get; } = new();
+    /// Every index Read was asked for, in call order.
+    public List<int> Reads { get; } = new();
+
+    public Traffic? Read(int interfaceIndex)
+    {
+        Reads.Add(interfaceIndex);
+        if (Throws is { } ex) throw ex;
+        return ByIndex.TryGetValue(interfaceIndex, out var traffic) ? traffic : null;
+    }
 }

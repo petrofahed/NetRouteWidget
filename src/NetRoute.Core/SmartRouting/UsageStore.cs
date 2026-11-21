@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace NetRoute.Core;
 
@@ -16,7 +17,16 @@ public static class UsageStore
     static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     internal sealed record FileDto(int Version, Dictionary<string, DayDto>? Days);
-    internal sealed record DayDto(Dictionary<string, RowDto>? Rows, long PhoneAdapter, int Gaps);
+    /// Adapters stays a raw JsonElement so a damaged field (wrong type, bad numbers) can be ignored in Read instead of
+    /// failing the whole file, which would set aside the day's rows too.
+    internal sealed record DayDto(
+        Dictionary<string, RowDto>? Rows, long PhoneAdapter, int Gaps,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? Adapters = null);
+    internal sealed record AdaptersDto(
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TrafficDto? Phone,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TrafficDto? Lan,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TrafficDto? Wifi,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Since);
     internal sealed record RowDto(TrafficDto? Phone, TrafficDto? Lan, long Kept);
     internal sealed record TrafficDto(long Up, long Down);
 
@@ -54,7 +64,7 @@ public static class UsageStore
         var days = new Dictionary<string, DayDto>();
         foreach (var (day, data) in usage.Days)
         {
-            if (data.Rows.Count == 0 && data.PhoneAdapterBytes == 0) continue;
+            if (data.Rows.Count == 0 && data.PhoneAdapterBytes == 0 && data.Ledger is null) continue;
             days[day.ToString(DayFormat, CultureInfo.InvariantCulture)] = new DayDto(
                 data.Rows.ToDictionary(
                     r => r.Key,
@@ -62,7 +72,7 @@ public static class UsageStore
                         new TrafficDto(r.Value.Phone.Up, r.Value.Phone.Down),
                         new TrafficDto(r.Value.Lan.Up, r.Value.Lan.Down),
                         r.Value.Kept)),
-                data.PhoneAdapterBytes, data.Gaps);
+                data.PhoneAdapterBytes, data.Gaps, data.Ledger is null ? null : WriteLedger(data.Ledger));
         }
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(new FileDto(Version, days), Options));
@@ -82,10 +92,44 @@ public static class UsageStore
                 if (row is null) continue;
                 rows[key] = new UsageRow(Clamp(row.Phone), Clamp(row.Lan), Math.Max(0, row.Kept));
             }
-            result[day] = new UsageDay(rows, Math.Max(0, dto?.PhoneAdapter ?? 0), Math.Max(0, dto?.Gaps ?? 0));
+            result[day] = new UsageDay(
+                rows, Math.Max(0, dto?.PhoneAdapter ?? 0), Math.Max(0, dto?.Gaps ?? 0), ReadLedger(dto?.Adapters));
         }
         return new UsageSnapshot(result, new Dictionary<string, UsageRate>());
     }
+
+    const string SinceFormat = "HH:mm:ss";
+
+    /// A connection that never grew is left out (a missing connection means zero).
+    static JsonElement WriteLedger(LedgerDay ledger)
+    {
+        TrafficDto? Of(ConnectionId id) =>
+            ledger.Totals.TryGetValue(id, out var t) && t.Total > 0 ? new TrafficDto(t.Up, t.Down) : null;
+        return JsonSerializer.SerializeToElement(
+            new AdaptersDto(Of(ConnectionId.Phone), Of(ConnectionId.Lan), Of(ConnectionId.Wifi),
+                ledger.Since?.ToString(SinceFormat, CultureInfo.InvariantCulture)), Options);
+    }
+
+    /// Tolerant: anything that is not an object is no ledger; a part of the wrong type counts as zero; a bad "since" is dropped.
+    static LedgerDay? ReadLedger(JsonElement? adapters)
+    {
+        if (adapters is not { ValueKind: JsonValueKind.Object } element) return null;
+        var totals = new Dictionary<ConnectionId, Traffic>();
+        foreach (var (name, id) in new[] { ("phone", ConnectionId.Phone), ("lan", ConnectionId.Lan), ("wifi", ConnectionId.Wifi) })
+        {
+            if (!element.TryGetProperty(name, out var part) || part.ValueKind != JsonValueKind.Object) continue;
+            var traffic = new Traffic(ReadBytes(part, "up"), ReadBytes(part, "down"));
+            if (traffic.Total > 0) totals[id] = traffic;
+        }
+        TimeOnly? since = null;
+        if (element.TryGetProperty("since", out var text) && text.ValueKind == JsonValueKind.String
+            && TimeOnly.TryParseExact(text.GetString(), SinceFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+            since = parsed;
+        return new LedgerDay(totals, since);
+    }
+
+    static long ReadBytes(JsonElement part, string name) =>
+        part.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? Math.Max(0, n) : 0;
 
     static Traffic Clamp(TrafficDto? t) => t is null ? default : new Traffic(Math.Max(0, t.Up), Math.Max(0, t.Down));
 
@@ -113,7 +157,7 @@ public static class UsageStore
         foreach (var (key, row) in normal.Take(UsageCounter.MaxRowsPerDay)) rows[key] = row;
         var overflow = normal.Skip(UsageCounter.MaxRowsPerDay).Aggregate(UsageRow.Empty, (sum, r) => sum + r.Value);
         rows[UsageAttribution.OtherKey] = rows.GetValueOrDefault(UsageAttribution.OtherKey, UsageRow.Empty) + overflow;
-        return new UsageDay(rows, day.PhoneAdapterBytes, day.Gaps);
+        return day with { Rows = rows };
     }
 
     static void SetAside(string path)

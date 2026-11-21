@@ -61,7 +61,7 @@ public partial class SmartRoutingWindow : Window
 
     void OnClearUsage(object sender, RoutedEventArgs e)
     {
-        var answer = MessageBox.Show(this, "Delete all recorded usage? This cannot be undone.", "NetRoute — Clear usage history",
+        var answer = MessageBox.Show(this, "Delete all recorded usage, and the exact adapter totals as well? This cannot be undone.", "NetRoute — Clear usage history",
             MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
         if (answer == MessageBoxResult.Yes) ClearUsageRequested?.Invoke();
     }

@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace NetRoute.Core;
 
 /// Phone and Lan are the per-exit totals (up + down).
@@ -34,13 +36,43 @@ public sealed record UsageReportRow(
 public sealed record UsageReportModel(
     int RangeDays, IReadOnlyList<UsageReportRow> Rows, long PhoneTotal, long LanTotal, long KeptOff,
     bool KeptOffIsLowerBound, long PhoneAdapterTotal, DateOnly? RecordingSince, bool Filtered = false,
-    ConnectionId Profile = ConnectionId.Phone, long PhoneUpTotal = 0, long LanUpTotal = 0);
+    ConnectionId Profile = ConnectionId.Phone, long PhoneUpTotal = 0, long LanUpTotal = 0)
+{
+    /// Exact bytes per connection from the adapter ledger, summed over the range's days that have a ledger (every connection
+    /// is listed, 0 when it grew nothing); empty when no day in the range has one.
+    public IReadOnlyDictionary<ConnectionId, Traffic> LedgerTotals { get; init; } = new Dictionary<ConnectionId, Traffic>();
+
+    /// When the ledger started counting: the first-ever ledger day plus its Since, only when that day lies in the range
+    /// and has a Since.
+    public DateTime? LedgerSince { get; init; }
+}
 
 /// Pure model for the Usage tab.
 public static class UsageReport
 {
     public static readonly IReadOnlyList<int> Ranges = [1, 3, 7, 15, 30];
     const int DefaultRange = 7;
+
+    public const string CountingNote =
+        "Adapter totals are exact while the widget runs. Per-app rows are counted only while Smart routing runs or this tab is open. The Now columns are per app and can differ from the card's speed.";
+
+    /// The line under the table: exact per-adapter totals from the ledger, or the older Smart-routing-only phone total
+    /// when no day in the range has a ledger.
+    public static string AdapterFooter(UsageReportModel model)
+    {
+        if (model.LedgerTotals.Count == 0)
+            return "Phone adapter total in this period (exact, from Windows): "
+                + (model.PhoneAdapterTotal > 0 ? ByteFormat.Human(model.PhoneAdapterTotal) : "not measured yet");
+        string Part(ConnectionId id)
+        {
+            var bytes = model.LedgerTotals.GetValueOrDefault(id).Total;
+            return $"{Connections.Label(id)} {(bytes == 0 ? "0 B" : ByteFormat.Human(bytes))}";
+        }
+        var text = "Exact adapter totals in this period (from Windows): " + string.Join(" · ", Connections.CardOrder.Select(Part));
+        return model.LedgerSince is { } since
+            ? text + $" (counted since {since.ToString("HH:mm 'on' d MMM", CultureInfo.CurrentCulture)})"
+            : text;
+    }
 
     public static int NormalizeRange(int days) => Ranges.Contains(days) ? days : DefaultRange;
 
@@ -77,15 +109,34 @@ public static class UsageReport
         var attribution = UsageAttribution.Build(catalog, settings);
         var needle = filter?.Trim() ?? "";
 
+        bool Matches(string name, string key) =>
+            needle.Length == 0
+            || name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+            || key.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
         var sums = new Dictionary<string, UsageRow>();
         long adapter = 0;
         var gap = false;
+        var ledgerTotals = new Dictionary<ConnectionId, Traffic>();
+        Traffic notCountedPhone = default, notCountedLan = default;
         foreach (var (day, data) in usage.Days)
         {
             if (day < first || day > today) continue;
             adapter += data.PhoneAdapterBytes;
             gap |= data.Gaps > 0;
-            foreach (var (key, row) in data.Rows) sums[key] = sums.GetValueOrDefault(key, UsageRow.Empty) + row;
+            Traffic dayPhone = default, dayLan = default;
+            foreach (var (key, row) in data.Rows)
+            {
+                sums[key] = sums.GetValueOrDefault(key, UsageRow.Empty) + row;
+                dayPhone += row.Phone;
+                dayLan += row.Lan;
+            }
+            if (data.Ledger is not { } ledger) continue;
+            foreach (var id in Connections.All) ledgerTotals[id] = ledgerTotals.GetValueOrDefault(id) + ledger.Totals.GetValueOrDefault(id);
+            // The adapter bytes no row of this day accounts for, per direction, never below zero. Clamped per day, so one
+            // day's surplus of rows never eats into another day's remainder.
+            notCountedPhone += Remainder(ledger.Totals.GetValueOrDefault(ConnectionId.Phone), dayPhone);
+            notCountedLan += Remainder(ledger.Totals.GetValueOrDefault(ConnectionId.Lan) + ledger.Totals.GetValueOrDefault(ConnectionId.Wifi), dayLan);
         }
         foreach (var key in usage.Rates.Keys) sums.TryAdd(key, UsageRow.Empty);
 
@@ -95,22 +146,41 @@ public static class UsageReport
             var rate = usage.Rates.GetValueOrDefault(key);
             if (sum.Total == 0 && rate is null) continue;
             var name = attribution.DisplayName(key);
-            if (needle.Length > 0
-                && !name.Contains(needle, StringComparison.OrdinalIgnoreCase)
-                && !key.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Matches(name, key)) continue;
             var exception = UsageExceptions.Describe(catalog, settings, profile, key);
             if (!canAssign) exception = exception with { CanChange = false };
             rows.Add(new UsageReportRow(key, name, exception, sum.Phone.Total, sum.Lan.Total, rate,
                 sum.Phone.Up, sum.Lan.Up, usage.UpRates?.GetValueOrDefault(key)));
         }
 
+        // A derived row, never stored: the exact adapter bytes that no per-app row accounts for.
+        var notCountedName = attribution.DisplayName(UsageAttribution.NotCountedKey);
+        if (notCountedPhone.Total + notCountedLan.Total > 0 && Matches(notCountedName, UsageAttribution.NotCountedKey))
+            rows.Add(new UsageReportRow(
+                UsageAttribution.NotCountedKey, notCountedName,
+                UsageExceptions.Describe(catalog, settings, profile, UsageAttribution.NotCountedKey),
+                notCountedPhone.Total, notCountedLan.Total, null, notCountedPhone.Up, notCountedLan.Up));
+
         var recorded = usage.Days.Keys.OrderBy(d => d).ToList();
         DateOnly? since = recorded.Count > 0 && recorded[0] > first ? recorded[0] : null;
+        // The first-ever ledger day, whether or not it is in the range: a later day must not stand in for it.
+        DateTime? ledgerSince = null;
+        var ledgerDays = usage.Days.Where(d => d.Value.Ledger is not null).Select(d => d.Key).ToList();
+        if (ledgerDays.Count > 0 && ledgerDays.Min() is var firstLedgerDay && firstLedgerDay >= first && firstLedgerDay <= today
+            && usage.Days[firstLedgerDay].Ledger!.Since is { } ledgerTime)
+            ledgerSince = firstLedgerDay.ToDateTime(ledgerTime);
         return new UsageReportModel(
             range, Sort(rows, sort).ToList(), rows.Sum(r => r.PhoneBytes), rows.Sum(r => r.LanBytes),
             sums.Values.Sum(r => r.Kept), gap, adapter, since, needle.Length > 0, profile,
-            rows.Sum(r => r.PhoneUp), rows.Sum(r => r.LanUp));
+            rows.Sum(r => r.PhoneUp), rows.Sum(r => r.LanUp))
+        {
+            LedgerTotals = ledgerTotals,
+            LedgerSince = ledgerSince,
+        };
     }
+
+    static Traffic Remainder(Traffic ledger, Traffic rows) =>
+        new(Math.Max(0, ledger.Up - rows.Up), Math.Max(0, ledger.Down - rows.Down));
 
     static IEnumerable<UsageReportRow> Sort(List<UsageReportRow> rows, UsageSort sort)
     {

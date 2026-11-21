@@ -136,16 +136,15 @@ public partial class CardWindow : Window
         SmartText.Opacity = row.Tone == SmartTone.Muted ? 0.7 : 1.0;
     }
 
-    /// The live speed through each exit, left of its latency. An empty text hides the figure (the row looks as before).
+    /// The live speed through each connection, left of its latency. A connection's label shows only while its row is shown;
+    /// a missing or empty label hides the figure (the row looks as before).
     /// Only touches a TextBlock when its text changed: this is called every second.
-    /// Wi-Fi has no speed source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
-    public void RenderSpeeds(string phone, string lan)
+    public void RenderSpeeds(IReadOnlyDictionary<ConnectionId, string> labels)
     {
-        phone = _shown.Contains(ConnectionId.Phone) ? phone : "";
-        lan = _shown.Contains(ConnectionId.Lan) ? lan : "";
-        SetSpeed(PhoneSpeed, phone);
-        SetSpeed(LanSpeed, lan);
-        SetSpeed(WifiSpeed, WifiPlaceholder(phone, lan));
+        string Label(ConnectionId id) => _shown.Contains(id) && labels.TryGetValue(id, out var label) ? label : "";
+        SetSpeed(PhoneSpeed, Label(ConnectionId.Phone));
+        SetSpeed(LanSpeed, Label(ConnectionId.Lan));
+        SetSpeed(WifiSpeed, Label(ConnectionId.Wifi));
     }
 
     static void SetSpeed(TextBlock block, string text)
@@ -156,19 +155,14 @@ public partial class CardWindow : Window
     }
 
     /// Today's total data through each exit, right of its latency. An empty text hides the figure (the row looks as before).
-    /// Wi-Fi has no totals source yet (v6.3): it shows "—" whenever phone or lan shows a real figure, else nothing.
-    public void RenderTotals(string phone, string lan)
+    /// A connection's label shows only while its row is shown; a missing or empty label hides the figure.
+    public void RenderTotals(IReadOnlyDictionary<ConnectionId, string> labels)
     {
-        phone = _shown.Contains(ConnectionId.Phone) ? phone : "";
-        lan = _shown.Contains(ConnectionId.Lan) ? lan : "";
-        SetSpeed(PhoneTotal, phone);
-        SetSpeed(LanTotal, lan);
-        SetSpeed(WifiTotal, WifiPlaceholder(phone, lan));
+        string Label(ConnectionId id) => _shown.Contains(id) && labels.TryGetValue(id, out var label) ? label : "";
+        SetSpeed(PhoneTotal, Label(ConnectionId.Phone));
+        SetSpeed(LanTotal, Label(ConnectionId.Lan));
+        SetSpeed(WifiTotal, Label(ConnectionId.Wifi));
     }
-
-    /// "—" once Wi-Fi is a shown row and either sibling has a real figure; empty otherwise (Wi-Fi row hidden,
-    /// or neither sibling has anything to show, e.g. before the first poll or while speeds aren't displayed).
-    string WifiPlaceholder(string phone, string lan) => _shown.Contains(ConnectionId.Wifi) && (phone.Length > 0 || lan.Length > 0) ? "—" : "";
 
     public void ShowSpeed(string text)
     {

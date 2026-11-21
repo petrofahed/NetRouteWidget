@@ -412,7 +412,8 @@ public sealed class UsageCounter
     }
 
     /// Not from the future of a stepped-back clock, and younger than the window minus the jitter margin.
-    static bool InWindow(DateTimeOffset at, DateTimeOffset now) => at <= now && now - at < RateWindow - RateWindowMargin;
+    /// Shared with AdapterLedger's rates, so both use one rule.
+    internal static bool InWindow(DateTimeOffset at, DateTimeOffset now) => at <= now && now - at < RateWindow - RateWindowMargin;
 
     void RebuildLive(DateTimeOffset now)
     {
