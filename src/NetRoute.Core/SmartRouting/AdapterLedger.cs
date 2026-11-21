@@ -4,7 +4,7 @@ namespace NetRoute.Core;
 public sealed record AdapterReading(string Name, Traffic Bytes);
 
 /// One local day of the ledger: bytes per connection, and the local time of that day's first reading
-/// (null when nothing was read that day, or after a Clear).
+/// (null when nothing was read that day).
 public sealed record LedgerDay(IReadOnlyDictionary<ConnectionId, Traffic> Totals, TimeOnly? Since);
 
 /// Exact bytes per adapter per local day, from the Windows counters. Independent of UsageCounter and of Smart routing.
@@ -111,14 +111,11 @@ public sealed class AdapterLedger
         return dirty;
     }
 
-    /// Zeroes every stored day and drops its Since. The baselines stay, so the next tick does not re-add the since-boot counter.
+    /// Drops every stored day. The baselines stay, so the next tick does not re-add the since-boot counter; that tick
+    /// recreates today with Since = its own time.
     public void Clear()
     {
-        foreach (var data in _days.Values)
-        {
-            foreach (var id in data.Totals.Keys.ToList()) data.Totals[id] = default;
-            data.Since = null;
-        }
+        _days.Clear();
         _dirty = true;
     }
 

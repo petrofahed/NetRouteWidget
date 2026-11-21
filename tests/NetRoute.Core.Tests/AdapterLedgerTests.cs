@@ -116,9 +116,12 @@ public class AdapterLedgerTests
     }
 
     [Fact]
-    public void Clear_zeroes_the_totals_and_does_not_recount_the_boot_total() // Review Focus 2
+    public void Clear_drops_every_day_and_does_not_recount_the_boot_total() // Review Focus 2
     {
-        var l = new AdapterLedger(null, D1);
+        var l = new AdapterLedger(new Dictionary<DateOnly, LedgerDay>
+        {
+            [D1.AddDays(-3)] = new(new Dictionary<ConnectionId, Traffic> { [ConnectionId.Lan] = new(5, 5) }, new TimeOnly(7, 0)),
+        }, D1);
         l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 1000, 1000))), At(D1, 8, 0, 0));
         l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 1000, 1500))), At(D1, 8, 0, 1));
         Assert.Equal(500, l.Today(ConnectionId.Phone).Down);
@@ -127,12 +130,17 @@ public class AdapterLedgerTests
         l.Clear();
         Assert.True(l.TakeDirty());
         Assert.Equal(default, l.Today(ConnectionId.Phone));
-        Assert.Null(l.Snapshot()[D1].Since);
+        Assert.Empty(l.Snapshot()); // no zeroed days left behind, no old Since
 
-        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 1000, 1500))), At(D1, 8, 0, 2));
+        // The next tick recreates today with Since = that tick, and counts nothing: the baseline survived the Clear.
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 1000, 1500))), At(D1, 9, 30, 0));
         Assert.Equal(default, l.Today(ConnectionId.Phone));
-        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 1000, 1507))), At(D1, 8, 0, 3));
-        Assert.Equal(7, l.Today(ConnectionId.Phone).Down);
+        var day = Assert.Single(l.Snapshot());
+        Assert.Equal(D1, day.Key);
+        Assert.Equal(new TimeOnly(9, 30, 0), day.Value.Since);
+
+        l.Update(Map((ConnectionId.Phone, R("Ethernet 5", 1000, 1507))), At(D1, 9, 30, 1));
+        Assert.Equal(new Traffic(0, 7), l.Today(ConnectionId.Phone));
     }
 
     [Fact]
