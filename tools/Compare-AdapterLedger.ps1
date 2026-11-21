@@ -10,14 +10,17 @@
   Run it while the widget (a build with the adapter ledger) is running and the connections carry some traffic, for example:
     powershell -File tools\Compare-AdapterLedger.ps1 -PhoneAdapter 'Ethernet 5' -LanAdapter 'Ethernet'
 
-  For each connection it prints the growth of the Windows counters and of the ledger over -Seconds. PASS = the two agree
-  within 5 % (the widget saves usage.json every 30 s, so the file can trail the live counters by up to that long; use a
-  longer -Seconds if a run is borderline). A connection whose adapter grew by less than 100 KB is skipped: too little to compare.
-  BitMeter's day total is printed for context only, without a verdict: its adapter selection may differ from NetRoute's.
+  The widget saves usage.json about every 30 s, so the file always shows the ledger as it was at the last save. To compare
+  like with like, the script takes both readings right when the widget saves the file: it waits for a save, reads the
+  Windows counters at once, then waits for further saves (at least -Seconds later) and reads them again. Both sides then
+  cover the same interval, to within about a second. For each connection it prints the growth of the Windows counters and
+  of the ledger over that interval. PASS = the two agree within 5 %. A connection whose adapter grew by less than 100 KB is
+  skipped: too little to compare. BitMeter's day total is printed for context only, without a verdict: its adapter
+  selection may differ from NetRoute's.
 
   Exit codes: 0 = no FAIL and at least one PASS; 1 = at least one FAIL, or an error (for example a wrong adapter name, which
-  stops the script before measuring); 2 = no PASS verdict at all (nothing comparable: no ledger data yet, adapters under
-  100 KB, or a run that crossed midnight).
+  stops the script before measuring); 2 = no PASS verdict at all (nothing comparable: no ledger data yet, usage.json not
+  saved in time, adapters under 100 KB, or a run that crossed midnight).
 .PARAMETER PhoneAdapter
   Name of the phone adapter as in Get-NetAdapter (for example 'Ethernet 5').
 .PARAMETER LanAdapter
@@ -25,7 +28,8 @@
 .PARAMETER WifiAdapter
   Optional name of the Wi-Fi adapter.
 .PARAMETER Seconds
-  Length of the measurement window. Default 90.
+  Minimum length of the measurement window. Default 90. The window ends at the first save after this long, so the real
+  interval is a whole number of save periods (printed by the script).
 #>
 param(
     [Parameter(Mandatory)][string]$PhoneAdapter,
@@ -92,14 +96,54 @@ foreach ($c in $connections) {
     catch { throw ("Adapter '{0}' ({1}) was not found by Get-NetAdapterStatistics. Names as Windows shows them:`n{2}" -f $c.Adapter, $c.Label, ((Get-NetAdapter | ForEach-Object { '  ' + $_.Name }) -join "`n")) }
 }
 
-$ledgerBefore = Get-Ledger
-$countersBefore = @{}
-foreach ($c in $connections) { $countersBefore[$c.Key] = Get-AdapterCounters $c.Adapter }
-Write-Host ("Measuring for {0} s (read-only). Keep some traffic going on the connections to compare." -f $Seconds)
-Start-Sleep -Seconds $Seconds
-$countersAfter = @{}
-foreach ($c in $connections) { $countersAfter[$c.Key] = Get-AdapterCounters $c.Adapter }
-$ledgerAfter = Get-Ledger
+# The time usage.json was last written, or $null when it does not exist.
+function Get-UsageWriteTime {
+    if (-not (Test-Path -LiteralPath $usageFile)) { return $null }
+    return (Get-Item -LiteralPath $usageFile).LastWriteTime
+}
+
+# Waits until usage.json is written after $After and returns the new write time, or $null after $TimeoutSeconds.
+function Wait-UsageSave($After, [int]$TimeoutSeconds) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $t = Get-UsageWriteTime
+        if ($t -and (-not $After -or $t -gt $After)) { return $t }
+        Start-Sleep -Milliseconds 100
+    }
+    return $null
+}
+
+# One reading taken right after a save: the Windows counters first (they keep moving), then the file (it stays as saved).
+function Read-AtSave {
+    $counters = @{}
+    foreach ($c in $connections) { $counters[$c.Key] = Get-AdapterCounters $c.Adapter }
+    return [pscustomobject]@{ Counters = $counters; Ledger = Get-Ledger }
+}
+
+$saveTimeout = 75   # the widget saves about every 30 s; allow for a slow or skipped save
+Write-Host ("Measuring for at least {0} s, lined up with the widget's saves of usage.json (read-only). Keep some traffic going on the connections to compare." -f $Seconds)
+$noSave = $null
+$startSave = Wait-UsageSave (Get-UsageWriteTime) $saveTimeout
+if (-not $startSave) {
+    $noSave = "usage.json was not saved within $saveTimeout s. Is the widget (a build with the adapter ledger) running?"
+    $before = Read-AtSave
+    $after = $before
+} else {
+    $before = Read-AtSave
+    $endSave = $startSave
+    do {   # at least one more save, then until -Seconds have passed (1 s slack for the save timer's jitter)
+        $endSave = Wait-UsageSave $endSave $saveTimeout
+    } while ($endSave -and ($endSave - $startSave).TotalSeconds -lt $Seconds - 1)
+    if (-not $endSave) {
+        $noSave = "usage.json stopped being saved during the run (no save within $saveTimeout s)."
+        $after = $before
+    } else {
+        $after = Read-AtSave
+        Write-Host ("Interval: {0:HH:mm:ss} to {1:HH:mm:ss} ({2:N0} s between the two saves)." -f $startSave, $endSave, ($endSave - $startSave).TotalSeconds)
+    }
+}
+$countersBefore = $before.Counters; $countersAfter = $after.Counters
+$ledgerBefore = $before.Ledger; $ledgerAfter = $after.Ledger
 
 Write-Host ''
 if ($ledgerAfter.present) {
@@ -113,7 +157,9 @@ Write-Host ''
 # The ledger is per day and the file is saved every 30 s: a run across midnight, or a ledger that only appeared during the
 # run, would compare the counters with the wrong baseline and give a false result.
 $noLedgerComparison = $null
-if ($ledgerBefore.day -ne $ledgerAfter.day) {
+if ($noSave) {
+    $noLedgerComparison = $noSave
+} elseif ($ledgerBefore.day -ne $ledgerAfter.day) {
     $noLedgerComparison = 'the run crossed midnight (the ledger day changed), so the ledger growth is not comparable. Run it again.'
 } elseif ($ledgerAfter.present -and -not $ledgerBefore.present) {
     $noLedgerComparison = 'the ledger for today first appeared during the run, so there is no starting reading to compare against. Run it again.'
@@ -155,7 +201,7 @@ foreach ($c in $connections) {
     $ratio = $ledgerGrew / $grew
     $text = '  ledger / Windows = {0:P1}' -f $ratio
     if ([math]::Abs($ratio - 1) -le $tolerance) { Write-Host ($text + '  PASS') -ForegroundColor Green; $passed++ }
-    else { Write-Host ($text + '  FAIL (outside 95 %..105 %; the file is saved every 30 s, so try a longer -Seconds before suspecting the ledger)') -ForegroundColor Red; $failed++ }
+    else { Write-Host ($text + '  FAIL (outside 95 %..105 %)') -ForegroundColor Red; $failed++ }
 }
 
 # BitMeter 2, context only. Today's day total = the item at bufferPointer of the download and upload day buffers.
