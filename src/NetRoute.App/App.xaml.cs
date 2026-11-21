@@ -158,6 +158,7 @@ public partial class App : Application
             // Not inside the Smart block below: the ledger counts whether or not Smart routing exists, is enabled or is running.
             // Sample() and the ledger are not thread-safe; this tick, OnNetworkEvent's marshalled InvalidateMapping and the
             // ledger reads in SaveUsageAsync all run on the UI thread.
+            var ledgerPollFailing = false;
             _ledgerPoll.Tick += (_, _) =>
             {
                 try
@@ -165,10 +166,13 @@ public partial class App : Application
                     ledger.Update(sampler.Sample(), DateTimeOffset.Now);
                     RenderTotals();
                     RenderSpeeds();
+                    ledgerPollFailing = false;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    log.Error("Ledger poll failed", ex); // a tick handler must never throw
+                    // a tick handler must never throw; logged once per failure streak, as this runs every second
+                    if (!ledgerPollFailing) log.Error("Ledger poll failed", ex);
+                    ledgerPollFailing = true;
                 }
             };
             _ledgerPoll.Start();
@@ -842,7 +846,22 @@ public partial class App : Application
     void SaveUsageBlocking()
     {
         if (!CanSaveUsage) return; // a second instance or an early startup failure exits through here with nothing loaded
+        SampleLedgerOnce(); // the growth since the last tick (up to 1 s) would otherwise be lost
         var ledger = TakeLedger(force: true);
         Task.Run(() => SaveUsageAsync(force: true, ledger)).Wait(TimeSpan.FromSeconds(3));
+    }
+
+    /// One final ledger tick, on the UI thread, before the last save. Never throws: quit and sign-out must go on.
+    void SampleLedgerOnce()
+    {
+        if (_ledger is not { } ledger || _sampler is not { } sampler) return;
+        try
+        {
+            ledger.Update(sampler.Sample(), DateTimeOffset.Now);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Final ledger sample failed", ex);
+        }
     }
 }
