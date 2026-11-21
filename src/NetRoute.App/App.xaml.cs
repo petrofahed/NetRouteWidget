@@ -22,6 +22,9 @@ public partial class App : Application
     readonly DispatcherTimer _poll = new();
     readonly DispatcherTimer _usagePoll = new() { Interval = UsagePollInterval };
     readonly DispatcherTimer _usageSave = new() { Interval = UsageSaveInterval };
+    readonly DispatcherTimer _ledgerPoll = new() { Interval = UsagePollInterval }; // the exact adapter totals: runs with or without Smart routing
+    AdapterLedger? _ledger;
+    AdapterLedgerSampler? _sampler;
     bool _usagePolling;
     UsageSort _usageSort = UsageSort.Default;
     string _usageFilter = ""; // the Usage tab's filter box; per session, a new window starts empty
@@ -102,7 +105,13 @@ public partial class App : Application
             controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() => Render(status)));
             controller.AutoSwitched += message => Dispatcher.BeginInvoke(new Action(() => _tray?.Notify(message)));
 
-            SetUpSmartRouting(controller, log);
+            var usage = LoadUsage(log); // once, before Smart routing: both it and the adapter ledger start from this
+            // The ledger belongs to the app, not to Smart routing: it exists even if Smart's setup below throws or is never enabled.
+            var ledger = _ledger = new AdapterLedger(usage.Usage.LedgerDays(), DateOnly.FromDateTime(DateTime.Now));
+            var sampler = _sampler = new AdapterLedgerSampler(
+                new WindowsAdapterSource(), new WindowsAdapterCounters(), () => controller.Settings.Overrides, log.Info, () => DateTimeOffset.Now);
+
+            SetUpSmartRouting(controller, log, usage);
 
             _tray = new TrayIcon();
             _tray.ModeRequested += mode => _ = controller.SetModeAsync(mode);
@@ -144,6 +153,33 @@ public partial class App : Application
             if (settings.CardVisible) ShowCard();
             UpdatePollInterval();
             _poll.Start();
+            // Not inside the Smart block below: the ledger counts whether or not Smart routing exists, is enabled or is running.
+            // Sample() and the ledger are not thread-safe; this tick, OnNetworkEvent's marshalled InvalidateMapping and the
+            // ledger reads in SaveUsageAsync all run on the UI thread.
+            _ledgerPoll.Tick += (_, _) =>
+            {
+                try
+                {
+                    ledger.Update(sampler.Sample(), DateTimeOffset.Now);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    log.Error("Ledger poll failed", ex); // a tick handler must never throw
+                }
+            };
+            _ledgerPoll.Start();
+            _usageSave.Tick += async (_, _) =>
+            {
+                try
+                {
+                    await SaveUsageAsync();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    log.Error("Usage save failed", ex); // SaveUsageAsync only catches IO errors
+                }
+            };
+            _usageSave.Start(); // saves the ledger too, so it runs without Smart routing
             if (_smart is { } smartForUsage)
             {
                 // One second: short connections would be missed by a slower poll (see the v3 spec, "Why a plain connection poll is not enough").
@@ -169,19 +205,7 @@ public partial class App : Application
                         if (owner) _usagePolling = false;
                     }
                 };
-                _usageSave.Tick += async (_, _) =>
-                {
-                    try
-                    {
-                        await SaveUsageAsync();
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        log.Error("Usage save failed", ex); // SaveUsageAsync only catches IO errors
-                    }
-                };
                 _usagePoll.Start();
-                _usageSave.Start();
             }
             await controller.RefreshAsync(measureLatency: true); // publishes the first status, which the StatusChanged subscription applies to Smart routing
         }
@@ -206,6 +230,7 @@ public partial class App : Application
         NetworkChange.NetworkAddressChanged -= OnNetworkEvent;
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkEvent;
         _poll.Stop();
+        _ledgerPoll.Stop();
         _usagePoll.Stop();
         _usageSave.Stop();
         _debouncer?.Dispose();
@@ -220,13 +245,18 @@ public partial class App : Application
     {
         // Do NOT stop Smart routing here: the sign-out can still be cancelled by another app, and ShutdownAsync latches
         // the controller for good. A real logoff ends the process, and the kill-on-close job object ends sing-box with it.
-        Task.Run(() => SaveUsageAsync(force: true)).Wait(TimeSpan.FromSeconds(3));
+        SaveUsageBlocking();
         _controller?.ReleasePin();
         _card?.ForceClose(); // a real close, so OnClosing does not persist CardVisible=false
         base.OnSessionEnding(e);
     }
 
-    void OnNetworkEvent(object? sender, EventArgs e) => _debouncer?.Signal();
+    void OnNetworkEvent(object? sender, EventArgs e)
+    {
+        _debouncer?.Signal();
+        // This fires on a threadpool thread; the sampler is not thread-safe, so the flag is set on the UI thread, where Sample() runs.
+        Dispatcher.BeginInvoke(new Action(() => _sampler?.InvalidateMapping()));
+    }
 
     void Render(NetworkStatus status)
     {
@@ -329,8 +359,26 @@ public partial class App : Application
         return null;
     }
 
+    /// Loads usage.json once at start. It feeds Smart routing's usage and the adapter ledger, and sets _usageUnreadable.
+    UsageLoadResult LoadUsage(FileLog log)
+    {
+        UsageLoadResult usage;
+        try
+        {
+            usage = UsageStore.Load(AppPaths.UsageFile, DateOnly.FromDateTime(DateTime.Now));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.Error("usage.json could not be loaded", ex); // a usage-file problem must never disable Smart routing
+            usage = new UsageLoadResult(UsageSnapshot.Empty, true); // as unreadable: never overwritten this session
+        }
+        _usageUnreadable = usage.Unreadable;
+        if (usage.Unreadable) log.Error("usage.json could not be read; usage is kept in memory only this session and NOT saved");
+        return usage;
+    }
+
     /// Smart routing is optional: when its setup failed, _smart is null and v1 carries on without it.
-    void SetUpSmartRouting(RouteController controller, FileLog log)
+    void SetUpSmartRouting(RouteController controller, FileLog log, UsageLoadResult usage)
     {
         try
         {
@@ -362,18 +410,6 @@ public partial class App : Application
                 if (suppressed > 0) log.Info($"sing-box: {suppressed} more error/warning lines suppressed");
                 log.Info("sing-box: " + line);
             };
-            UsageLoadResult usage;
-            try
-            {
-                usage = UsageStore.Load(AppPaths.UsageFile, DateOnly.FromDateTime(DateTime.Now));
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                log.Error("usage.json could not be loaded", ex); // a usage-file problem must never disable Smart routing
-                usage = new UsageLoadResult(UsageSnapshot.Empty, true); // as unreadable: never overwritten this session
-            }
-            _usageUnreadable = usage.Unreadable;
-            if (usage.Unreadable) log.Error("usage.json could not be read; usage is kept in memory only this session and NOT saved");
             var smart = new SmartRoutingController(
                 _catalog, host, (port, secret) => new SingBoxApi(port, secret), FreePort.Next, usage.Usage, log.Info,
                 counters: new WindowsAdapterCounters(), traffic: new WindowsTrafficTracker());
@@ -675,10 +711,10 @@ public partial class App : Application
         window.EditRulesFileRequested += () => OpenRulesFile();
         window.ClearUsageRequested += async () =>
         {
-            if (_smart is not { } smart) return;
             try
             {
-                await smart.ClearUsageAsync();
+                _ledger?.Clear(); // UI thread, before the first await; also when Smart routing is absent
+                if (_smart is { } smart) await smart.ClearUsageAsync();
                 await SaveUsageAsync(force: true);
                 RenderSmartWindow();
             }
@@ -729,14 +765,38 @@ public partial class App : Application
         RenderSmartWindow(); // immediate feedback; the controller's StatusChanged re-renders again once applied
     }
 
-    /// Saves usage.json when something changed (or when force is set, or a previous save failed). Never throws.
-    async Task SaveUsageAsync(bool force = false)
+    /// The ledger as the save needs it: an immutable copy, and whether it changed since the last save.
+    readonly record struct LedgerTake(IReadOnlyDictionary<DateOnly, LedgerDay> Days, bool Changed);
+
+    /// Reads the (not thread-safe) ledger: call it on the UI thread only. A forced save or a failed previous one counts as changed.
+    LedgerTake TakeLedger(bool force)
     {
-        if (_smart is not { } smart || _usageUnreadable) return;
+        if (_ledger is not { } ledger) return new LedgerTake(new Dictionary<DateOnly, LedgerDay>(), false);
+        var dirty = ledger.TakeDirty();
+        return new LedgerTake(ledger.Snapshot(), dirty || force || _usageSaveFailed);
+    }
+
+    /// Saves usage.json when something changed (or when force is set, or a previous save failed). Never throws.
+    /// Works without Smart routing (the file then carries the ledger only). The ledger is read synchronously, before the
+    /// first await, so a caller on the UI thread reads it there; ledgerTaken lets a caller that moves this onto the pool
+    /// (SaveUsageBlocking) read it on the UI thread first.
+    async Task SaveUsageAsync(bool force = false, LedgerTake? ledgerTaken = null)
+    {
+        if (_usageUnreadable) return;
+        var ledger = ledgerTaken ?? TakeLedger(force);
         try
         {
-            var usage = force || _usageSaveFailed ? await smart.GetUsageAsync() : await smart.TakeUsageIfChangedAsync();
-            if (usage is null) return;
+            var everything = force || _usageSaveFailed;
+            var smart = _smart;
+            var usage = smart is null
+                ? (everything ? UsageSnapshot.Empty : null)
+                : everything ? await smart.GetUsageAsync() : await smart.TakeUsageIfChangedAsync();
+            if (usage is null)
+            {
+                if (!ledger.Changed) return;
+                usage = smart is null ? UsageSnapshot.Empty : await smart.GetUsageAsync(); // only the ledger changed: the file still carries Smart's usage
+            }
+            usage = usage.WithLedger(ledger.Days);
             if (usage.Days.Count == 0 && !File.Exists(AppPaths.UsageFile)) return; // nothing recorded yet: no file for someone who never used it
             await Task.Run(() => UsageStore.Save(AppPaths.UsageFile, usage));
             _usageSaveFailed = false;
@@ -775,10 +835,21 @@ public partial class App : Application
     /// ConfigureAwait(false), so waiting here on the UI thread cannot deadlock.
     void StopSmartRouting()
     {
-        if (_smartStopped || _smart is not { } smart) return; // called from Quit and again from OnExit
+        if (_smartStopped) return; // called from Quit and again from OnExit
         _smartStopped = true;
-        // ShutdownAsync latches: nothing restarts sing-box afterwards
-        if (!Task.Run(() => smart.ShutdownAsync()).Wait(TimeSpan.FromSeconds(5))) _log?.Error("Smart routing did not stop within 5 s");
-        Task.Run(() => SaveUsageAsync(force: true)).Wait(TimeSpan.FromSeconds(3));
+        if (_smart is { } smart)
+        {
+            // ShutdownAsync latches: nothing restarts sing-box afterwards
+            if (!Task.Run(() => smart.ShutdownAsync()).Wait(TimeSpan.FromSeconds(5))) _log?.Error("Smart routing did not stop within 5 s");
+        }
+        SaveUsageBlocking(); // also without Smart routing: the adapter ledger still needs its last save
+    }
+
+    /// The forced save at quit or sign-out, waited for from the UI thread. The ledger is read here, on the UI thread,
+    /// before the pool runs the save; the UI thread is then blocked, so the ledger tick cannot run alongside it.
+    void SaveUsageBlocking()
+    {
+        var ledger = TakeLedger(force: true);
+        Task.Run(() => SaveUsageAsync(force: true, ledger)).Wait(TimeSpan.FromSeconds(3));
     }
 }
